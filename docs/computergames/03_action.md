@@ -140,15 +140,17 @@ Latency p99 (idle Windows 11, RTX 3060, foreground app responsive):
 
 ## 6. Aim curves
 
-`AimCurve` is the parameterized cursor-movement model. Five curves ship at v1:
+`AimCurve` is the parameterized cursor-movement model. Five curves ship at v1.
 
-| Curve | Shape | Use |
+**Default policy (v1.0+, supersedes `OQ-004`): `Natural` is the default everywhere — productivity and games alike. `Instant` exists in the enum but is never a default; reserved for explicit caller opt-in (test harnesses asserting pixel-perfect positioning). Defaults are tuned `FAST`: total travel 30-60 ms with sub-pixel tremor + small overshoot + 1-step micro-correct. Smooth and natural at productivity speeds.**
+
+| Curve | Shape | Default? |
 |---|---|---|
-| `Instant` | Single jump to target | Productivity (click a menu); only when speed matters more than naturalness |
-| `Linear` | Constant velocity | Simple lerp; for `mouse_move` requests with explicit duration |
-| `EaseInOut` | Smoothstep velocity | Default for productivity UI clicks |
-| `Bezier { p1, p2 }` | Cubic Bezier with two control points | Default for game aim; control points sampled stochastically from bounded region |
-| `Natural { tremor, micro_correct }` | Bezier with overshoot + micro-correction + sub-pixel tremor | Anti-detection profile; mimics human motor signature |
+| `Instant` | Single jump to target | Never default; opt-in only via `curve: "instant"` |
+| `Linear` | Constant velocity | Only when caller requests explicit lerp |
+| `EaseInOut` | Smoothstep velocity | Not default at v1.0+; available as opt-in |
+| `Bezier { p1, p2 }` | Cubic Bezier with two control points | Building block for `Natural`; not a top-level default |
+| `Natural { tremor, micro_correct }` | Bezier with overshoot + micro-correction + sub-pixel tremor | **Default for all profiles, all action backends, all aim styles** |
 
 Each curve emits `N` steps over the requested `duration`. Default `N = max(8, duration_ms / 4)`. Step spacing:
 
@@ -181,7 +183,30 @@ pub struct AimNaturalParams {
 }
 ```
 
-Defaults tuned against published human-aim datasets. Agent rarely touches these; profiles set them per game.
+### `AimNaturalParams::FAST` — the default preset
+
+```rust
+AimNaturalParams::FAST = AimNaturalParams {
+    control_point_jitter: 0.08,            // 8% of distance — subtle path curvature
+    tremor_stddev_px: 0.2,                 // sub-pixel; invisible at 1080p
+    overshoot_prob: 0.25,                  // overshoots ~1 in 4 motions
+    overshoot_factor_range: (1.02, 1.06),  // 2-6% past target; small
+    micro_correct_steps: 1,                // single-step settle
+    timing_stddev_ms: 1.5,                 // tight per-step jitter
+    seed: None,                            // non-deterministic; tests pin seed
+}
+```
+
+Travel times under `FAST`:
+
+| Aim style | Total ms (default) |
+|---|---|
+| `Snap` (button click in UI) | 50 ms |
+| `Flick` (rapid target acquisition) | 35 ms |
+| `Natural` (explicit slower mode for demo/recording) | 100-200 ms |
+| `Track` (continuous via reflex; per-tick) | n/a (1 ms ticks, ≤ 5 px/tick) |
+
+Profiles can override `FAST` with their own params (e.g., a sim-racing profile may want longer travel for analog feel). Agents rarely touch these.
 
 ---
 

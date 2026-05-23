@@ -2,7 +2,7 @@
 
 ## 1. Why this is a binding doc
 
-Synapse exists because screenshot-based agents are too slow. If we drift into 100ms-per-`observe()` territory, the project has failed its core promise. This doc sets numeric budgets per subsystem and per MCP tool, and the discipline for enforcing them.
+Synapse exists because screenshot-based agents are too slow. If we drift into 100ms-per-`observe()`, the project has failed its core promise. This doc sets numeric budgets per subsystem and per MCP tool, plus the discipline for enforcing them.
 
 Every PR violating a target either fixes the regression or comes with an explicit ADR amendment.
 
@@ -26,7 +26,7 @@ Every PR violating a target either fixes the regression or comes with an explici
 | OCR WinRT, single small region | ≤ 8 ms p99 |  |
 | Health check `health` tool | ≤ 5 ms |  |
 
-`p99` = 99th percentile over a rolling 10-minute window of real operation. Cold-start spikes excluded; budget applies after warm-up.
+`p99` = 99th percentile over rolling 10-minute window of real operation. Cold-start spikes excluded; budget applies post-warm-up.
 
 ---
 
@@ -92,7 +92,7 @@ Headroom 11 ms for spikes and OS scheduling jitter.
 
 ## 6. Profile-specific perception budgets
 
-Different profiles change the load. Documented here so a game profile doesn't blow up productivity-mode performance.
+Different profiles change the load. A game profile must not blow up productivity-mode performance.
 
 | Profile | Capture FPS | Detection | OCR | Per-frame CPU | Per-frame GPU |
 |---|---|---|---|---|---|
@@ -101,7 +101,7 @@ Different profiles change the load. Documented here so a game profile doesn't bl
 | Minecraft (pixel_only) | 60 | YOLOv10n | HUD continuous | ~4% | ~12% |
 | FPS demo (pixel_only) | 60 | YOLOv10n | HUD continuous + audio | ~5% | ~14% |
 
-If a profile pins capture FPS higher (e.g., 144 for competitive replay), CPU/GPU scales linearly. Documented in profile TOML comments.
+Higher capture FPS (e.g., 144 for competitive replay) scales CPU/GPU linearly. Documented in profile TOML comments.
 
 ---
 
@@ -114,7 +114,7 @@ Per-subsystem latency is instrumented via `tracing::span` and exposed as:
 - Per-event-kind latencies (`event_to_subscriber_latency_seconds{kind}`)
 - Reflex tick jitter (`reflex_tick_jitter_seconds`)
 
-Exposed via the `health` MCP tool and Prometheus-format on `/metrics` endpoint when `--metrics-bind <addr>` is set.
+Exposed via the `health` MCP tool and Prometheus-format on `/metrics` when `--metrics-bind <addr>` is set.
 
 ### 7.1 Local profiling tools
 
@@ -123,7 +123,7 @@ Exposed via the `health` MCP tool and Prometheus-format on `/metrics` endpoint w
 - `nvidia-smi` / `Intel-XPU-SMI` for GPU usage during detection
 - Windows Performance Recorder (WPR) + Windows Performance Analyzer (WPA) for kernel-level scheduling jitter
 
-Reference profiling script in `scripts/profile.ps1`:
+Reference script in `scripts/profile.ps1`:
 
 ```powershell
 # Runs Synapse under tracing-flame, exercises a fixed scenario,
@@ -131,11 +131,11 @@ Reference profiling script in `scripts/profile.ps1`:
 .\scripts\profile.ps1 -Scenario "minecraft_combat_30s"
 ```
 
-Scenarios live in `tests/scenarios/`. Adding a scenario is encouraged when investigating a perf regression.
+Scenarios live in `tests/scenarios/`. Encouraged when investigating a perf regression.
 
 ### 7.2 Continuous regression detection
 
-A subset of scenarios runs in CI weekly. CI machine has a known GPU; any p99 metric drifting > 20% triggers a release-blocking alert. CI job records baseline numbers per release tag for retrospective analysis.
+Subset of scenarios runs in CI weekly. CI machine has a known GPU; any p99 metric drifting > 20% triggers a release-blocking alert. CI records baseline numbers per release tag for retrospective analysis.
 
 ---
 
@@ -147,9 +147,9 @@ Hot paths never block on:
 - File I/O (everything goes through the storage write batcher)
 - Network I/O (OTLP export on its own task with bounded queue and drop policy)
 - GC pauses from Rust (no `Arc` cloning at >100 Hz without reason)
-- Tokio's blocking pool from a `time_critical` thread (we don't spawn from these)
+- Tokio's blocking pool from a `time_critical` thread
 
-If a hot path needs data from a non-hot subsystem, the data is published via `tokio::sync::watch` or `crossbeam::ArcSwap` so the hot path does a single atomic load.
+If a hot path needs data from a non-hot subsystem, data is published via `tokio::sync::watch` or `crossbeam::ArcSwap` so the hot path does a single atomic load.
 
 ---
 
@@ -162,13 +162,13 @@ In hot loops we do not allocate per iteration:
 - Action emit: at most one allocation (the `Vec<INPUT>` passed to `SendInput`); amortized.
 - Detection inference: pre-allocated input/output tensors reused per frame.
 
-CI runs `cargo bench` benchmarks asserting zero allocations in hot loops via `dhat` allocations counter or `tracing-allocations`.
+CI runs `cargo bench` benchmarks asserting zero allocations in hot loops via `dhat` or `tracing-allocations`.
 
 ---
 
 ## 10. Backpressure rules
 
-Every bounded channel and queue has a documented drop policy:
+Every bounded channel has a documented drop policy:
 
 | Channel | Capacity | Drop policy |
 |---|---|---|
@@ -180,7 +180,7 @@ Every bounded channel and queue has a documented drop policy:
 | Action queue → emitter | 256 | Reject submission with `ACTION_QUEUE_FULL` |
 | Storage write queue | 4096 | Block briefly, then drop low-priority writes (telemetry only); `STORAGE_BACKPRESSURE` if persistent |
 
-`block briefly` = 10 ms tokio sleep, then check again. We never block longer than that on a hot path.
+`block briefly` = 10 ms tokio sleep, then check again. Never block longer on a hot path.
 
 ---
 
@@ -194,7 +194,7 @@ Every bounded channel and queue has a documented drop policy:
 | First `observe()` after connect | ≤ 100 ms (depends on first UIA call) |
 | First `act_press` | ≤ 5 ms |
 
-Models load **lazily** on first need, not at startup. Keeps startup budget tight; operator's first observation pays model-load cost if applicable.
+Models load **lazily** on first need, not at startup. Keeps startup budget tight; operator's first observation pays model-load cost.
 
 ---
 
@@ -234,7 +234,7 @@ Listed in `05_mcp_tool_surface.md`; aggregated here as the contract.
 | `health` | 5 ms | 10 ms |
 | `replay_record` | 5 ms | 10 ms |
 
-These are SERVER-SIDE latencies, measured from request parse to response send. Network and client-side latency are additional but typically ≤ 1 ms on local stdio.
+SERVER-SIDE latencies, measured from request parse to response send. Network and client-side latency are additional but typically ≤ 1 ms on local stdio.
 
 ---
 
@@ -255,7 +255,7 @@ These are SERVER-SIDE latencies, measured from request parse to response send. N
 
 ## 14. Bench targets
 
-`synapse-test-utils` crate exposes `Bencher` helpers. Critical benchmarks:
+`synapse-test-utils` exposes `Bencher` helpers. Critical benchmarks:
 
 - `bench_observe_warm_p99`: 30 ms target
 - `bench_event_to_subscriber_p99`: 50 ms target
@@ -266,7 +266,7 @@ These are SERVER-SIDE latencies, measured from request parse to response send. N
 - `bench_detection_yolov10n_640`: 8 ms p99 (GPU dependent)
 - `bench_ocr_winrt_120x32`: 8 ms p99
 
-Benches run weekly in CI. Regression > 20% blocks the next release.
+Benches run weekly in CI. Regression > 20% blocks next release.
 
 ---
 
@@ -274,9 +274,9 @@ Benches run weekly in CI. Regression > 20% blocks the next release.
 
 Beyond p99, we monitor "stuck above budget" spans. If any subsystem stays above 2× its p99 budget for >5 seconds:
 
-1. Emit a `synapse-performance-degraded` event with the offending subsystem and current measurements
+1. Emit `synapse-performance-degraded` event with offending subsystem and current measurements
 2. Surface in `health` response under `subsystems.<name>.status = "degraded_latency"`
-3. Log a `warn` with enough context to reproduce
+3. Log `warn` with enough context to reproduce
 
 Catches situations where p99 looks fine but a particular workflow is broken (e.g., a specific game's HUD region causes a 50ms OCR every frame).
 

@@ -10,29 +10,29 @@
 
 ## What this is
 
-Synapse is an **MCP (Model Context Protocol) server** that gives any MCP-aware AI agent (Claude, Codex, Cursor, custom runners) a fast, structured, low-token interface to **see**, **hear**, **act on**, and **react inside** any Windows desktop application — covering two use modes:
+Synapse is an **MCP (Model Context Protocol) server** giving any MCP-aware AI agent (Claude, Codex, Cursor, custom runners) a fast, structured, low-token interface to **see**, **hear**, **act on**, and **react inside** any Windows desktop application — across two modes:
 
 | Mode | Examples | Primary perception path |
 |---|---|---|
 | **Computer-use** | VS Code, Excel, Outlook, Slack, browsers, file explorer, terminals, design tools | Accessibility tree (UIA), DOM (CDP), app-specific APIs, OS event hooks |
 | **Game-control** | Single-player games, modded multiplayer, browser/Roblox games, real-time titles | GPU frame capture + small detection CNN, HUD OCR, spatial audio, game-specific RAM hooks where ethically allowed |
 
-Both modes share the same Rust workspace, MCP tool surface, action subsystem, and sub-frame reflex runtime. Perception auto-selects the cheapest path that yields fidelity. Rich a11y tree → use it (sub-millisecond, zero tokens on pixels). GPU-only render (most games, some Electron, canvas-heavy tools) → capture + infer.
+Both modes share the Rust workspace, MCP tool surface, action subsystem, and sub-frame reflex runtime. Perception auto-selects the cheapest path with sufficient fidelity. Rich a11y tree → use it (sub-millisecond, zero tokens on pixels). GPU-only render (most games, some Electron, canvas-heavy tools) → capture + infer.
 
-Agent doesn't pick the path — it calls `observe()` and gets a structured response. The body picks the best sensor.
+Agent doesn't pick the path — it calls `observe()`. The body picks the best sensor.
 
 **Synapse does NOT include:**
 
 - Goal-planning, MCTS, GOAP, skill libraries, or hierarchical decomposition (agent handles via tool-use loop)
 - Large prediction model, reward model, or learning loop (agent does this in-context)
-- Inner LLM (model lives outside; we are pure infrastructure)
-- Anti-cheat-evasion features for unsanctioned online competitive play (see `08_anti_cheat_policy.md`)
+- Inner LLM (model lives outside; pure infrastructure)
+- Anti-cheat-evasion for unsanctioned online competitive play (see `08_anti_cheat_policy.md`)
 
 ---
 
 ## Why one system for both
 
-Both modes share load-bearing primitives:
+Shared load-bearing primitives:
 
 | Primitive | Computer-use | Game-control |
 |---|---|---|
@@ -48,7 +48,7 @@ Both modes share load-bearing primitives:
 | Per-app/per-game profile system | Yes | Yes |
 | Token-efficient `observe()` JSON | Yes | Yes |
 
-Shipping these separately would duplicate ~90% of engineering. **Synapse ships them once.**
+Two separate products would duplicate ~90% of engineering. **Synapse ships them once.**
 
 ---
 
@@ -129,7 +129,7 @@ A Rust MCP server that exposes structured desktop and game state as low-token JS
                 Windows OS + GPU + foreground apps and games
 ```
 
-Slow loop (model → MCP → response) runs at human-decision rate. Fast loop (reflex runtime) runs at frame rate. Decoupled by the event bus.
+Slow loop (model → MCP → response) runs at human-decision rate. Fast loop (reflex runtime) at frame rate. Decoupled by event bus.
 
 ---
 
