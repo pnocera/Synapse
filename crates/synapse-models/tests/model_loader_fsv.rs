@@ -1,7 +1,7 @@
 use std::{
     cell::Cell,
     fs,
-    io::{Seek, SeekFrom, Write},
+    io::{self, Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -12,6 +12,8 @@ use synapse_models::{
     sha256_file,
 };
 use tempfile::NamedTempFile;
+
+type TestResult<T = ()> = Result<T, Box<dyn std::error::Error>>;
 
 struct FakeSessionFactory {
     result: ModelResult<ModelBackend>,
@@ -64,7 +66,7 @@ impl SessionFactory for FakeSessionFactory {
     }
 }
 
-fn temp_model(bytes: &[u8]) -> Result<(NamedTempFile, String), Box<dyn std::error::Error>> {
+fn temp_model(bytes: &[u8]) -> TestResult<(NamedTempFile, String)> {
     let mut file = NamedTempFile::new()?;
     file.write_all(bytes)?;
     file.flush()?;
@@ -83,32 +85,42 @@ fn descriptor(path: &Path, sha256: String) -> ModelDescriptor {
     }
 }
 
+fn record_fsv(args: std::fmt::Arguments<'_>) -> io::Result<()> {
+    let mut stdout = io::stdout().lock();
+    stdout.write_fmt(args)?;
+    stdout.write_all(b"\n")
+}
+
 #[test]
-fn sha256_file_reads_past_single_buffer_boundary() -> Result<(), Box<dyn std::error::Error>> {
+fn sha256_file_reads_past_single_buffer_boundary() -> TestResult {
     let bytes = vec![0x5a; (64 * 1024) + 17];
     let (file, expected) = temp_model(&bytes)?;
-    println!(
+    record_fsv(format_args!(
         "source_of_truth=model_file_hash edge=large_file before=bytes:{}",
         bytes.len()
-    );
+    ))?;
     let after = sha256_file(file.path())?;
-    println!("source_of_truth=model_file_hash edge=large_file after={after}");
+    record_fsv(format_args!(
+        "source_of_truth=model_file_hash edge=large_file after={after}"
+    ))?;
     assert_eq!(after, expected);
     Ok(())
 }
 
 #[test]
-fn hash_mismatch_stops_before_session_creation() -> Result<(), Box<dyn std::error::Error>> {
+fn hash_mismatch_stops_before_session_creation() -> TestResult {
     let (file, actual) = temp_model(b"model-v1")?;
     let loader = ModelLoader::default();
     let factory = FakeSessionFactory::success(ModelBackend::Cpu);
     let before = descriptor(file.path(), "0".repeat(64));
-    println!(
+    record_fsv(format_args!(
         "source_of_truth=model_loader edge=hash_mismatch before=expected:{} actual:{actual}",
         before.sha256
-    );
+    ))?;
     let after = loader.load_with_factory(before, &factory);
-    println!("source_of_truth=model_loader edge=hash_mismatch after={after:?}");
+    record_fsv(format_args!(
+        "source_of_truth=model_loader edge=hash_mismatch after={after:?}"
+    ))?;
     assert_eq!(
         after.err().map(|err| err.code()),
         Some(error_codes::MODEL_HASH_MISMATCH)
@@ -118,7 +130,7 @@ fn hash_mismatch_stops_before_session_creation() -> Result<(), Box<dyn std::erro
 }
 
 #[test]
-fn verified_file_loads_and_reuses_session_id() -> Result<(), Box<dyn std::error::Error>> {
+fn verified_file_loads_and_reuses_session_id() -> TestResult {
     let (file, digest) = temp_model(b"verified-model")?;
     let loader = ModelLoader::new(vec![
         ModelBackend::Cuda,
@@ -127,17 +139,17 @@ fn verified_file_loads_and_reuses_session_id() -> Result<(), Box<dyn std::error:
     ]);
     let factory = FakeSessionFactory::success(ModelBackend::Cpu);
     let before = descriptor(file.path(), format!("sha256:{digest}"));
-    println!(
+    record_fsv(format_args!(
         "source_of_truth=model_loader edge=verified before=path:{} sha256:{}",
         before.path.display(),
         before.sha256
-    );
+    ))?;
     let after = loader.load_with_factory(before, &factory)?;
-    println!(
+    record_fsv(format_args!(
         "source_of_truth=model_loader edge=verified after=session_id:{} backend:{:?}",
         after.session_id(),
         after.selected_backend()
-    );
+    ))?;
     assert_eq!(after.selected_backend(), ModelBackend::Cpu);
     assert_eq!(factory.calls.get(), 1);
     let first = after.infer(
@@ -157,10 +169,10 @@ fn verified_file_loads_and_reuses_session_id() -> Result<(), Box<dyn std::error:
         DetectOpts::default(),
     )?;
     let loaded_session_id = after.session_id();
-    println!(
+    record_fsv(format_args!(
         "source_of_truth=model_detector edge=session_reuse after=session_id:{loaded_session_id} frames:{},{}",
         first.frame_seq, second.frame_seq
-    );
+    ))?;
     assert_eq!(loaded_session_id, after.session_id());
     assert!(first.items.is_empty());
     assert!(second.items.is_empty());
@@ -168,7 +180,7 @@ fn verified_file_loads_and_reuses_session_id() -> Result<(), Box<dyn std::error:
 }
 
 #[test]
-fn missing_yolov10n_file_is_not_an_error() -> Result<(), Box<dyn std::error::Error>> {
+fn missing_yolov10n_file_is_not_an_error() -> TestResult {
     let tempdir = tempfile::tempdir()?;
     let missing = tempdir.path().join("yolov10n_general.onnx");
     let descriptor = ModelDescriptor {
@@ -180,30 +192,34 @@ fn missing_yolov10n_file_is_not_an_error() -> Result<(), Box<dyn std::error::Err
     };
     let loader = ModelLoader::default();
     let factory = FakeSessionFactory::success(ModelBackend::Cpu);
-    println!(
+    record_fsv(format_args!(
         "source_of_truth=yolov10n_loader edge=missing before=exists:{} path:{}",
         missing.exists(),
         missing.display()
-    );
+    ))?;
     let after = loader.load_yolov10n_if_present(descriptor, &factory)?;
-    println!("source_of_truth=yolov10n_loader edge=missing after={after:?}");
+    record_fsv(format_args!(
+        "source_of_truth=yolov10n_loader edge=missing after={after:?}"
+    ))?;
     assert!(after.is_none());
     assert_eq!(factory.calls.get(), 0);
     Ok(())
 }
 
 #[test]
-fn backend_unavailable_surfaces_provider_attempts() -> Result<(), Box<dyn std::error::Error>> {
+fn backend_unavailable_surfaces_provider_attempts() -> TestResult {
     let (file, digest) = temp_model(b"backend-missing")?;
     let loader = ModelLoader::new(vec![ModelBackend::Cuda, ModelBackend::DirectMl]);
     let factory = FakeSessionFactory::backend_unavailable();
     let before = descriptor(file.path(), digest);
-    println!(
+    record_fsv(format_args!(
         "source_of_truth=model_loader edge=backend_unavailable before=providers:{:?}",
         loader.providers()
-    );
+    ))?;
     let after = loader.load_with_factory(before, &factory);
-    println!("source_of_truth=model_loader edge=backend_unavailable after={after:?}");
+    record_fsv(format_args!(
+        "source_of_truth=model_loader edge=backend_unavailable after={after:?}"
+    ))?;
     let err = after.err().ok_or("expected backend unavailable")?;
     assert_eq!(err.code(), error_codes::MODEL_BACKEND_UNAVAILABLE);
     assert_eq!(factory.calls.get(), 1);
@@ -211,13 +227,13 @@ fn backend_unavailable_surfaces_provider_attempts() -> Result<(), Box<dyn std::e
 }
 
 #[test]
-fn canonical_yolov10n_descriptor_uses_local_appdata_shape() {
+fn canonical_yolov10n_descriptor_uses_local_appdata_shape() -> TestResult {
     let descriptor = ModelDescriptor::yolov10n_general("a".repeat(64), vec!["target".to_owned()]);
-    println!(
+    record_fsv(format_args!(
         "source_of_truth=yolov10n_descriptor edge=canonical after=path:{} input_shape:{:?}",
         descriptor.path.display(),
         descriptor.input_shape
-    );
+    ))?;
     assert_eq!(descriptor.id, "yolov10n_general");
     assert_eq!(descriptor.input_shape, vec![1, 3, 640, 640]);
     assert!(
@@ -227,10 +243,11 @@ fn canonical_yolov10n_descriptor_uses_local_appdata_shape() {
                 .collect::<PathBuf>()
         )
     );
+    Ok(())
 }
 
 #[test]
-fn model_error_codes_have_throw_sites() -> Result<(), Box<dyn std::error::Error>> {
+fn model_error_codes_have_throw_sites() -> TestResult {
     let source = fs::read_to_string(Path::new(env!("CARGO_MANIFEST_DIR")).join("src/lib.rs"))?;
     for (code, throw_site) in [
         (
@@ -244,12 +261,14 @@ fn model_error_codes_have_throw_sites() -> Result<(), Box<dyn std::error::Error>
             "ModelError::BackendUnavailable",
         ),
     ] {
-        println!("source_of_truth=model_error_code_audit before=code:{code}");
+        record_fsv(format_args!(
+            "source_of_truth=model_error_code_audit before=code:{code}"
+        ))?;
         let count = source.matches(code).count();
         let throw_count = source.matches(throw_site).count();
-        println!(
+        record_fsv(format_args!(
             "source_of_truth=model_error_code_audit after=code:{code} count:{count} throw_site:{throw_site} throw_count:{throw_count}"
-        );
+        ))?;
         assert!(count > 0, "missing error-code mapping for {code}");
         assert!(throw_count > 0, "missing concrete throw site for {code}");
     }
@@ -257,31 +276,35 @@ fn model_error_codes_have_throw_sites() -> Result<(), Box<dyn std::error::Error>
 }
 
 #[test]
-fn model_download_attempt_fails_closed() {
+fn model_download_attempt_fails_closed() -> TestResult {
     let before = "https://models.example.invalid/yolov10n_general.onnx";
-    println!("source_of_truth=model_download edge=remote_disabled before=source:{before}");
+    record_fsv(format_args!(
+        "source_of_truth=model_download edge=remote_disabled before=source:{before}"
+    ))?;
     let after = model_download_failed(before);
-    println!(
+    record_fsv(format_args!(
         "source_of_truth=model_download edge=remote_disabled after=code:{} detail:{}",
         after.code(),
         after
-    );
+    ))?;
     assert_eq!(after.code(), error_codes::MODEL_DOWNLOAD_FAILED);
+    Ok(())
 }
 
 #[cfg(not(feature = "ort"))]
 #[test]
-fn default_loader_without_ort_feature_reports_backend_unavailable()
--> Result<(), Box<dyn std::error::Error>> {
+fn default_loader_without_ort_feature_reports_backend_unavailable() -> TestResult {
     let (file, digest) = temp_model(b"verified-no-runtime")?;
     let loader = ModelLoader::default();
     let before = descriptor(file.path(), digest);
-    println!(
+    record_fsv(format_args!(
         "source_of_truth=ort_loader edge=no_feature before=providers:{:?}",
         loader.providers()
-    );
+    ))?;
     let after = loader.load(before);
-    println!("source_of_truth=ort_loader edge=no_feature after={after:?}");
+    record_fsv(format_args!(
+        "source_of_truth=ort_loader edge=no_feature after={after:?}"
+    ))?;
     assert_eq!(
         after.err().map(|err| err.code()),
         Some(error_codes::MODEL_BACKEND_UNAVAILABLE)

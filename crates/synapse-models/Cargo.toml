@@ -8,7 +8,14 @@ repository.workspace = true
 
 [features]
 default = []
-ort = ["dep:ort"]
+ort = [
+    "dep:ort",
+    "ort/api-24",
+    "ort/copy-dylibs",
+    "ort/download-binaries",
+    "ort/std",
+    "ort/tls-native",
+]
 cuda = ["ort", "ort/cuda"]
 directml = ["ort", "ort/directml"]
 

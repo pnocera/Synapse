@@ -381,12 +381,8 @@ fn create_ort_session(
             });
         }
     };
-    let model_bytes = std::fs::read(&descriptor.path).map_err(|err| ModelError::LoadFailed {
-        path: descriptor.path.clone(),
-        detail: err.to_string(),
-    })?;
     builder
-        .commit_from_memory(&model_bytes)
+        .commit_from_file(&descriptor.path)
         .map_err(|err| ModelError::LoadFailed {
             path: descriptor.path.clone(),
             detail: err.to_string(),
@@ -439,13 +435,11 @@ pub fn normalize_sha256(value: &str) -> String {
 }
 
 fn hex_lower(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-
+    const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut output = String::with_capacity(bytes.len().saturating_mul(2));
-    for byte in bytes {
-        if write!(&mut output, "{byte:02x}").is_err() {
-            break;
-        }
+    for byte in bytes.iter().copied() {
+        output.push(HEX[usize::from(byte >> 4)] as char);
+        output.push(HEX[usize::from(byte & 0x0f)] as char);
     }
     output
 }
