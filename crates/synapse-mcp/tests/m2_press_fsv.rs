@@ -197,6 +197,11 @@ fn assert_recording_log_readbacks(logs: &str) -> anyhow::Result<()> {
         "source_of_truth=recording_log tool=act_press edge=unordered_modifiers after_event_sequence={} new_event_count={}",
         unordered_readback.event_sequence, unordered_readback.new_event_count
     );
+    println!(
+        "source_of_truth=recording_log tool=act_press edge=failed_edges_no_enqueue after_readback_count={} expected_successful_readbacks=2",
+        readbacks.len()
+    );
+    assert_eq!(readbacks.len(), 2);
     Ok(())
 }
 
