@@ -22,4 +22,6 @@ pub use emitter::{
 };
 pub use error::{ActionError, ActionResult};
 pub use handle::{ACTION_QUEUE_CAPACITY, ActionHandle, ActionMessage, RELEASE_ALL_HANDLE};
-pub use invoke::invoke_element;
+pub use invoke::{
+    CoordinateFallbackPlan, ElementClickOutcome, click_element_or_fallback, invoke_element,
+};

@@ -2946,6 +2946,7 @@ dependencies = [
  "serde",
  "sha2",
  "synapse-a11y",
+ "synapse-capture",
  "synapse-core",
  "thiserror",
  "tokio",
