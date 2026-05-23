@@ -123,8 +123,8 @@ pub fn platform_input(_depth: u32, _mode: PerceptionMode) -> Result<ObservationI
 
 #[cfg(windows)]
 pub fn platform_input(depth: u32, mode: PerceptionMode) -> Result<ObservationInput, ErrorData> {
-    let root = synapse_a11y::focused_window().map_err(a11y_error)?;
-    let tree = synapse_a11y::snapshot(&root, depth).map_err(a11y_error)?;
+    let root = synapse_a11y::focused_window().map_err(|err| a11y_error(&err))?;
+    let tree = synapse_a11y::snapshot(&root, depth).map_err(|err| a11y_error(&err))?;
     let hwnd = tree
         .root
         .parts()
@@ -149,7 +149,7 @@ pub fn platform_input(depth: u32, mode: PerceptionMode) -> Result<ObservationInp
 }
 
 #[cfg(windows)]
-fn a11y_error(err: synapse_a11y::A11yError) -> ErrorData {
+fn a11y_error(err: &synapse_a11y::A11yError) -> ErrorData {
     match err {
         synapse_a11y::A11yError::NoForeground { .. }
         | synapse_a11y::A11yError::NotAvailable { .. } => mcp_error(
@@ -177,5 +177,5 @@ fn focused_from_node(node: &AccessibleNode) -> FocusedElement {
 
 #[cfg(windows)]
 fn windows_foreground_context(hwnd: i64) -> Result<ForegroundContext, ErrorData> {
-    synapse_a11y::foreground_context(hwnd).map_err(a11y_error)
+    synapse_a11y::foreground_context(hwnd).map_err(|err| a11y_error(&err))
 }
