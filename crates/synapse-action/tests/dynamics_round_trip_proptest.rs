@@ -6,7 +6,7 @@ use proptest::{
 use synapse_action::{
     ActionBackend, EmitState, RecordedInput, RecordingBackend, sample_typing_schedule,
 };
-use synapse_core::{Action, Backend, KeystrokeDynamics, KeystrokeNaturalParams};
+use synapse_core::{Action, Backend, KeyCode, KeystrokeDynamics, KeystrokeNaturalParams};
 
 #[test]
 fn empty_string_records_zero_events_fsv() -> Result<(), Box<dyn std::error::Error>> {
@@ -33,7 +33,8 @@ fn extended_latin_string_round_trips_fsv() -> Result<(), Box<dyn std::error::Err
 
     assert_eq!(schedule_chars, text);
     assert_eq!(reconstructed, text);
-    assert_eq!(unicode_down_count(&events), text.encode_utf16().count());
+    assert_eq!(unicode_down_count(&events), expected_unicode_units(text));
+    assert_eq!(events.len(), expected_recorded_event_count(text));
     Ok(())
 }
 
@@ -51,7 +52,6 @@ fn random_strings_round_trip_through_recording_backend_10k()
     runner.run(&text_strategy(), |text| {
         let (schedule_chars, events, reconstructed) = record_and_reconstruct(&text)
             .map_err(|error| TestCaseError::fail(format!("input={text:?} error={error}")))?;
-        let expected_units = text.encode_utf16().count();
 
         prop_assert_eq!(
             &schedule_chars,
@@ -63,14 +63,14 @@ fn random_strings_round_trip_through_recording_backend_10k()
         );
         prop_assert_eq!(
             unicode_down_count(&events),
-            expected_units,
+            expected_unicode_units(&text),
             "input={:?} events={:?}",
             text,
             events
         );
         prop_assert_eq!(
             events.len(),
-            expected_units.saturating_mul(2),
+            expected_recorded_event_count(&text),
             "input={:?} events={:?}",
             text,
             events
@@ -121,19 +121,37 @@ fn record_and_reconstruct(
         &mut state,
     )?;
     let events = backend.events();
-    let reconstructed = reconstruct_from_unicode_down_events(&events)?;
+    let reconstructed = reconstruct_typed_text(&events)?;
     Ok((schedule_chars, events, reconstructed))
 }
 
-fn reconstruct_from_unicode_down_events(
-    events: &[RecordedInput],
-) -> Result<String, Box<dyn std::error::Error>> {
-    let units: Vec<_> = events
-        .iter()
-        .filter_map(|event| match event {
-            RecordedInput::UnicodeUnitDown { unit } => Some(*unit),
-            RecordedInput::KeyDown { .. }
-            | RecordedInput::KeyUp { .. }
+fn reconstruct_typed_text(events: &[RecordedInput]) -> Result<String, Box<dyn std::error::Error>> {
+    let mut output = String::new();
+    let mut unicode_units = Vec::new();
+    let mut shift_held = false;
+
+    for event in events {
+        match event {
+            RecordedInput::UnicodeUnitDown { unit } => unicode_units.push(*unit),
+            RecordedInput::KeyDown { key }
+                if key_name(key.code.clone()).as_deref() == Some("shift") =>
+            {
+                flush_unicode_units(&mut unicode_units, &mut output)?;
+                shift_held = true;
+            }
+            RecordedInput::KeyUp { key }
+                if key_name(key.code.clone()).as_deref() == Some("shift") =>
+            {
+                flush_unicode_units(&mut unicode_units, &mut output)?;
+                shift_held = false;
+            }
+            RecordedInput::KeyDown { key } => {
+                flush_unicode_units(&mut unicode_units, &mut output)?;
+                if let Some(ch) = typed_char_for_key(&key.code, shift_held) {
+                    output.push(ch);
+                }
+            }
+            RecordedInput::KeyUp { .. }
             | RecordedInput::DelayMs { .. }
             | RecordedInput::UnicodeUnitUp { .. }
             | RecordedInput::MouseMove { .. }
@@ -149,10 +167,76 @@ fn reconstruct_from_unicode_down_events(
             | RecordedInput::PadStick { .. }
             | RecordedInput::PadTrigger { .. }
             | RecordedInput::PadReport { .. }
-            | RecordedInput::ReleaseAll { .. } => None,
-        })
-        .collect();
-    Ok(String::from_utf16(&units)?)
+            | RecordedInput::ReleaseAll { .. } => {}
+        }
+    }
+
+    flush_unicode_units(&mut unicode_units, &mut output)?;
+    Ok(output)
+}
+
+fn flush_unicode_units(
+    units: &mut Vec<u16>,
+    output: &mut String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if !units.is_empty() {
+        output.push_str(&String::from_utf16(units)?);
+        units.clear();
+    }
+    Ok(())
+}
+
+fn typed_char_for_key(code: &KeyCode, shift_held: bool) -> Option<char> {
+    let name = key_name(code.clone())?;
+    match name.as_str() {
+        "space" => Some(' '),
+        "tab" => Some('\t'),
+        "enter" => Some('\n'),
+        value if value.len() == 1 => {
+            let ch = value.chars().next()?;
+            Some(if shift_held {
+                shifted_char(ch).unwrap_or_else(|| ch.to_ascii_uppercase())
+            } else {
+                ch
+            })
+        }
+        _ => None,
+    }
+}
+
+fn key_name(code: KeyCode) -> Option<String> {
+    match code {
+        KeyCode::Named { value } => Some(value),
+        KeyCode::Symbol { value } => Some(value.to_string()),
+        KeyCode::HidCode { .. } => None,
+    }
+}
+
+const fn shifted_char(ch: char) -> Option<char> {
+    match ch {
+        '1' => Some('!'),
+        '2' => Some('@'),
+        '3' => Some('#'),
+        '4' => Some('$'),
+        '5' => Some('%'),
+        '6' => Some('^'),
+        '7' => Some('&'),
+        '8' => Some('*'),
+        '9' => Some('('),
+        '0' => Some(')'),
+        '-' => Some('_'),
+        '=' => Some('+'),
+        '[' => Some('{'),
+        ']' => Some('}'),
+        '\\' => Some('|'),
+        ';' => Some(':'),
+        '\'' => Some('"'),
+        ',' => Some('<'),
+        '.' => Some('>'),
+        '/' => Some('?'),
+        '`' => Some('~'),
+        _ => None,
+    }
 }
 
 fn unicode_down_count(events: &[RecordedInput]) -> usize {
@@ -160,4 +244,95 @@ fn unicode_down_count(events: &[RecordedInput]) -> usize {
         .iter()
         .filter(|event| matches!(event, RecordedInput::UnicodeUnitDown { .. }))
         .count()
+}
+
+fn expected_unicode_units(text: &str) -> usize {
+    text.chars()
+        .filter(|ch| !is_reversible_key_character(*ch))
+        .map(char::len_utf16)
+        .sum()
+}
+
+fn expected_recorded_event_count(text: &str) -> usize {
+    text.chars()
+        .map(|ch| {
+            if is_reversible_key_character(ch) {
+                2 + usize::from(requires_shift(ch)) * 2
+            } else {
+                ch.len_utf16() * 2
+            }
+        })
+        .sum()
+}
+
+const fn requires_shift(ch: char) -> bool {
+    matches!(
+        ch,
+        'A'..='Z'
+            | '!'
+            | '@'
+            | '#'
+            | '$'
+            | '%'
+            | '^'
+            | '&'
+            | '*'
+            | '('
+            | ')'
+            | '_'
+            | '+'
+            | '{'
+            | '}'
+            | '|'
+            | ':'
+            | '"'
+            | '<'
+            | '>'
+            | '?'
+            | '~'
+    )
+}
+
+const fn is_reversible_key_character(ch: char) -> bool {
+    matches!(
+        ch,
+        'A'..='Z'
+            | 'a'..='z'
+            | '0'..='9'
+            | '\n'
+            | '\t'
+            | ' '
+            | '!'
+            | '@'
+            | '#'
+            | '$'
+            | '%'
+            | '^'
+            | '&'
+            | '*'
+            | '('
+            | ')'
+            | '_'
+            | '+'
+            | '{'
+            | '}'
+            | '|'
+            | ':'
+            | '"'
+            | '<'
+            | '>'
+            | '?'
+            | '~'
+            | '-'
+            | '='
+            | '['
+            | ']'
+            | '\\'
+            | ';'
+            | '\''
+            | ','
+            | '.'
+            | '/'
+            | '`'
+    )
 }

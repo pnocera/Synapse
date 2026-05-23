@@ -289,20 +289,64 @@ expression: snapshot
   ],
   "type_text": [
     {
-      "kind": "unicode_unit_down",
-      "unit": 65
+      "kind": "key_down",
+      "key": {
+        "code": {
+          "kind": "named",
+          "value": "shift"
+        },
+        "use_scancode": false
+      }
     },
     {
-      "kind": "unicode_unit_up",
-      "unit": 65
+      "kind": "key_down",
+      "key": {
+        "code": {
+          "kind": "named",
+          "value": "a"
+        },
+        "use_scancode": false
+      }
     },
     {
-      "kind": "unicode_unit_down",
-      "unit": 122
+      "kind": "key_up",
+      "key": {
+        "code": {
+          "kind": "named",
+          "value": "a"
+        },
+        "use_scancode": false
+      }
     },
     {
-      "kind": "unicode_unit_up",
-      "unit": 122
+      "kind": "key_up",
+      "key": {
+        "code": {
+          "kind": "named",
+          "value": "shift"
+        },
+        "use_scancode": false
+      }
+    },
+    {
+      "kind": "key_down",
+      "key": {
+        "code": {
+          "kind": "named",
+          "value": "z"
+        },
+        "use_scancode": false
+      }
+    },
+    {
+      "kind": "key_up",
+      "key": {
+        "code": {
+          "kind": "named",
+          "value": "z"
+        },
+        "use_scancode": false
+      }
     }
   ]
 }

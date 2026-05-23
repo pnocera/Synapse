@@ -281,10 +281,12 @@ fn type_text_case() -> RecordingCase {
             backend: Backend::Software,
         },
         expected_events: vec![
-            RecordedInput::UnicodeUnitDown { unit: 65 },
-            RecordedInput::UnicodeUnitUp { unit: 65 },
-            RecordedInput::UnicodeUnitDown { unit: 122 },
-            RecordedInput::UnicodeUnitUp { unit: 122 },
+            RecordedInput::KeyDown { key: key("shift") },
+            RecordedInput::KeyDown { key: key("a") },
+            RecordedInput::KeyUp { key: key("a") },
+            RecordedInput::KeyUp { key: key("shift") },
+            RecordedInput::KeyDown { key: key("z") },
+            RecordedInput::KeyUp { key: key("z") },
         ],
         ..empty_expectations()
     }

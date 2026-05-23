@@ -1,12 +1,12 @@
 use std::collections::{BTreeSet, HashMap};
 
 use synapse_core::{
-    Action, ButtonAction, ComboInput, GamepadReport, Key, KeyCode, MouseButton, PadButton, PadId,
-    Point, Stick, Trigger,
+    Action, ButtonAction, ComboInput, GamepadReport, Key, KeyCode, KeystrokeDynamics, MouseButton,
+    PadButton, PadId, Point, Stick, Trigger,
 };
 
 use super::RecordedInput;
-use crate::EmitState;
+use crate::{EmitState, ModifierMask, sample_typing_schedule};
 
 #[derive(Clone, Debug, Default)]
 pub(super) struct RecordingState {
@@ -23,7 +23,7 @@ impl RecordingState {
             Action::KeyDown { key, .. } => self.key_down(key, state),
             Action::KeyUp { key, .. } => self.key_up(key, state),
             Action::KeyChord { keys, hold_ms, .. } => self.key_chord(keys, *hold_ms, state),
-            Action::TypeText { text, .. } => self.type_text(text),
+            Action::TypeText { text, dynamics, .. } => self.type_text(text, dynamics, state),
             Action::MouseMove {
                 to,
                 curve,
@@ -116,10 +116,35 @@ impl RecordingState {
         }
     }
 
-    fn type_text(&mut self, text: &str) {
-        for unit in text.encode_utf16() {
-            self.events.push(RecordedInput::UnicodeUnitDown { unit });
-            self.events.push(RecordedInput::UnicodeUnitUp { unit });
+    fn type_text(&mut self, text: &str, dynamics: &KeystrokeDynamics, state: &mut EmitState) {
+        for event in sample_typing_schedule(text, dynamics, None) {
+            if is_reversible_key_character(event.r#char) {
+                self.type_key_event(&event.key, event.modifier_state, state);
+            } else {
+                self.type_unicode_units(event.r#char);
+            }
+        }
+    }
+
+    fn type_key_event(&mut self, key: &Key, modifier_state: ModifierMask, state: &mut EmitState) {
+        let modifiers = modifier_keys(modifier_state);
+        for modifier in &modifiers {
+            self.key_down(modifier, state);
+        }
+        self.key_down(key, state);
+        self.key_up(key, state);
+        for modifier in modifiers.iter().rev() {
+            self.key_up(modifier, state);
+        }
+    }
+
+    fn type_unicode_units(&mut self, ch: char) {
+        let mut units = [0; 2];
+        for unit in ch.encode_utf16(&mut units) {
+            self.events
+                .push(RecordedInput::UnicodeUnitDown { unit: *unit });
+            self.events
+                .push(RecordedInput::UnicodeUnitUp { unit: *unit });
         }
     }
 
@@ -359,6 +384,72 @@ const fn neutral_gamepad_report() -> GamepadReport {
         thumb_r: (0.0, 0.0),
         lt: 0.0,
         rt: 0.0,
+    }
+}
+
+const fn is_reversible_key_character(ch: char) -> bool {
+    matches!(
+        ch,
+        'A'..='Z'
+            | 'a'..='z'
+            | '0'..='9'
+            | '\n'
+            | '\t'
+            | ' '
+            | '!'
+            | '@'
+            | '#'
+            | '$'
+            | '%'
+            | '^'
+            | '&'
+            | '*'
+            | '('
+            | ')'
+            | '_'
+            | '+'
+            | '{'
+            | '}'
+            | '|'
+            | ':'
+            | '"'
+            | '<'
+            | '>'
+            | '?'
+            | '~'
+            | '-'
+            | '='
+            | '['
+            | ']'
+            | '\\'
+            | ';'
+            | '\''
+            | ','
+            | '.'
+            | '/'
+            | '`'
+    )
+}
+
+fn modifier_keys(mask: ModifierMask) -> Vec<Key> {
+    [
+        (ModifierMask::SHIFT, "shift"),
+        (ModifierMask::CTRL, "ctrl"),
+        (ModifierMask::ALT, "alt"),
+        (ModifierMask::META, "meta"),
+    ]
+    .into_iter()
+    .filter(|(modifier, _name)| mask.contains(*modifier))
+    .map(|(_modifier, name)| named_key(name))
+    .collect()
+}
+
+fn named_key(value: &str) -> Key {
+    Key {
+        code: KeyCode::Named {
+            value: value.to_owned(),
+        },
+        use_scancode: false,
     }
 }
 
