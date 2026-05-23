@@ -233,6 +233,24 @@ fn include_flags_are_independently_testable() -> TestResult {
 }
 
 #[test]
+fn assembler_all_sensors_unavailable_fails_closed() -> TestResult {
+    let input = ObservationInput::new(notepad_input().foreground);
+    fsv_log(format_args!(
+        "source_of_truth=observation edge=no_sensors before=a11y:{:?} capture:{:?} detection:{:?} audio:{:?}",
+        input.a11y_status, input.capture_status, input.detection_status, input.audio_status
+    ))?;
+    let after = ObservationAssembler::new().assemble(ObserveInclude::default(), input);
+    fsv_log(format_args!(
+        "source_of_truth=observation edge=no_sensors after={after:?}"
+    ))?;
+    assert_eq!(
+        after.err().map(|err| err.code()),
+        Some(error_codes::OBSERVE_NO_PERCEPTION_AVAILABLE)
+    );
+    Ok(())
+}
+
+#[test]
 fn auto_mode_edges_and_invalid_manual_override() -> TestResult {
     let notepad = notepad_input().foreground;
     let notepad_default = auto_mode(&notepad);
