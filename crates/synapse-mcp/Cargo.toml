@@ -12,11 +12,16 @@ path = "src/main.rs"
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 clap.workspace = true
 rmcp.workspace = true
+schemars.workspace = true
+serde.workspace = true
 serde_json.workspace = true
+synapse-a11y = { version = "0.1.0", path = "../synapse-a11y" }
 synapse-core = { version = "0.1.0", path = "../synapse-core" }
 synapse-capture = { version = "0.1.0", path = "../synapse-capture" }
+synapse-perception = { version = "0.1.0", path = "../synapse-perception" }
 synapse-telemetry = { version = "0.1.0", path = "../synapse-telemetry" }
 tokio.workspace = true
 tokio-util.workspace = true
@@ -24,6 +29,7 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+insta.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 synapse-test-utils = { version = "0.1.0", path = "../synapse-test-utils" }

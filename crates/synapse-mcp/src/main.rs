@@ -1,3 +1,4 @@
+mod m1;
 mod server;
 
 use std::{path::PathBuf, process::ExitCode, time::Duration};

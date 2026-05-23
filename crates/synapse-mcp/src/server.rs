@@ -1,17 +1,28 @@
-use std::{collections::BTreeMap, time::Instant};
+use std::{collections::BTreeMap, sync::MutexGuard, time::Instant};
 
 use rmcp::{
-    ServerHandler,
-    handler::server::{router::tool::ToolRouter, wrapper::Json},
+    ErrorData, ServerHandler,
+    handler::server::{
+        router::tool::ToolRouter,
+        wrapper::{Json, Parameters},
+    },
     model::{Implementation, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
 use synapse_core::Health;
 
+use crate::m1::{
+    FindParams, FindResponse, M1State, ObserveParams, ReadTextParams, SetCaptureTargetParams,
+    SetCaptureTargetResponse, SetPerceptionModeParams, SetPerceptionModeResponse, SharedM1State,
+    assemble_observation, empty_input_schema, find_in_state, mcp_error, read_text_in_state,
+    set_capture_target_in_state, set_perception_mode_in_state,
+};
+
 #[derive(Debug, Clone)]
 pub struct SynapseService {
     started_at: Instant,
     tool_router: ToolRouter<Self>,
+    m1_state: SharedM1State,
 }
 
 impl SynapseService {
@@ -20,6 +31,7 @@ impl SynapseService {
         Self {
             started_at: Instant::now(),
             tool_router: Self::tool_router(),
+            m1_state: SharedM1State::default(),
         }
     }
 
@@ -32,6 +44,15 @@ impl SynapseService {
             subsystems: BTreeMap::new(),
         }
     }
+
+    fn m1_state(&self) -> Result<MutexGuard<'_, M1State>, ErrorData> {
+        self.m1_state.lock().map_err(|_err| {
+            mcp_error(
+                synapse_core::error_codes::OBSERVE_INTERNAL,
+                "M1 service state lock poisoned",
+            )
+        })
+    }
 }
 
 impl Default for SynapseService {
@@ -42,7 +63,7 @@ impl Default for SynapseService {
 
 #[tool_router(router = tool_router)]
 impl SynapseService {
-    #[tool(description = "Return server health")]
+    #[tool(description = "Return server health", input_schema = empty_input_schema())]
     pub async fn health(&self) -> Json<Health> {
         tracing::info!(
             code = "MCP_TOOL_INVOCATION",
@@ -50,6 +71,76 @@ impl SynapseService {
             "tool.invocation kind=health"
         );
         Json(self.health_payload())
+    }
+
+    #[tool(description = "Returns structured state of the focused window and surrounding context")]
+    pub async fn observe(
+        &self,
+        params: Parameters<ObserveParams>,
+    ) -> Result<Json<synapse_core::Observation>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "observe",
+            "tool.invocation kind=observe"
+        );
+        let state = self.m1_state()?;
+        assemble_observation(&state, &params.0).map(Json)
+    }
+
+    #[tool(description = "Search visible accessibility nodes and detected entities")]
+    pub async fn find(
+        &self,
+        params: Parameters<FindParams>,
+    ) -> Result<Json<FindResponse>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "find",
+            "tool.invocation kind=find"
+        );
+        let state = self.m1_state()?;
+        find_in_state(&state, &params.0).map(Json)
+    }
+
+    #[tool(description = "OCR text from a screen region or visible element")]
+    pub async fn read_text(
+        &self,
+        params: Parameters<ReadTextParams>,
+    ) -> Result<Json<synapse_core::OcrResult>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "read_text",
+            "tool.invocation kind=read_text"
+        );
+        let state = self.m1_state()?;
+        read_text_in_state(&state, params.0).map(Json)
+    }
+
+    #[tool(description = "Set the active capture target")]
+    pub async fn set_capture_target(
+        &self,
+        params: Parameters<SetCaptureTargetParams>,
+    ) -> Result<Json<SetCaptureTargetResponse>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "set_capture_target",
+            "tool.invocation kind=set_capture_target"
+        );
+        let mut state = self.m1_state()?;
+        set_capture_target_in_state(&mut state, params.0).map(Json)
+    }
+
+    #[tool(description = "Set the active perception mode")]
+    pub async fn set_perception_mode(
+        &self,
+        params: Parameters<SetPerceptionModeParams>,
+    ) -> Result<Json<SetPerceptionModeResponse>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "set_perception_mode",
+            "tool.invocation kind=set_perception_mode"
+        );
+        let mut state = self.m1_state()?;
+        set_perception_mode_in_state(&mut state, &params.0).map(Json)
     }
 }
 
@@ -61,7 +152,7 @@ impl ServerHandler for SynapseService {
                 "synapse-mcp",
                 env!("CARGO_PKG_VERSION"),
             ))
-            .with_instructions("Synapse M0 health server")
+            .with_instructions("Synapse M1 perception MCP server")
     }
 }
 

@@ -2860,11 +2860,17 @@ name = "synapse-mcp"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "clap",
+ "insta",
  "rmcp",
+ "schemars",
+ "serde",
  "serde_json",
+ "synapse-a11y",
  "synapse-capture",
  "synapse-core",
+ "synapse-perception",
  "synapse-telemetry",
  "synapse-test-utils",
  "tempfile",

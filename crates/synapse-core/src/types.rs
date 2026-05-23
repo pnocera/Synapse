@@ -23,6 +23,7 @@ pub enum PerceptionMode {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Point {
     pub x: i32,
     pub y: i32,
@@ -38,6 +39,7 @@ impl Point {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Rect {
     pub x: i32,
     pub y: i32,
@@ -63,6 +65,7 @@ impl Rect {
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Size {
     pub w: u32,
     pub h: u32,
@@ -503,7 +506,7 @@ pub struct ObservationDiagnostics {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub enum SensorStatus {
     Healthy,
     DegradedLatency {
@@ -660,6 +663,7 @@ impl DataPredicate {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct Health {
     pub ok: bool,
     pub version: String,
@@ -669,6 +673,7 @@ pub struct Health {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SubsystemHealth {
     pub status: String,
     pub detail: Option<String>,

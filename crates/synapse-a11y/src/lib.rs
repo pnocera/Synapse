@@ -7,7 +7,7 @@ use std::{
 };
 
 use serde::{Deserialize, Serialize};
-use synapse_core::{AccessibleSubtree, ElementId, Point, error_codes};
+use synapse_core::{AccessibleSubtree, ElementId, ForegroundContext, Point, error_codes};
 use thiserror::Error;
 use tokio::{net::TcpStream, sync::mpsc::UnboundedSender, time::timeout};
 
@@ -258,6 +258,16 @@ pub fn focused_window() -> A11yResult<UIElement> {
     platform::focused_window()
 }
 
+/// Returns foreground-window process, title, bounds, and display metadata.
+///
+/// # Errors
+///
+/// Returns a structured UIA error when the HWND cannot be inspected, or
+/// `A11Y_NOT_AVAILABLE` on non-Windows platforms.
+pub fn foreground_context(hwnd: i64) -> A11yResult<ForegroundContext> {
+    platform::foreground_context(hwnd)
+}
+
 /// Returns the currently focused UIA element with cached basic properties.
 ///
 /// # Errors
@@ -444,6 +454,7 @@ pub async fn attach_chromiumoxide(endpoint: &str) -> A11yResult<CdpAttachment> {
 mod platform {
     use std::{
         ffi::c_void,
+        path::Path,
         sync::{
             Arc, Mutex, OnceLock,
             atomic::{AtomicBool, Ordering},
@@ -454,7 +465,8 @@ mod platform {
     };
 
     use synapse_core::{
-        AccessibleNode, AccessibleSubtree, ElementId, Point, Rect, UiaPattern, element_id,
+        AccessibleNode, AccessibleSubtree, ElementId, ForegroundContext, Point, Rect, UiaPattern,
+        element_id,
     };
     use tokio::sync::mpsc::UnboundedSender;
     use uiautomation::{
@@ -463,26 +475,34 @@ mod platform {
         types::{ControlType, ElementMode, Handle, Point as UiaPoint, TreeScope, UIProperty},
         variants::{Value, Variant},
     };
-    use windows::Win32::{
-        Foundation::{HWND, LPARAM, WPARAM},
-        System::{
-            Com::{
-                APTTYPE, APTTYPE_MAINSTA, APTTYPE_MTA, APTTYPE_NA, APTTYPE_STA, APTTYPEQUALIFIER,
-                COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE, CoGetApartmentType,
-                CoInitializeEx, CoUninitialize,
+    use windows::{
+        Win32::{
+            Foundation::{CloseHandle, HWND, LPARAM, RECT, WPARAM},
+            System::{
+                Com::{
+                    APTTYPE, APTTYPE_MAINSTA, APTTYPE_MTA, APTTYPE_NA, APTTYPE_STA,
+                    APTTYPEQUALIFIER, COINIT_APARTMENTTHREADED, COINIT_DISABLE_OLE1DDE,
+                    CoGetApartmentType, CoInitializeEx, CoUninitialize,
+                },
+                Threading::{
+                    GetCurrentThreadId, OpenProcess, PROCESS_NAME_FORMAT,
+                    PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+                },
             },
-            Threading::GetCurrentThreadId,
-        },
-        UI::{
-            Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
-            WindowsAndMessaging::{
-                DispatchMessageW, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY, EVENT_OBJECT_FOCUS,
-                EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SELECTION, EVENT_OBJECT_VALUECHANGE,
-                EVENT_SYSTEM_ALERT, EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_MENUEND,
-                EVENT_SYSTEM_MENUSTART, GetForegroundWindow, GetMessageW, MSG, PostThreadMessageW,
-                TranslateMessage, WINEVENT_OUTOFCONTEXT, WINEVENT_SKIPOWNPROCESS, WM_APP,
+            UI::{
+                Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent},
+                WindowsAndMessaging::{
+                    DispatchMessageW, EVENT_OBJECT_CREATE, EVENT_OBJECT_DESTROY,
+                    EVENT_OBJECT_FOCUS, EVENT_OBJECT_NAMECHANGE, EVENT_OBJECT_SELECTION,
+                    EVENT_OBJECT_VALUECHANGE, EVENT_SYSTEM_ALERT, EVENT_SYSTEM_FOREGROUND,
+                    EVENT_SYSTEM_MENUEND, EVENT_SYSTEM_MENUSTART, GetForegroundWindow, GetMessageW,
+                    GetWindowRect, GetWindowTextW, GetWindowThreadProcessId, MSG,
+                    PostThreadMessageW, TranslateMessage, WINEVENT_OUTOFCONTEXT,
+                    WINEVENT_SKIPOWNPROCESS, WM_APP,
+                },
             },
         },
+        core::PWSTR,
     };
 
     use super::{
@@ -561,6 +581,33 @@ mod platform {
             automation
                 .element_from_handle(Handle::from(hwnd))
                 .map_err(map_uia_error)
+        })
+    }
+
+    pub fn foreground_context(hwnd: i64) -> A11yResult<ForegroundContext> {
+        let hwnd = HWND(hwnd as *mut c_void);
+        let mut pid = 0_u32;
+        unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&raw mut pid));
+        }
+        let process_path = process_path(pid).unwrap_or_default();
+        let process_name = Path::new(&process_path).file_name().map_or_else(
+            || format!("pid-{pid}"),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        Ok(ForegroundContext {
+            hwnd: hwnd.0 as isize as i64,
+            pid,
+            process_name,
+            process_path,
+            window_title: window_title(hwnd),
+            window_bounds: window_rect(hwnd)?,
+            monitor_index: 0,
+            dpi_scale: 1.0,
+            profile_id: None,
+            steam_appid: None,
+            is_fullscreen: false,
+            is_dwm_composed: true,
         })
     }
 
@@ -972,6 +1019,44 @@ mod platform {
         if value.is_empty() { None } else { Some(value) }
     }
 
+    fn window_title(hwnd: HWND) -> String {
+        let mut buffer = vec![0_u16; 512];
+        let len = unsafe { GetWindowTextW(hwnd, &mut buffer) };
+        String::from_utf16_lossy(&buffer[..usize::try_from(len).unwrap_or(0)])
+    }
+
+    fn window_rect(hwnd: HWND) -> A11yResult<Rect> {
+        let mut rect = RECT::default();
+        unsafe { GetWindowRect(hwnd, &raw mut rect) }
+            .map_err(|err| A11yError::internal(err.to_string()))?;
+        Ok(Rect {
+            x: rect.left,
+            y: rect.top,
+            w: rect.right.saturating_sub(rect.left),
+            h: rect.bottom.saturating_sub(rect.top),
+        })
+    }
+
+    fn process_path(pid: u32) -> A11yResult<String> {
+        let handle = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }
+            .map_err(|err| A11yError::internal(err.to_string()))?;
+        let mut buffer = vec![0_u16; 32_768];
+        let mut len = u32::try_from(buffer.len()).unwrap_or(u32::MAX);
+        let result = unsafe {
+            QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_FORMAT(0),
+                PWSTR(buffer.as_mut_ptr()),
+                &raw mut len,
+            )
+        };
+        let _ = unsafe { CloseHandle(handle) };
+        result.map_err(|err| A11yError::internal(err.to_string()))?;
+        Ok(String::from_utf16_lossy(
+            &buffer[..usize::try_from(len).unwrap_or(0)],
+        ))
+    }
+
     fn find_by_runtime_id_hex(
         root: &UIElement,
         runtime_id_hex_expected: &str,
@@ -1174,7 +1259,7 @@ mod platform {
 
 #[cfg(not(windows))]
 mod platform {
-    use synapse_core::{AccessibleSubtree, ElementId, Point};
+    use synapse_core::{AccessibleSubtree, ElementId, ForegroundContext, Point};
     use tokio::sync::mpsc::UnboundedSender;
 
     use super::{A11yError, A11yResult, AccessibleEvent, UIElement, WinEventHookReadback};
@@ -1192,6 +1277,12 @@ mod platform {
     pub fn focused_window() -> A11yResult<UIElement> {
         Err(A11yError::not_available(
             "UIA foreground window lookup requires Windows",
+        ))
+    }
+
+    pub fn foreground_context(_hwnd: i64) -> A11yResult<ForegroundContext> {
+        Err(A11yError::not_available(
+            "foreground context lookup requires Windows",
         ))
     }
 

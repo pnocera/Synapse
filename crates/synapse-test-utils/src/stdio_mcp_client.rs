@@ -30,8 +30,18 @@ impl StdioMcpClient {
     }
 
     pub async fn launch_and_init_with_log_dir(log_dir: Option<&Path>) -> anyhow::Result<Self> {
-        let mut client = Self::launch(log_dir)?;
-        let init = client
+        Self::launch_with_env(log_dir, &[])?.initialize().await
+    }
+
+    pub async fn launch_and_init_with_env(
+        log_dir: Option<&Path>,
+        envs: &[(&str, &str)],
+    ) -> anyhow::Result<Self> {
+        Self::launch_with_env(log_dir, envs)?.initialize().await
+    }
+
+    async fn initialize(mut self) -> anyhow::Result<Self> {
+        let init = self
             .request(
                 "initialize",
                 serde_json::json!({
@@ -47,13 +57,16 @@ impl StdioMcpClient {
         if init["serverInfo"]["name"] != "synapse-mcp" {
             bail!("unexpected initialize response: {init}");
         }
-        client
-            .notify("notifications/initialized", serde_json::json!({}))
+        self.notify("notifications/initialized", serde_json::json!({}))
             .await?;
-        Ok(client)
+        Ok(self)
     }
 
     pub fn launch(log_dir: Option<&Path>) -> anyhow::Result<Self> {
+        Self::launch_with_env(log_dir, &[])
+    }
+
+    pub fn launch_with_env(log_dir: Option<&Path>, envs: &[(&str, &str)]) -> anyhow::Result<Self> {
         let bin = mcp_binary_path()?;
         let mut command = Command::new(bin);
         command
@@ -64,6 +77,9 @@ impl StdioMcpClient {
             .env("SYNAPSE_LOG_LEVEL", "debug");
         if let Some(log_dir) = log_dir {
             command.env("SYNAPSE_LOG_DIR", log_dir);
+        }
+        for (key, value) in envs {
+            command.env(key, value);
         }
 
         let mut child = command.spawn().context("spawn synapse-mcp")?;
@@ -96,6 +112,17 @@ impl StdioMcpClient {
         .await
     }
 
+    pub async fn tools_call_error(&mut self, name: &str, args: Value) -> anyhow::Result<Value> {
+        self.request_error(
+            "tools/call",
+            serde_json::json!({
+                "name": name,
+                "arguments": args,
+            }),
+        )
+        .await
+    }
+
     pub async fn request(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
         self.next_id = self.next_id.saturating_add(1);
         let id = self.next_id;
@@ -117,6 +144,26 @@ impl StdioMcpClient {
             .get("result")
             .cloned()
             .with_context(|| format!("JSON-RPC response missing result: {response}"))
+    }
+
+    pub async fn request_error(&mut self, method: &str, params: Value) -> anyhow::Result<Value> {
+        self.next_id = self.next_id.saturating_add(1);
+        let id = self.next_id;
+        let request = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "method": method,
+            "params": params,
+        });
+        self.write_message(&request).await?;
+
+        let response = tokio::time::timeout(REQUEST_TIMEOUT, self.read_response(id))
+            .await
+            .context("timed out waiting for JSON-RPC error response")??;
+        response
+            .get("error")
+            .cloned()
+            .with_context(|| format!("JSON-RPC response missing error: {response}"))
     }
 
     pub async fn notify(&mut self, method: &str, params: Value) -> anyhow::Result<()> {
