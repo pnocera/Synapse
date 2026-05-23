@@ -290,6 +290,16 @@ pub fn foreground_context(hwnd: i64) -> A11yResult<ForegroundContext> {
     platform::foreground_context(hwnd)
 }
 
+/// Returns context for visible top-level windows on the current desktop.
+///
+/// # Errors
+///
+/// Returns `A11Y_NOT_AVAILABLE` on non-Windows platforms. Individual windows
+/// that disappear during enumeration are skipped.
+pub fn visible_top_level_window_contexts() -> A11yResult<Vec<ForegroundContext>> {
+    platform::visible_top_level_window_contexts()
+}
+
 /// Returns the currently focused UIA element with cached basic properties.
 ///
 /// # Errors
@@ -656,6 +666,14 @@ mod platform {
             is_fullscreen: false,
             is_dwm_composed: true,
         })
+    }
+
+    pub fn visible_top_level_window_contexts() -> A11yResult<Vec<ForegroundContext>> {
+        Ok(visible_top_level_hwnds()?
+            .into_iter()
+            .filter_map(|hwnd| foreground_context(hwnd.0 as isize as i64).ok())
+            .filter(|context| !context.window_title.is_empty())
+            .collect())
     }
 
     pub fn focused_element() -> A11yResult<UIElement> {
@@ -1133,6 +1151,30 @@ mod platform {
         search.hwnd
     }
 
+    fn visible_top_level_hwnds() -> A11yResult<Vec<HWND>> {
+        struct Search {
+            hwnds: Vec<HWND>,
+        }
+
+        unsafe extern "system" fn enum_window(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            let search = unsafe { &mut *(lparam.0 as *mut Search) };
+            if unsafe { IsWindowVisible(hwnd) }.as_bool() {
+                search.hwnds.push(hwnd);
+            }
+            BOOL(1)
+        }
+
+        let mut search = Search { hwnds: Vec::new() };
+        unsafe {
+            EnumWindows(
+                Some(enum_window),
+                LPARAM((&raw mut search).cast::<core::ffi::c_void>() as isize),
+            )
+        }
+        .map_err(|err| A11yError::internal(format!("EnumWindows failed: {err}")))?;
+        Ok(search.hwnds)
+    }
+
     fn find_by_runtime_id_hex(
         root: &UIElement,
         runtime_id_hex_expected: &str,
@@ -1371,6 +1413,12 @@ mod platform {
     pub fn foreground_context(_hwnd: i64) -> A11yResult<ForegroundContext> {
         Err(A11yError::not_available(
             "foreground context lookup requires Windows",
+        ))
+    }
+
+    pub fn visible_top_level_window_contexts() -> A11yResult<Vec<ForegroundContext>> {
+        Err(A11yError::not_available(
+            "visible top-level window enumeration requires Windows",
         ))
     }
 

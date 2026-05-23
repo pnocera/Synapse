@@ -9,9 +9,40 @@ pub use platform::{
     launch_notepad, wait_for_window_title_regex,
 };
 
+#[cfg(any(windows, test))]
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct WindowCandidate {
+    hwnd: i64,
+    pid: u32,
+    title: String,
+}
+
+#[cfg(any(windows, test))]
+fn select_window_title_match(
+    candidates: &[WindowCandidate],
+    excluded_hwnds: &std::collections::HashSet<i64>,
+    preferred_pid: u32,
+    title_regex: &regex::Regex,
+) -> Option<WindowCandidate> {
+    candidates
+        .iter()
+        .find(|candidate| {
+            candidate.pid == preferred_pid
+                && !excluded_hwnds.contains(&candidate.hwnd)
+                && title_regex.is_match(&candidate.title)
+        })
+        .or_else(|| {
+            candidates.iter().find(|candidate| {
+                !excluded_hwnds.contains(&candidate.hwnd) && title_regex.is_match(&candidate.title)
+            })
+        })
+        .cloned()
+}
+
 #[cfg(windows)]
 mod platform {
     use std::{
+        collections::HashSet,
         path::PathBuf,
         process::{Child, Command, ExitStatus, Stdio},
         thread,
@@ -21,6 +52,8 @@ mod platform {
     use anyhow::{Context, bail};
     use regex::Regex;
     use synapse_core::ForegroundContext;
+
+    use super::{WindowCandidate, select_window_title_match};
 
     pub const NOTEPAD_TITLE_REGEX: &str = r"^Untitled - Notepad$";
     pub const NOTEPAD_POLL_INTERVAL: Duration = Duration::from_millis(20);
@@ -32,6 +65,7 @@ mod platform {
 
     pub struct NotepadHandle {
         child: Option<Child>,
+        launcher_pid: u32,
         pid: u32,
         hwnd: i64,
     }
@@ -58,40 +92,48 @@ mod platform {
         }
 
         fn close_inner(&mut self) -> anyhow::Result<()> {
-            let Some(mut child) = self.child.take() else {
-                return Ok(());
-            };
+            let mut child = self.child.take();
 
-            if child
-                .try_wait()
-                .context("check Notepad process status")?
-                .is_some()
-            {
-                return Ok(());
-            }
-
-            let graceful = terminate_process_tree(self.pid, false);
-            let graceful_exited = wait_for_child_exit(&mut child, GRACEFUL_CLOSE_TIMEOUT)
-                .context("wait for Notepad graceful close")?;
-            if graceful_exited {
+            let graceful_ui = terminate_process_tree(self.pid, false);
+            let graceful_launcher = terminate_launcher_if_distinct(self.launcher_pid, self.pid);
+            let window_closed = wait_for_window_gone(self.hwnd, GRACEFUL_CLOSE_TIMEOUT);
+            let child_exited = child
+                .as_mut()
+                .map_or(Ok(true), |child| {
+                    wait_for_child_exit(child, GRACEFUL_CLOSE_TIMEOUT)
+                })
+                .context("wait for Notepad launcher graceful close")?;
+            if window_closed && child_exited {
                 return Ok(());
             }
 
-            let forced = terminate_process_tree(self.pid, true);
-            let forced_exited = wait_for_child_exit(&mut child, FORCE_CLOSE_TIMEOUT)
-                .context("wait for Notepad forced close")?;
-            if forced_exited {
+            let forced_ui = terminate_process_tree(self.pid, true);
+            let forced_launcher = terminate_launcher_if_distinct_force(self.launcher_pid, self.pid);
+            let window_closed = wait_for_window_gone(self.hwnd, FORCE_CLOSE_TIMEOUT);
+            let child_exited = child
+                .as_mut()
+                .map_or(Ok(true), |child| {
+                    wait_for_child_exit(child, FORCE_CLOSE_TIMEOUT)
+                })
+                .context("wait for Notepad launcher forced close")?;
+            if window_closed && child_exited {
                 return Ok(());
             }
 
-            self.child = Some(child);
-            let graceful_status =
-                graceful.map_or_else(|err| err.to_string(), |status| status.to_string());
-            let forced_status =
-                forced.map_or_else(|err| err.to_string(), |status| status.to_string());
+            self.child = child;
+            let graceful_ui_status =
+                graceful_ui.map_or_else(|err| err.to_string(), |status| status.to_string());
+            let graceful_launcher_status =
+                graceful_launcher.map_or_else(|err| err.to_string(), |status| status.to_string());
+            let forced_ui_status =
+                forced_ui.map_or_else(|err| err.to_string(), |status| status.to_string());
+            let forced_launcher_status =
+                forced_launcher.map_or_else(|err| err.to_string(), |status| status.to_string());
             bail!(
-                "Notepad pid {} remained alive after taskkill /T ({graceful_status}) and taskkill /T /F ({forced_status})",
-                self.pid
+                "Notepad hwnd 0x{:x} pid {} launcher_pid {} remained after taskkill /T ui ({graceful_ui_status}), taskkill /T launcher ({graceful_launcher_status}), taskkill /T /F ui ({forced_ui_status}), and taskkill /T /F launcher ({forced_launcher_status})",
+                self.hwnd,
+                self.pid,
+                self.launcher_pid
             );
         }
     }
@@ -105,6 +147,8 @@ mod platform {
     #[allow(clippy::trivial_regex)]
     pub fn launch_notepad() -> anyhow::Result<NotepadHandle> {
         let title_regex = Regex::new(NOTEPAD_TITLE_REGEX).context("compile Notepad title regex")?;
+        let excluded_hwnds = matching_window_hwnds(&title_regex)
+            .context("snapshot existing Notepad title windows before launch")?;
         let mut child = Command::new(notepad_exe())
             .stdin(Stdio::null())
             .stdout(Stdio::null())
@@ -118,7 +162,7 @@ mod platform {
             bail!("spawned notepad.exe without a process id");
         }
 
-        let context = match wait_for_window_title_regex(pid, &title_regex) {
+        let context = match wait_for_new_window_title_regex(pid, &title_regex, &excluded_hwnds) {
             Ok(context) => context,
             Err(err) => {
                 let _ = terminate_process_tree(pid, true);
@@ -129,7 +173,8 @@ mod platform {
 
         Ok(NotepadHandle {
             child: Some(child),
-            pid,
+            launcher_pid: pid,
+            pid: context.pid,
             hwnd: context.hwnd,
         })
     }
@@ -141,18 +186,27 @@ mod platform {
         if pid == 0 {
             bail!("Notepad pid must be non-zero");
         }
+        wait_for_new_window_title_regex(pid, title_regex, &HashSet::new())
+    }
 
+    fn wait_for_new_window_title_regex(
+        pid: u32,
+        title_regex: &Regex,
+        excluded_hwnds: &HashSet<i64>,
+    ) -> anyhow::Result<ForegroundContext> {
         let start = Instant::now();
-        let mut last_title: Option<String> = None;
+        let mut last_candidates: Vec<WindowCandidate> = Vec::new();
         let mut last_error: Option<String> = None;
 
         while start.elapsed() <= NOTEPAD_STARTUP_TIMEOUT {
-            match context_for_process(pid) {
-                Ok(context) => {
-                    if title_regex.is_match(&context.window_title) {
-                        return Ok(context);
+            match visible_top_level_windows() {
+                Ok(candidates) => {
+                    if let Some(candidate) =
+                        select_window_title_match(&candidates, excluded_hwnds, pid, title_regex)
+                    {
+                        return context_for_window(candidate.hwnd);
                     }
-                    last_title = Some(context.window_title);
+                    last_candidates = candidates;
                     last_error = None;
                 }
                 Err(err) => {
@@ -163,27 +217,45 @@ mod platform {
         }
 
         bail!(
-            "timed out after {:?} waiting for pid {pid} window title to match {}; last_title={last_title:?}; last_error={last_error:?}",
+            "timed out after {:?} waiting for launcher pid {pid} or a new visible top-level window title to match {}; excluded_hwnds={excluded_hwnds:?}; last_candidates={last_candidates:?}; last_error={last_error:?}",
             NOTEPAD_STARTUP_TIMEOUT,
             title_regex.as_str()
         );
     }
 
-    fn context_for_process(pid: u32) -> anyhow::Result<ForegroundContext> {
-        let window = synapse_a11y::window_for_process(pid)
-            .with_context(|| format!("find window for pid {pid}"))?;
-        let tree = synapse_a11y::snapshot(&window, 0)
-            .with_context(|| format!("snapshot window root for pid {pid}"))?;
-        let parts = tree
-            .root
-            .parts()
-            .with_context(|| format!("parse root element id {}", tree.root))?;
-        synapse_a11y::foreground_context(parts.hwnd).with_context(|| {
-            format!(
-                "read foreground context for pid {pid} hwnd 0x{:x}",
-                parts.hwnd
-            )
-        })
+    fn context_for_window(hwnd: i64) -> anyhow::Result<ForegroundContext> {
+        synapse_a11y::foreground_context(hwnd)
+            .with_context(|| format!("read foreground context for hwnd 0x{hwnd:x}"))
+    }
+
+    fn matching_window_hwnds(title_regex: &Regex) -> anyhow::Result<HashSet<i64>> {
+        Ok(visible_top_level_windows()?
+            .into_iter()
+            .filter(|candidate| title_regex.is_match(&candidate.title))
+            .map(|candidate| candidate.hwnd)
+            .collect())
+    }
+
+    fn visible_top_level_windows() -> anyhow::Result<Vec<WindowCandidate>> {
+        Ok(synapse_a11y::visible_top_level_window_contexts()?
+            .into_iter()
+            .map(|context| WindowCandidate {
+                hwnd: context.hwnd,
+                pid: context.pid,
+                title: context.window_title,
+            })
+            .collect())
+    }
+
+    fn wait_for_window_gone(hwnd: i64, timeout: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() <= timeout {
+            if synapse_a11y::foreground_context(hwnd).is_err() {
+                return true;
+            }
+            thread::sleep(CLOSE_POLL_INTERVAL);
+        }
+        false
     }
 
     fn notepad_exe() -> PathBuf {
@@ -210,6 +282,26 @@ mod platform {
             command.arg("/F");
         }
         command.status().context("run taskkill")
+    }
+
+    fn terminate_launcher_if_distinct(
+        launcher_pid: u32,
+        ui_pid: u32,
+    ) -> anyhow::Result<ExitStatus> {
+        if launcher_pid == ui_pid {
+            return terminate_process_tree(ui_pid, false);
+        }
+        terminate_process_tree(launcher_pid, false)
+    }
+
+    fn terminate_launcher_if_distinct_force(
+        launcher_pid: u32,
+        ui_pid: u32,
+    ) -> anyhow::Result<ExitStatus> {
+        if launcher_pid == ui_pid {
+            return terminate_process_tree(ui_pid, true);
+        }
+        terminate_process_tree(launcher_pid, true)
     }
 
     fn wait_for_child_exit(child: &mut Child, timeout: Duration) -> anyhow::Result<bool> {
@@ -278,7 +370,6 @@ mod platform {
 
 #[cfg(test)]
 mod tests {
-    #[cfg(not(windows))]
     use regex::Regex;
 
     #[cfg(not(windows))]
@@ -286,6 +377,8 @@ mod tests {
     use super::{
         NOTEPAD_POLL_INTERVAL, NOTEPAD_STARTUP_TIMEOUT, NOTEPAD_TITLE_REGEX, launch_notepad,
     };
+    #[cfg(any(windows, test))]
+    use super::{WindowCandidate, select_window_title_match};
 
     #[test]
     fn notepad_fixture_constants_match_m2_contract() {
@@ -334,6 +427,99 @@ mod tests {
         };
         println!("source_of_truth=wait_for_window_title_regex_non_windows after=error:{error}");
         assert!(error.to_string().contains("requires Windows"));
+    }
+
+    #[allow(clippy::trivial_regex)]
+    #[test]
+    fn notepad_window_selection_prefers_launcher_pid_and_skips_preexisting_fsv() {
+        let regex = match Regex::new(NOTEPAD_TITLE_REGEX) {
+            Ok(regex) => regex,
+            Err(error) => panic!("failed to compile Notepad title regex: {error}"),
+        };
+        let mut excluded = std::collections::HashSet::new();
+        excluded.insert(10);
+        let candidates = vec![
+            WindowCandidate {
+                hwnd: 10,
+                pid: 900,
+                title: "Untitled - Notepad".to_owned(),
+            },
+            WindowCandidate {
+                hwnd: 11,
+                pid: 123,
+                title: "Untitled - Notepad".to_owned(),
+            },
+            WindowCandidate {
+                hwnd: 12,
+                pid: 456,
+                title: "Untitled - Notepad".to_owned(),
+            },
+        ];
+
+        println!(
+            "source_of_truth=notepad_window_selection edge=prefer_launcher before=preferred_pid:123 excluded={excluded:?} candidates={candidates:?}"
+        );
+        let selected = select_window_title_match(&candidates, &excluded, 123, &regex);
+        println!(
+            "source_of_truth=notepad_window_selection edge=prefer_launcher after={selected:?} expected_hwnd=11"
+        );
+        assert_eq!(selected.map(|candidate| candidate.hwnd), Some(11));
+    }
+
+    #[allow(clippy::trivial_regex)]
+    #[test]
+    fn notepad_window_selection_accepts_uwp_different_pid_fsv() {
+        let regex = match Regex::new(NOTEPAD_TITLE_REGEX) {
+            Ok(regex) => regex,
+            Err(error) => panic!("failed to compile Notepad title regex: {error}"),
+        };
+        let excluded = std::collections::HashSet::new();
+        let candidates = vec![WindowCandidate {
+            hwnd: 44,
+            pid: 9001,
+            title: "Untitled - Notepad".to_owned(),
+        }];
+
+        println!(
+            "source_of_truth=notepad_window_selection edge=uwp_pid_transfer before=preferred_pid:123 excluded={excluded:?} candidates={candidates:?}"
+        );
+        let selected = select_window_title_match(&candidates, &excluded, 123, &regex);
+        println!(
+            "source_of_truth=notepad_window_selection edge=uwp_pid_transfer after={selected:?} expected_hwnd=44"
+        );
+        assert_eq!(selected.map(|candidate| candidate.hwnd), Some(44));
+    }
+
+    #[allow(clippy::trivial_regex)]
+    #[test]
+    fn notepad_window_selection_rejects_excluded_or_wrong_title_fsv() {
+        let regex = match Regex::new(NOTEPAD_TITLE_REGEX) {
+            Ok(regex) => regex,
+            Err(error) => panic!("failed to compile Notepad title regex: {error}"),
+        };
+        let mut excluded = std::collections::HashSet::new();
+        excluded.insert(70);
+        let candidates = vec![
+            WindowCandidate {
+                hwnd: 70,
+                pid: 123,
+                title: "Untitled - Notepad".to_owned(),
+            },
+            WindowCandidate {
+                hwnd: 71,
+                pid: 123,
+                title: "Settings".to_owned(),
+            },
+        ];
+
+        println!(
+            "source_of_truth=notepad_window_selection edge=no_match before=preferred_pid:123 excluded={excluded:?} candidates={candidates:?}"
+        );
+        let selected = select_window_title_match(&candidates, &excluded, 123, &regex);
+        println!(
+            "source_of_truth=notepad_window_selection edge=no_match after={selected:?} expected=None"
+        );
+        assert_eq!(selected, None);
     }
 
     #[cfg(windows)]
