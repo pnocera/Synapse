@@ -944,7 +944,6 @@ mod tests {
             .with_target(false)
             .with_level(false)
             .finish();
-        let _trace_guard = tracing::subscriber::set_default(subscriber);
 
         let (_handle, _snapshot_handle, mut emitter) =
             ActionEmitter::channel_with_rate_limits(generous_limits());
@@ -971,9 +970,11 @@ mod tests {
         time::advance(Duration::from_millis(HELD_KEY_MAX_DURATION_MS)).await;
         tokio::task::yield_now().await;
         let auto_release = read_pending_auto_release(&mut emitter);
-        let emitted_action = emitter
-            .auto_release_held_key(&auto_release)
-            .unwrap_or_else(|| panic!("auto-release should emit KeyUp action"));
+        let emitted_action = tracing::subscriber::with_default(subscriber, || {
+            emitter
+                .auto_release_held_key(&auto_release)
+                .unwrap_or_else(|| panic!("auto-release should emit KeyUp action"))
+        });
         recording_backend
             .execute(&emitted_action, &mut recording_state)
             .unwrap_or_else(|error| panic!("recording auto KeyUp should succeed: {error}"));
