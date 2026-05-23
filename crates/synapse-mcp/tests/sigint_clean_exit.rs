@@ -1,6 +1,7 @@
 #![cfg(unix)]
 
-use serde_json::Value;
+use anyhow::Context;
+use serde_json::{Value, json};
 use synapse_core::error_codes;
 use synapse_test_utils::stdio_mcp_client::StdioMcpClient;
 use tempfile::TempDir;
@@ -42,8 +43,22 @@ async fn synthetic_sigint_results_in_exit_0_and_flushed_log() -> anyhow::Result<
 #[tokio::test]
 async fn stdio_connection_closed_emits_release_all_log() -> anyhow::Result<()> {
     let dir = TempDir::new()?;
-    let client = StdioMcpClient::launch_and_init_with_log_dir(Some(dir.path())).await?;
-    println!("source_of_truth=daemon_log edge=connection_closed before=safety_count:0");
+    let mut client = StdioMcpClient::launch_and_init_with_log_dir(Some(dir.path())).await?;
+    let pad = client
+        .tools_call(
+            "act_pad",
+            json!({
+                "pad_id": 4,
+                "report": {
+                    "buttons": ["a"],
+                    "rt": 0.5
+                }
+            }),
+        )
+        .await?;
+    println!(
+        "source_of_truth=daemon_log edge=connection_closed before=safety_count:0 held_pad_id:4 pad_response={pad}"
+    );
 
     let status = client.shutdown().await?;
     assert!(status.success());
@@ -51,14 +66,18 @@ async fn stdio_connection_closed_emits_release_all_log() -> anyhow::Result<()> {
     let logs = read_logs(dir.path())?;
     let safety_lines = safety_reason_lines(&logs, "connection_closed");
     let safety_count = safety_lines.len();
+    let safety_line = safety_lines
+        .first()
+        .context("connection_closed safety line missing")?;
     println!(
-        "source_of_truth=daemon_log edge=connection_closed after_safety_count={safety_count} after_line={:?}",
-        safety_lines.first()
+        "source_of_truth=daemon_log edge=connection_closed after_safety_count={safety_count} after_line={safety_line:?}"
     );
     assert!(
         safety_count >= 1,
         "expected connection_closed release_all safety log, got logs: {logs}"
     );
+    assert!(safety_line.contains("\"held_pad_ids\":\"[4]\""));
+    assert!(safety_line.contains("\"released_pads\":1"));
     Ok(())
 }
 
