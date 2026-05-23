@@ -25,9 +25,10 @@ use crate::{
     },
     m2::{
         ActAimParams, ActAimResponse, ActClickParams, ActClickResponse, ActDragParams,
-        ActDragResponse, ActPressParams, ActPressResponse, ActTypeParams, ActTypeResponse,
-        SharedM2State, act_aim_with_handle, act_click_with_handle, act_drag_with_handle,
-        act_press_with_handle, act_type_with_handle, shared_m2_state_from_env,
+        ActDragResponse, ActPressParams, ActPressResponse, ActScrollParams, ActScrollResponse,
+        ActTypeParams, ActTypeResponse, SharedM2State, act_aim_with_handle, act_click_with_handle,
+        act_drag_with_handle, act_press_with_handle, act_scroll_with_handle, act_type_with_handle,
+        shared_m2_state_from_env,
     },
 };
 
@@ -270,6 +271,24 @@ impl SynapseService {
         );
         let (handle, recording) = self.m2_action_context()?;
         act_drag_with_handle(handle, recording, params.0)
+            .await
+            .map(Json)
+    }
+
+    #[tool(
+        description = "Scroll vertically or horizontally at the current pointer or screen point"
+    )]
+    pub async fn act_scroll(
+        &self,
+        params: Parameters<ActScrollParams>,
+    ) -> Result<Json<ActScrollResponse>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "act_scroll",
+            "tool.invocation kind=act_scroll"
+        );
+        let (handle, recording) = self.m2_action_context()?;
+        act_scroll_with_handle(handle, recording, params.0)
             .await
             .map(Json)
     }
