@@ -9,6 +9,7 @@ pub mod error;
 pub mod handle;
 pub mod invoke;
 pub mod rate_limit;
+pub mod safety;
 pub mod validation;
 
 pub use backend::{
@@ -35,4 +36,5 @@ pub use invoke::{
 pub use rate_limit::{
     SOFTWARE_RATE_LIMIT_PER_S, TokenBucket, TokenBucketSnapshot, VIGEM_RATE_LIMIT_PER_S,
 };
+pub use safety::install_panic_hook;
 pub use validation::{MAX_DRAG_DISTANCE_PX, validate_action};
