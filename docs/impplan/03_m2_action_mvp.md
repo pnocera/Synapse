@@ -556,6 +556,13 @@ present resolves to `Natural::FAST` — the test reads back the recorded
 backend events and asserts the per-step IKI or sub-pixel tremor matches the
 `Natural::FAST` pinned-seed baseline.
 
+The panic edge uses the debug-only `SYNAPSE_MCP_FORCE_PANIC_DURING_ACT=1`
+test gate. In debug builds, `synapse-mcp` panics during `act_press` after the
+tool invocation is accepted; in release builds the env var is ignored. The FSV
+must read the daemon JSONL log after the trigger and prove
+`SAFETY_RELEASE_ALL_FIRED reason=panic` was emitted by the installed panic
+hook.
+
 ### 8.4 Evidence of success
 
 Every test ends with a log line that prints the literal post-state of the

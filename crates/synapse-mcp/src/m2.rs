@@ -14,7 +14,8 @@ use std::{
 };
 
 use synapse_action::{
-    ActionEmitter, ActionEmitterSnapshotHandle, ActionHandle, ActionStateSnapshot, RecordingBackend,
+    ActionEmitter, ActionEmitterSnapshotHandle, ActionHandle, ActionStateSnapshot,
+    RELEASE_ALL_HANDLE, RecordingBackend,
 };
 use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
@@ -94,6 +95,7 @@ impl M2State {
             recording_backend_enabled(recording_backend).then(|| Arc::new(RecordingBackend::new()));
         if tokio::runtime::Handle::try_current().is_ok() {
             let (emitter_handle, snapshot_handle, emitter) = ActionEmitter::channel();
+            let _release_handle_result = RELEASE_ALL_HANDLE.set(emitter_handle.clone());
             let (done_tx, done_rx) = watch::channel(None);
             let emitter_task = tokio::spawn(async move {
                 let snapshot = emitter

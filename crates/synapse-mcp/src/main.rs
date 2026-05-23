@@ -95,6 +95,7 @@ async fn run_stdio(telemetry_guard: TelemetryGuard) -> anyhow::Result<ExitCode> 
         "sigint",
         emitter_connection_closed_token.clone(),
     );
+    synapse_action::install_panic_hook();
     let m2_emitter_done = service.m2_emitter_done_receiver();
     let start = service.serve_with_ct(rmcp::transport::stdio(), rmcp_token.clone());
     tokio::pin!(start);

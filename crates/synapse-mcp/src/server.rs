@@ -153,6 +153,16 @@ impl Default for SynapseService {
     }
 }
 
+#[cfg(debug_assertions)]
+fn maybe_force_panic_during_act(tool: &'static str) {
+    if std::env::var("SYNAPSE_MCP_FORCE_PANIC_DURING_ACT").as_deref() == Ok("1") {
+        tokio::task::block_in_place(|| panic!("forced panic during {tool}"));
+    }
+}
+
+#[cfg(not(debug_assertions))]
+fn maybe_force_panic_during_act(_tool: &'static str) {}
+
 #[tool_router(router = tool_router)]
 impl SynapseService {
     #[tool(description = "Return server health", input_schema = empty_input_schema())]
@@ -277,6 +287,7 @@ impl SynapseService {
             kind = "act_press",
             "tool.invocation kind=act_press"
         );
+        maybe_force_panic_during_act("act_press");
         let (handle, recording) = self.m2_action_context()?;
         act_press_with_handle(handle, recording, params.0)
             .await
