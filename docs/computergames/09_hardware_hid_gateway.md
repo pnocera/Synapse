@@ -2,43 +2,43 @@
 
 ## 1. Why hardware
 
-`SendInput`, `keybd_event`, `mouse_event`, and even ViGEm virtual controllers are all software-layer input. A determined detection system can know that they're not real peripherals. For three reasons we still want a fallback that is genuinely a real peripheral:
+`SendInput`, `keybd_event`, `mouse_event`, and ViGEm virtual controllers are software-layer input. A determined detection system can know they're not real peripherals. We want a fallback that is genuinely a real peripheral for three reasons:
 
-1. **Accessibility.** A user with motor impairments using eye-tracking or sip-and-puff input deserves a peripheral the OS treats the same way it treats a real mouse. Synapse becoming that bridge is valuable.
-2. **AI research and tournaments.** Sanctioned bot tournaments and university research often require the AI's output to flow through real hardware to make the comparison with human play fair.
+1. **Accessibility.** A user with motor impairments using eye-tracking or sip-and-puff input deserves a peripheral the OS treats the same as a real mouse. Synapse becoming that bridge is valuable.
+2. **AI research and tournaments.** Sanctioned bot tournaments and university research often require the AI's output to flow through real hardware for fair comparison with human play.
 3. **Demo recording / sim rigs.** People building dedicated rigs (sim cockpits, arcade cabinets, modded controllers) want a programmable HID device.
 
-The hardware HID gateway is an optional component. Synapse runs without it. When the operator wants the last 1% of authenticity or has a Tier 2 use case (`08_anti_cheat_policy.md` §4.3), they can build and flash a board.
+Optional component; Synapse runs without it. For the last 1% of authenticity or a Tier 2 use case (`08_anti_cheat_policy.md` §4.3), build and flash a board.
 
-This doc specifies the firmware design, the host-side serial driver in `synapse-hid-host`, and the wire protocol.
+This doc specifies firmware design, host-side serial driver in `synapse-hid-host`, and wire protocol.
 
 ---
 
 ## 2. Hardware choices
 
-Synapse supports three reference platforms. All firmware is Rust, embedded async via `embassy`.
+Three reference platforms. All firmware is Rust, embedded async via `embassy`.
 
 | Board | Cost | Why |
 |---|---|---|
-| **Raspberry Pi Pico (RP2040)** | ~$4 | Default. Cheap. Easy to source. Stable USB stack via `embassy-usb`. PIO blocks let us add USB host later. |
-| **Raspberry Pi Pico 2 (RP2350)** | ~$5 | Drop-in newer chip; supports same firmware with feature flag. |
-| **Arduino Pro Micro / Leonardo (ATmega32u4)** | ~$10 | Legacy support. Slower. Smaller flash. Firmware is a stripped subset. |
+| **Raspberry Pi Pico (RP2040)** | ~$4 | Default. Cheap. Easy to source. Stable USB stack via `embassy-usb`. PIO blocks enable USB host later. |
+| **Raspberry Pi Pico 2 (RP2350)** | ~$5 | Drop-in newer chip; same firmware with feature flag. |
+| **Arduino Pro Micro / Leonardo (ATmega32u4)** | ~$10 | Legacy. Slower. Smaller flash. Stripped subset firmware. |
 
-Default and primary: **Raspberry Pi Pico (RP2040)**. The rest of this doc assumes RP2040 unless noted.
+Default and primary: **Raspberry Pi Pico (RP2040)**. Rest of doc assumes RP2040.
 
 ### Bill of materials (minimum viable)
 
 - 1× Raspberry Pi Pico (RP2040, with castellated pads)
-- 1× USB-A cable (or USB-A → USB-C for some Picos) to the host PC
+- 1× USB-A cable (or USB-A → USB-C) to host PC
 - Optional: small project box
 
-That's it. No external components. Power and data over the same USB.
+No external components. Power and data over the same USB.
 
 ---
 
 ## 3. Device identity
 
-The board enumerates as a **USB HID composite device** with three interfaces:
+Board enumerates as a **USB HID composite device** with three interfaces:
 
 | Interface | Class | Subclass | Protocol | What it is |
 |---|---|---|---|---|
@@ -46,7 +46,7 @@ The board enumerates as a **USB HID composite device** with three interfaces:
 | 1 | HID (3) | Boot (1) | Keyboard (1) | Boot-protocol keyboard |
 | 2 | HID (3) | None (0) | None (0) | Vendor-defined gamepad (X-input-compatible report) |
 
-Plus a fourth interface for control:
+Plus a fourth control interface:
 
 | Interface | Class | Purpose |
 |---|---|---|
@@ -59,9 +59,9 @@ VID: 0x1209  (pid.codes community VID)
 PID: 0xC0C0  (Synapse-allocated within the pid.codes range)
 ```
 
-We use the pid.codes registry block (open community VID for hobbyist projects) to avoid spoofing any commercial VID/PID. Operators are free to rebuild firmware with their own VID/PID — the firmware exposes `VID`/`PID`/`MANUFACTURER_STR`/`PRODUCT_STR` as build-time constants.
+pid.codes is the open community VID block for hobbyist projects; avoids spoofing any commercial VID/PID. Operators can rebuild firmware with their own — `VID`/`PID`/`MANUFACTURER_STR`/`PRODUCT_STR` are build-time constants.
 
-We deliberately do **not** ship firmware that mimics specific commercial peripherals (a Razer DeathAdder VID/PID, an Xbox controller VID/PID). Operators wanting to do that must rebuild firmware with their own choice; we don't ship pre-impersonating images.
+We deliberately do **not** ship firmware that mimics specific commercial peripherals (Razer DeathAdder VID/PID, Xbox controller VID/PID). Operators wanting that must rebuild firmware with their own choice.
 
 ---
 
@@ -116,14 +116,14 @@ async fn main(spawner: Spawner) {
 | Task | Purpose | Latency target |
 |---|---|---|
 | `device_task` | USB stack background pump | n/a; embassy-driven |
-| `serial_task` | Reads framed bytes from CDC, parses into commands, dispatches | ≤ 0.5 ms per command |
+| `serial_task` | Reads framed bytes from CDC, parses commands, dispatches | ≤ 0.5 ms per command |
 | `command_dispatcher` | Applies command to relevant HID interface | ≤ 1 ms host→USB-on-wire |
 | `safety_watchdog` | Releases all inputs if no host command in N ms | resolution 50 ms |
 | `led_indicator` | Blinks status (idle / active / error) | n/a |
 
 ### 4.3 HID descriptors
 
-**Mouse (boot-protocol superset).** Standard boot mouse: 3 buttons + X/Y deltas (8-bit). Extended with 5 buttons (forward/back) and 16-bit X/Y to support higher-resolution moves. We use boot-protocol-compatible structure so it works at BIOS.
+**Mouse (boot-protocol superset).** Standard boot mouse (3 buttons + X/Y 8-bit deltas) extended with 5 buttons (forward/back) and 16-bit X/Y for higher resolution. Boot-protocol-compatible structure works at BIOS.
 
 **Keyboard (boot-protocol superset).** 8-byte boot keyboard report: modifiers byte + reserved + 6 keycodes. Reports HID Usage IDs directly.
 
@@ -139,15 +139,15 @@ thumb_rx: i16,
 thumb_ry: i16,
 ```
 
-Total report size: 14 bytes. Sent at up to 1000 Hz (matches XInput controller poll rate).
+Total 14 bytes. Sent at up to 1000 Hz (matches XInput poll rate).
 
 ---
 
 ## 5. Wire protocol (host ↔ firmware)
 
-Synapse host (Rust `synapse-hid-host` crate) talks to the firmware over USB CDC ACM at **1 Mbaud** (the value is informational; CDC ACM is not actually baud-rate-limited, but most host drivers respect the setting for buffering decisions).
+Host (`synapse-hid-host` crate) talks to firmware over USB CDC ACM at **1 Mbaud** (informational; CDC ACM isn't baud-rate-limited, but most host drivers respect the setting for buffering).
 
-The protocol is binary, framed, with explicit acks. Designed to be parseable with no allocations on the firmware side.
+Binary, framed, with explicit acks. Parseable with no allocations on firmware side.
 
 ### 5.1 Frame layout
 
@@ -158,10 +158,10 @@ The protocol is binary, framed, with explicit acks. Designed to be parseable wit
 +--------+-------+--------+----------+-------+-----+
 ```
 
-- `MAGIC`: 0x5A (sync byte; firmware resyncs by skipping bytes until it sees this)
+- `MAGIC`: 0x5A (sync; firmware resyncs by skipping bytes until it sees this)
 - `LEN`: total frame length excluding `MAGIC`, including `CRC`
 - `SEQ`: monotonic sequence number assigned by host
-- `CMD`: command identifier (see below)
+- `CMD`: command identifier
 - `PAYLOAD`: command-specific
 - `CRC`: CRC16/CCITT-FALSE over `LEN..CRC`
 
@@ -185,7 +185,7 @@ The protocol is binary, framed, with explicit acks. Designed to be parseable wit
 
 ### 5.3 Responses (firmware → host)
 
-Frames follow the same layout, with `MAGIC = 0xA5` (mirror byte) to distinguish direction in case both sides hit the same buffer.
+Same frame layout, `MAGIC = 0xA5` (mirror byte) to distinguish direction.
 
 | `CMD` | Name | Payload |
 |---|---|---|
@@ -198,7 +198,7 @@ Frames follow the same layout, with `MAGIC = 0xA5` (mirror byte) to distinguish 
 
 ### 5.4 Sequence numbers and ack semantics
 
-Host assigns monotonic `SEQ`. Firmware acks every accepted frame within ≤ 200 µs. Host considers a frame failed if no ACK within 5 ms; resends with the same `SEQ`. After 3 retries, host raises `HID_LINK_TIMEOUT` and surfaces it to the action emitter, which returns `ACTION_HID_PORT_DISCONNECTED` to the caller.
+Host assigns monotonic `SEQ`. Firmware acks every accepted frame within ≤ 200 µs. Host considers a frame failed if no ACK within 5 ms; resends with same `SEQ`. After 3 retries, host raises `HID_LINK_TIMEOUT`; surfaces `ACTION_HID_PORT_DISCONNECTED` to caller.
 
 For volume input (e.g., a curve emitting 50 small mouse moves), host can pipeline up to 16 outstanding unacked frames. Firmware buffers up to 64 frames; overflow returns `NAK { reason: BUFFER_FULL }`.
 
@@ -215,25 +215,21 @@ For volume input (e.g., a curve emitting 50 small mouse moves), host can pipelin
 
 ### 5.6 Frame loss handling
 
-USB CDC ACM is reliable in practice. The CRC + ack scheme exists to detect protocol bugs and link-level glitches (cable disconnect, unplug-replug). Frame loss is not expected during normal operation.
+USB CDC ACM is reliable in practice. CRC + ack detects protocol bugs and link-level glitches (cable disconnect, unplug-replug). Frame loss is not expected during normal operation.
 
 ---
 
 ## 6. Safety: the watchdog
 
-The firmware enforces a watchdog. If no command is received within `WATCHDOG_TIMEOUT_MS` (default 1000 ms), the firmware:
+Firmware enforces a watchdog. If no command received within `WATCHDOG_TIMEOUT_MS` (default 1000 ms):
 
-1. Logs the event internally (telemetry counter increments)
-2. Issues an internal `RELEASE_ALL` — all mouse buttons up, all keys up, gamepad neutral
-3. Continues running, ready to accept new commands
+1. Log event internally (telemetry counter increments)
+2. Issue internal `RELEASE_ALL` — all mouse buttons up, all keys up, gamepad neutral
+3. Continue running, ready for new commands
 
-This prevents stuck inputs if the host Synapse process crashes or the USB link freezes mid-action.
+Prevents stuck inputs if the host process crashes or USB link freezes mid-action.
 
-Host can:
-
-- Tune the timeout via `WATCHDOG_KICK` command
-- Disable the watchdog by setting timeout to 0 (not recommended; safety machinery)
-- Receive a `link_state_changed` event from `synapse-hid-host` if a watchdog event fires
+Host can: tune timeout via `WATCHDOG_KICK`; disable by setting timeout to 0 (not recommended; safety machinery); receive a `link_state_changed` event from `synapse-hid-host` on watchdog fire.
 
 ---
 
@@ -277,19 +273,19 @@ impl HidGateway {
 }
 ```
 
-Threading: one blocking I/O thread for serial reads (the `serialport` crate is sync). It pushes parsed responses through a channel into the tokio world. Writes are async-from-tokio with a small `Mutex<SerialPort>` to serialize.
+Threading: one blocking I/O thread for serial reads (`serialport` is sync); pushes parsed responses through a channel into tokio. Writes are async-from-tokio with a small `Mutex<SerialPort>` to serialize.
 
 ### 7.1 Auto-detect
 
-`synapse-mcp` at startup, if `--hardware-hid auto`, enumerates COM ports, sends `IDENTIFY` to each, and finds the Synapse firmware by `IDENTIFY_RESP` payload. First match wins; surface error if none.
+`synapse-mcp` at startup with `--hardware-hid auto` enumerates COM ports, sends `IDENTIFY` to each, finds Synapse firmware by `IDENTIFY_RESP` payload. First match wins; error if none.
 
 ### 7.2 Reconnection
 
-If the host receives a serial error (port closed, USB unplugged), the driver tries to reconnect every 500 ms. While disconnected, all action calls using `Backend::Hardware` return `ACTION_HID_PORT_DISCONNECTED` immediately (no queueing).
+On serial error (port closed, USB unplugged), driver retries every 500 ms. While disconnected, all action calls using `Backend::Hardware` return `ACTION_HID_PORT_DISCONNECTED` immediately (no queueing).
 
 ### 7.3 Firmware version handshake
 
-`IDENTIFY_RESP` includes `fw_ver` (semver) and `build_hash` (8 bytes). Host compares `fw_ver.major` against a compiled-in `EXPECTED_FW_MAJOR`. Mismatch returns `HID_FIRMWARE_VERSION_MISMATCH` and aborts attaches. Operator runs `synapse-mcp hid flash` to update.
+`IDENTIFY_RESP` includes `fw_ver` (semver) and `build_hash` (8 bytes). Host compares `fw_ver.major` against compiled-in `EXPECTED_FW_MAJOR`. Mismatch returns `HID_FIRMWARE_VERSION_MISMATCH` and aborts. Operator runs `synapse-mcp hid flash` to update.
 
 ---
 
@@ -311,26 +307,26 @@ elf2uf2-rs target/thumbv6m-none-eabi/release/pico-hid pico-hid.uf2
 # 3. Copy pico-hid.uf2 to it; Pico reboots into Synapse firmware
 ```
 
-Synapse provides a helper command: `synapse-mcp hid flash --port COM7`:
+Helper: `synapse-mcp hid flash --port COM7`:
 
-1. Detects whether the connected device is in Synapse firmware mode (sends `IDENTIFY`).
-2. If yes, sends `RESET_TO_BOOTLOADER` to reboot into UF2.
-3. Waits for the mass storage device to appear.
-4. Copies the bundled `pico-hid.uf2` to it.
-5. Waits for the device to re-enumerate as Synapse firmware.
-6. Verifies with `IDENTIFY`.
+1. Detect if device is in Synapse firmware mode (sends `IDENTIFY`).
+2. If yes, send `RESET_TO_BOOTLOADER` to reboot into UF2.
+3. Wait for mass storage to appear.
+4. Copy bundled `pico-hid.uf2`.
+5. Wait for re-enumeration as Synapse firmware.
+6. Verify with `IDENTIFY`.
 
-Bundled `.uf2` files are released as GitHub release assets for each Synapse version, signed by the project key.
+Bundled `.uf2` files are released as GitHub release assets per Synapse version, signed by the project key.
 
 ---
 
 ## 9. Power and electrical
 
-- USB bus-powered. ~50 mA draw under load. Pico's regulator handles 5 V input fine.
-- No external components needed for the reference design.
-- Optional: add a tactile button to GP0 as an emergency unplug (firmware reads it; if pressed, sends a `RELEASE_ALL` to host and clears its own state).
+- USB bus-powered. ~50 mA under load. Pico's regulator handles 5 V input fine.
+- No external components for reference design.
+- Optional: tactile button on GP0 as emergency unplug (firmware reads; on press, sends `RELEASE_ALL` and clears state).
 
-The firmware exposes a status LED:
+Status LED:
 
 | LED state | Meaning |
 |---|---|
@@ -352,7 +348,7 @@ The firmware exposes a status LED:
 | Firmware: HID report → on the USB IN endpoint | next 1 ms poll |
 | End-to-end: host call → physical USB IN packet | ≤ 4 ms p99 |
 
-The 1 ms USB poll interval is the hard floor. Hardware HID will always be ~3 ms slower than software `SendInput` (which doesn't go over USB at all). This is the cost of authenticity.
+1 ms USB poll is the hard floor. Hardware HID will always be ~3 ms slower than software `SendInput` (which doesn't go over USB). The cost of authenticity.
 
 ---
 
@@ -361,28 +357,28 @@ The 1 ms USB poll interval is the hard floor. Hardware HID will always be ~3 ms 
 | Test | How |
 |---|---|
 | Protocol roundtrip | `cargo test -p pico-hid --tests` (host-side parser tests with hand-crafted frames) |
-| Firmware loopback | Build with `--features loopback`; firmware echoes every command back as a `PONG`. Host driver test sends 1000 commands, asserts all return. |
-| Watchdog | Connect, send commands, stop for >1s, observe `RELEASE_ALL` via internal telemetry, see watchdog fire. |
+| Firmware loopback | Build with `--features loopback`; firmware echoes every command back as `PONG`. Host driver sends 1000 commands, asserts all return. |
+| Watchdog | Connect, send commands, stop >1s, observe `RELEASE_ALL` via internal telemetry. |
 | Stress | Send 10,000 mouse-move-rel commands at full rate; assert no drops, all acked. |
 | Re-enumeration | Trigger `RESET_TO_BOOTLOADER`, observe device drops, mass storage appears, reflash, reconnect. |
 
-CI runs the protocol roundtrip tests on Linux (no hardware required). The firmware-loopback test runs on a CI machine with a Pico attached (a self-hosted runner) on a weekly cadence.
+CI runs protocol roundtrip tests on Linux (no hardware required). Firmware-loopback runs weekly on a self-hosted CI machine with a Pico attached.
 
 ---
 
 ## 12. Limitations and notes
 
-- **Full-speed USB only.** No high-speed USB 2.0 on the Pico. Throughput is fine for HID; not enough for streaming video, but we don't.
+- **Full-speed USB only.** No high-speed USB 2.0 on the Pico. Fine for HID; insufficient for video streaming, but we don't.
 - **Single boot-mouse / boot-keyboard** at a time. Windows accepts one of each composite device. Don't plug in multiple Synapse boards.
-- **Mouse resolution.** Reports are 16-bit signed delta per axis. We never need more than ±32767 per report; large moves split into many small reports anyway.
-- **Latency stable on Win11 22H2+.** Older Windows builds may have USB poll jitter (the 1 ms poll being effectively 1-3 ms). Not Synapse's problem to fix.
-- **PIO USB host (advanced).** The Pico's PIO blocks can be used to run a second USB host port (see `vynxc/VBox`). Synapse v1 doesn't ship this; it's a v2 option for "pass through a real mouse and inject corrections."
+- **Mouse resolution.** 16-bit signed delta per axis. Large moves split into many small reports anyway.
+- **Latency stable on Win11 22H2+.** Older Windows builds may have USB poll jitter (1 ms poll effectively 1-3 ms). Not Synapse's problem to fix.
+- **PIO USB host (advanced).** The Pico's PIO blocks can run a second USB host port (see `vynxc/VBox`). Synapse v1 doesn't ship this; v2 option for "pass through a real mouse and inject corrections."
 
 ---
 
 ## 13. What this doc does NOT cover
 
 - Anti-cheat policy gating around hardware backend → `08_anti_cheat_policy.md`
-- The high-level action API that routes to hardware → `03_action.md`
+- High-level action API routing to hardware → `03_action.md`
 - Action serialization invariants → `03_action.md` §4
 - Build pipeline / installer integration → `14_build_and_packaging.md`

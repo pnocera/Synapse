@@ -1,19 +1,19 @@
 # 02 — Perception Subsystem
 
-## 1. What "perception" means here
+## 1. What "perception" means
 
-The perception subsystem is everything that turns the live state of the user's machine into a structured `Observation` value that the agent can read with low latency and low token cost.
+The perception subsystem turns live machine state into a structured `Observation` value the agent reads with low latency and low token cost.
 
-It runs in two paths that can be active simultaneously:
+Two paths, simultaneously active:
 
 | Path | Source of truth | When primary |
 |---|---|---|
-| **A11y path** | Windows UI Automation tree, WinEvent push, Chromium DevTools Protocol | The foreground app exposes a usable accessibility tree (most native apps, browsers, IDEs, Office) |
-| **Pixel path** | GPU frame capture + small CNN + targeted OCR + audio loopback | The foreground app is a game, a canvas-based application, or any window where a11y is empty/insufficient |
+| **A11y path** | Windows UI Automation tree, WinEvent push, Chromium DevTools Protocol | Foreground app exposes a usable accessibility tree (most native apps, browsers, IDEs, Office) |
+| **Pixel path** | GPU frame capture + small CNN + targeted OCR + audio loopback | Foreground is a game, canvas-based app, or window where a11y is empty/insufficient |
 
-`observe()` is the unified read. Both paths feed the same `Observation` struct; the agent does not pick a path, it picks a query, and the subsystem decides which sensors are cheapest and richest for the current foreground.
+`observe()` is the unified read. Both paths feed the same `Observation`; agent picks a query, not a path. The subsystem decides which sensors are cheapest and richest for the current foreground.
 
-This doc covers: capture, a11y, detection, OCR, audio, and event derivation. Output schemas live in `06_data_schemas.md`.
+Output schemas: `06_data_schemas.md`.
 
 ---
 
@@ -21,9 +21,9 @@ This doc covers: capture, a11y, detection, OCR, audio, and event derivation. Out
 
 ### Strategy
 
-Primary capture API: **Windows Graphics Capture API** via the `windows-capture` crate v2.x. Fallback for older Windows / unsupported configurations: **DXGI Output Duplication** via raw `windows-rs` bindings.
+Primary API: **Windows Graphics Capture API** via `windows-capture` crate v2.x. Fallback for older Windows / unsupported configs: **DXGI Output Duplication** via raw `windows-rs` bindings.
 
-Both APIs expose captured frames as `ID3D11Texture2D` in GPU memory. **We do not copy the texture to system memory** unless an explicit caller (e.g. OCR, JPEG export, replay log) requires it. Detection inference runs on the texture directly via DirectML / CUDA.
+Both expose captured frames as `ID3D11Texture2D` in GPU memory. **NEVER copy the texture to system memory** unless an explicit caller (OCR, JPEG export, replay log) requires it. Detection inference runs on the texture directly via DirectML / CUDA.
 
 ### Capture targets
 
@@ -35,9 +35,9 @@ Both APIs expose captured frames as `ID3D11Texture2D` in GPU memory. **We do not
 
 Per-target settings:
 
-- `cursor_visible: bool` — render the cursor into the frame (default true)
+- `cursor_visible: bool` — render cursor into frame (default true)
 - `secondary_windows: bool` — include child/popup windows (default true for window targets)
-- `min_update_interval_ms` — frame-rate cap (default 16ms = 60fps; set 33ms for 30fps when GPU-bound)
+- `min_update_interval_ms` — frame-rate cap (default 16ms = 60fps; 33ms for 30fps when GPU-bound)
 - `dirty_region_only: bool` — when true, perception skips processing if no dirty pixels (default true)
 
 ### Frame lifecycle
@@ -54,13 +54,11 @@ pub struct CapturedFrame {
 }
 ```
 
-Frames flow through a bounded channel (capacity 2). If the consumer can't keep up, the oldest frame is dropped — never block the capture thread. A `frames_dropped` metric is incremented.
+Frames flow through bounded channel (capacity 2). If consumer can't keep up, oldest frame is dropped — NEVER block the capture thread. `frames_dropped` metric is incremented.
 
 ### Capture thread
 
 One OS thread per active capture target. Runs at `THREAD_PRIORITY_TIME_CRITICAL`. Communicates with tokio via `crossbeam::channel::bounded(2)`.
-
-The thread loop:
 
 ```rust
 loop {
@@ -76,13 +74,13 @@ loop {
 
 ### Fallback path
 
-If Graphics Capture API initialization fails (unsupported Windows build, no DWM, etc.), the capture crate falls back to DXGI Output Duplication. Same `CapturedFrame` output shape; capture rate may degrade to ~30fps on heavy desktops.
+If Graphics Capture API init fails (unsupported Windows build, no DWM), capture crate falls back to DXGI Output Duplication. Same `CapturedFrame` shape; capture rate may degrade to ~30fps on heavy desktops.
 
 ### VRAM and lifetime
 
-- Maximum two textures resident per capture target (current frame + previous, for dirty diff).
+- Max two textures resident per capture target (current + previous, for dirty diff).
 - D3D resources released on shutdown via RAII (`Drop` impl on `CaptureHandle`).
-- Capture continues running while no one consumes, but at the min update interval; no VRAM growth.
+- Capture continues while no one consumes, at min update interval; no VRAM growth.
 
 ---
 
@@ -90,7 +88,7 @@ If Graphics Capture API initialization fails (unsupported Windows build, no DWM,
 
 ### Three subsystems
 
-**3a. UIA tree walker.** Wraps the `uiautomation` crate. Provides:
+**3a. UIA tree walker.** Wraps `uiautomation` crate. Provides:
 
 ```rust
 pub fn focused_window() -> Result<UIElement>;
@@ -102,11 +100,11 @@ pub fn find(element: &UIElement, query: AccessibleQuery) -> Result<Vec<UIElement
 
 `AccessibleSubtree` is a serializable tree of `AccessibleNode`s with name, role/control-type, AutomationId, bounding rect, enabled, focused, pattern support (Invoke, Toggle, Value, Selection, ExpandCollapse, Scroll, Text), and a stable element id (Synapse-assigned; see `06_data_schemas.md`).
 
-**Depth cap.** Default depth 2 around the focused element + 3 for a window snapshot. Cap is profile-overridable. UIA trees can be enormous (50K+ elements in Outlook); never walk the whole tree without bound.
+**Depth cap.** Default depth 2 around the focused element + 3 for a window snapshot. Cap is profile-overridable. UIA trees can be enormous (50K+ elements in Outlook); NEVER walk the whole tree without bound.
 
-**Cache request batching.** When snapshotting >100 elements, we use `IUIAutomationCacheRequest` to fetch all needed properties in a single cross-process COM round-trip. Per-element property fetch is ~1ms; cached batch fetch is ~10ms for hundreds of elements.
+**Cache request batching.** When snapshotting >100 elements, use `IUIAutomationCacheRequest` to fetch all needed properties in a single cross-process COM round-trip. Per-element property fetch is ~1ms; cached batch fetch is ~10ms for hundreds.
 
-**3b. WinEvent hook.** Win32 `SetWinEventHook` with the COM apartment model. Subscribes to:
+**3b. WinEvent hook.** Win32 `SetWinEventHook` with COM apartment model. Subscribes to:
 
 | Event | Fired when |
 |---|---|
@@ -119,12 +117,12 @@ pub fn find(element: &UIElement, query: AccessibleQuery) -> Result<Vec<UIElement
 | `EVENT_SYSTEM_MENUSTART`, `EVENT_SYSTEM_MENUEND` | Menu opened/closed |
 | `EVENT_SYSTEM_ALERT` | Alert/error popup |
 
-Hook callbacks run on the COM apartment thread. They marshal events into a `tokio::sync::mpsc::Sender<AccessibleEvent>` that the perception subsystem drains.
+Hook callbacks run on COM apartment thread. Marshal events into `tokio::sync::mpsc::Sender<AccessibleEvent>` drained by perception.
 
 **3c. CDP client.** Chrome DevTools Protocol via `chromiumoxide`. Activated when:
 
-- Foreground window's process is a Chromium-based browser (Chrome, Edge, Brave, Electron apps with debug port)
-- Browser was launched with `--remote-debugging-port=<N>` OR `chrome.devtools_protocol` is reachable
+- Foreground process is a Chromium-based browser (Chrome, Edge, Brave, Electron apps with debug port)
+- Browser launched with `--remote-debugging-port=<N>` OR `chrome.devtools_protocol` reachable
 
 Exposes:
 
@@ -139,16 +137,16 @@ CDP overrides UIA for the affected browser tab when available; richer data, no A
 
 ### Event filter
 
-Synapse coalesces high-frequency a11y events to avoid spamming the agent and the storage layer:
+Synapse coalesces high-frequency a11y events:
 
-- Events sharing `(window_id, element_id, kind)` within a 50ms window are merged into one `AccessibleEvent` with the latest values
-- `EVENT_OBJECT_VALUECHANGE` on a text field that's actively being typed in is debounced to one event per 200ms (or on focus loss, whichever first)
+- Events sharing `(window_id, element_id, kind)` within a 50ms window merged into one `AccessibleEvent` with latest values
+- `EVENT_OBJECT_VALUECHANGE` on an actively-typed text field is debounced to one event per 200ms (or on focus loss, whichever first)
 
 ---
 
 ## 4. Detection / inference (`synapse-perception::detect`)
 
-When pixel-path perception is needed, we run a small object detection model on each captured frame.
+When pixel-path perception is needed, run a small object detection model per captured frame.
 
 ### Model selection (default v1)
 
@@ -159,7 +157,7 @@ When pixel-path perception is needed, we run a small object detection model on e
 | RT-DETR-s | ~80 MB | ~25 ms | ~5 ms | Stable-jitter alternative; selectable per profile |
 | Florence-2-base (or similar) | ~480 MB | ~120 ms | ~25 ms | Slow loop only, ≤1 Hz, for unknown-game labeling |
 
-**Selectable per profile.** A productivity profile (Notepad) disables detection entirely. A game profile pins YOLOv10n at 60 Hz.
+**Selectable per profile.** Productivity profile (Notepad) disables detection entirely. Game profile pins YOLOv10n at 60 Hz.
 
 ### Inference path
 
@@ -196,13 +194,13 @@ pub struct Detection {
 
 ### Tracking
 
-A lightweight tracker assigns persistent `track_id`s by IoU + class-name matching across consecutive frames. Track lifetime: a track that doesn't get a detection for 1000ms is retired. The agent can reference a stable `entity_id = track_id` in subsequent commands without re-querying every frame.
+Lightweight tracker assigns persistent `track_id`s by IoU + class-name matching across consecutive frames. Track lifetime: a track without a detection for 1000ms is retired. Agent references stable `entity_id = track_id` in subsequent commands without re-querying every frame.
 
 ### Model cache
 
-Models live in `%LOCALAPPDATA%\synapse\models\<sha256>.onnx`. On first need, Synapse downloads from a configured URL list (defaults to public GitHub releases). SHA-verified before load. No model is ever loaded without verification.
+Models live in `%LOCALAPPDATA%\synapse\models\<sha256>.onnx`. On first need, Synapse downloads from a configured URL list (defaults: public GitHub releases). SHA-verified before load. NEVER load a model without verification.
 
-For offline use, the operator can side-load: `synapse-mcp models import <path>`.
+For offline use, operator side-loads: `synapse-mcp models import <path>`.
 
 ---
 
@@ -213,19 +211,19 @@ Two OCR backends ship at v1:
 | Backend | Latency p99 (1080p text region) | When to use |
 |---|---|---|
 | WinRT `Windows.Media.Ocr` | ~30 ms full screen, ~5 ms small region | Default. No external dep, ships with Windows. Excellent for printed text in most languages. |
-| Fine-tuned CRNN (ONNX) | ~10 ms small region, ~80 ms full screen | Game HUD numbers (HP / ammo / score) where fonts are unusual; specifically trained per-profile. |
+| Fine-tuned CRNN (ONNX) | ~10 ms small region, ~80 ms full screen | Game HUD numbers (HP / ammo / score) with unusual fonts; trained per-profile. |
 
-WinRT path uses `windows-rs` bindings to `Windows.Media.Ocr.OcrEngine`. Region cropping happens on the GPU texture; we only marshal the cropped region to system memory.
+WinRT path uses `windows-rs` bindings to `Windows.Media.Ocr.OcrEngine`. Region cropping on GPU texture; only marshal cropped region to system memory.
 
 ### Region targeting
 
-The agent calls:
+Agent calls:
 
 ```
 read_text(region={x,y,w,h}) -> { text, words: [{text, bbox, confidence}], language }
 ```
 
-Default: read the focused element's bounds (UIA-resolved) or, if no a11y, the full screen.
+Default: read focused element's bounds (UIA-resolved) or, no a11y, full screen.
 
 ### HUD extraction
 
@@ -254,7 +252,7 @@ pub struct HudReading {
 
 ### OCR cache
 
-`CF_OCR_CACHE` keyed by `sha256(cropped_region_bytes)` → `OcrResult`. TTL 1h. Hit rate on stable HUDs (HP/ammo) is high; rebuilds dropped from 30 ms to ~0.1 ms.
+`CF_OCR_CACHE` keyed by `sha256(cropped_region_bytes)` → `OcrResult`. TTL 1h. Hit rate on stable HUDs (HP/ammo) is high; rebuilds drop from 30 ms to ~0.1 ms.
 
 ---
 
@@ -274,7 +272,7 @@ pub fn subscribe_audio_events() -> impl Stream<Item = AudioEvent>;
 
 ### STT
 
-Whisper-tiny-int8 ONNX (~40 MB). Runs on demand when the agent calls `audio_transcribe()`. Latency ~150 ms for a 5-second window on CPU; ~50 ms with DirectML.
+Whisper-tiny-int8 ONNX (~40 MB). Runs on demand when agent calls `audio_transcribe()`. Latency ~150 ms for 5-second window on CPU; ~50 ms with DirectML.
 
 Not run continuously by default; only on call. Optional per-profile flag enables continuous transcription with rate limiting.
 
@@ -289,11 +287,11 @@ pub struct DirectionEstimate {
 }
 ```
 
-This is sufficient for FPS footstep direction at v1. Steam Audio (audionimbus crate) is the v2 upgrade for HRTF-accurate spatial localization.
+Sufficient for FPS footstep direction at v1. Steam Audio (audionimbus crate) is the v2 upgrade for HRTF-accurate spatial localization.
 
 ### Audio events
 
-Continuous detector for common audio events (running on the audio thread at low priority):
+Continuous detector for common audio events (runs on audio thread at low priority):
 
 | Event | Trigger heuristic |
 |---|---|
@@ -360,7 +358,7 @@ pub struct Observation {
 }
 ```
 
-Tokenization budget: aim for `serde_json::to_string(&observation)` to be ≤ 6 KB (≈ 1500 tokens) under typical conditions. Larger queries require explicit `expand(slot=...)` calls.
+Tokenization budget: aim for `serde_json::to_string(&observation)` ≤ 6 KB (≈ 1500 tokens) under typical conditions. Larger queries require explicit `expand(slot=...)` calls.
 
 ---
 
@@ -388,8 +386,6 @@ Profile-pinned mode wins over heuristics.
 ---
 
 ## 10. Health and degraded modes
-
-Perception has structured health states:
 
 | State | Meaning | Recovery |
 |---|---|---|
@@ -436,7 +432,7 @@ pub fn window_to_screen(window: Point, hwnd: HWND) -> Point;
 pub fn frame_to_screen(frame: Point, target: &CaptureTarget) -> Point;
 ```
 
-All bounding rects in `Observation` are in screen coordinates unless explicitly tagged otherwise.
+All bounding rects in `Observation` are screen coordinates unless explicitly tagged.
 
 ---
 
@@ -452,11 +448,11 @@ All bounding rects in `Observation` are in screen coordinates unless explicitly 
 | Audio device disconnected | `AUDIO_DEVICE_LOST` | Re-enumerate devices; resume on next default device |
 | Per-app profile not found | `PROFILE_NOT_FOUND` | Use hybrid default |
 
-Every error code is exported as a `pub const` in `synapse-core::error_codes`.
+Every error code exported as `pub const` in `synapse-core::error_codes`.
 
 ---
 
-## 14. What this doc does NOT cover
+## 14. Out of scope for this doc
 
 - Per-tool MCP schemas → `05_mcp_tool_surface.md`
 - Storage layout → `07_storage_and_profiles.md`

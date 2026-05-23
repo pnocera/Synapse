@@ -2,13 +2,13 @@
 
 ## 1. What "observable" means here
 
-Synapse is a real-time system with real-time failure modes. We need three things from observability:
+Synapse is a real-time system with real-time failure modes. Three needs:
 
-1. **Live diagnosis.** When something feels wrong (slow, missed click, stuck reflex), the operator can immediately see which subsystem is degraded and why.
-2. **Post-hoc replay.** When the agent fails at a task, the operator (or the developer) can step through what Synapse saw and what it did.
-3. **Trend detection.** Performance regressions, growing memory, growing CFs, increasing dropped frames — caught before they become outages.
+1. **Live diagnosis.** Identify which subsystem is degraded and why.
+2. **Post-hoc replay.** Step through what Synapse saw and did.
+3. **Trend detection.** Catch regressions, memory growth, CF growth, dropped frames before outages.
 
-We build all three from the same primitives: `tracing` spans, structured events, metrics histograms, and the replay log. Nothing fancy.
+All three built from: `tracing` spans, structured events, metrics histograms, the replay log.
 
 ---
 
@@ -16,28 +16,28 @@ We build all three from the same primitives: `tracing` spans, structured events,
 
 ### 2.1 Tracing (`tracing` crate)
 
-Every subsystem instruments with `#[tracing::instrument]` or manual `span!` macros. Spans nest naturally. Each span carries:
+Every subsystem instruments with `#[tracing::instrument]` or manual `span!` macros. Each span carries:
 
 - Span name (kebab-case, e.g., `capture.frame`, `perception.detect`, `action.emit`)
 - Subsystem tag
 - Relevant IDs (`session_id`, `reflex_id`, `seq`)
 - Latency on close
 
-Levels: `error` `warn` `info` `debug` `trace`. Defaults to `info`. Operator can change via `--log-level debug` or `RUST_LOG=synapse_capture=debug`.
+Levels: `error` `warn` `info` `debug` `trace`. Default `info`. Override via `--log-level debug` or `RUST_LOG=synapse_capture=debug`.
 
 ### 2.2 Metrics (`metrics` crate + a small wrapper)
 
-Three metric types:
+Three types:
 
-- **Counter:** monotonically increasing values (`frames_dropped_total`)
+- **Counter:** monotonic (`frames_dropped_total`)
 - **Histogram:** latency distributions (`mcp_tool_latency_seconds{tool}`)
-- **Gauge:** point-in-time values (`cf_size_bytes{cf}`, `active_reflexes`)
+- **Gauge:** point-in-time (`cf_size_bytes{cf}`, `active_reflexes`)
 
-All registered through `synapse-telemetry::metrics`. Names are lowercase snake_case, `_total` suffix for counters, `_seconds` for time, `_bytes` for size.
+Registered through `synapse-telemetry::metrics`. Names lowercase snake_case, `_total` suffix for counters, `_seconds` for time, `_bytes` for size.
 
 ### 2.3 Events (the replay log)
 
-Already covered in `06_data_schemas.md` and `07_storage_and_profiles.md`. Events are the canonical record of "what happened" — perception, actions, reflexes, all flow through the event bus and into `CF_EVENTS`.
+Covered in `06_data_schemas.md` and `07_storage_and_profiles.md`. Events are the canonical record of perception/actions/reflexes, flowing through the event bus into `CF_EVENTS`.
 
 ---
 
@@ -49,10 +49,10 @@ Two `tracing-subscriber` layers active in production:
 
 | Layer | Purpose | Format |
 |---|---|---|
-| Console layer (stderr) | Operator-visible during foreground runs | Pretty (`tracing-subscriber::fmt`) when stderr is a TTY; JSON otherwise |
-| File layer | Persistent record | JSON Lines |
+| Console (stderr) | Operator-visible during foreground runs | Pretty (`tracing-subscriber::fmt`) on TTY; JSON otherwise |
+| File | Persistent record | JSON Lines |
 
-Operator can enable an OTLP exporter (`opentelemetry-otlp`) by setting `--otlp-endpoint http://localhost:4317`. Off by default.
+Operator enables OTLP exporter (`opentelemetry-otlp`) via `--otlp-endpoint http://localhost:4317`. Off by default.
 
 ### 3.2 File location and rotation
 
@@ -67,13 +67,13 @@ Operator can enable an OTLP exporter (`opentelemetry-otlp`) by setting `--otlp-e
     └── capture.log.2026-05-21.gz
 ```
 
-Rotation policy (enforced by `tracing-appender::rolling::Builder`):
+Rotation (`tracing-appender::rolling::Builder`):
 
 - Daily rollover at local midnight
 - Keep 7 daily rotated files
-- Compress rotated files to gzip
+- gzip rotated files
 - Total log directory cap: 500 MB (oldest pruned first)
-- Per-file size cap: 500 MB (rotate when reached even mid-day)
+- Per-file size cap: 500 MB (rotate mid-day if reached)
 
 Compression and pruning run in a low-priority background tokio task on a 1-hour timer.
 
@@ -87,11 +87,11 @@ Compression and pruning run in a low-priority background tokio task on a 1-hour 
 | `debug` | Per-tool request summary, per-event-kind counts, per-frame latencies |
 | `trace` | Raw event payloads (redacted), action emission details, COM call results |
 
-Default level is `info` and that's what 90% of operators ever see. `debug` and `trace` are for issue reproduction.
+Default `info` covers 90% of operator needs. `debug`/`trace` are for issue repro.
 
 ### 3.4 Structured fields
 
-Every log line carries:
+Every log line:
 
 ```json
 {
@@ -110,11 +110,11 @@ Every log line carries:
 }
 ```
 
-Spans embedded so the consumer can reconstruct the call tree without correlating timestamps.
+Spans embedded so consumers reconstruct the call tree without correlating timestamps.
 
 ### 3.5 Redaction passes through logging
 
-Same `synapse-core::redact` patterns from `11_security_and_safety.md` apply. The console + file + OTLP layers run the redactor on free-form string fields before emission. This is non-negotiable; even `trace` level redacts unless `--no-redaction` is set.
+Same `synapse-core::redact` patterns from `11_security_and_safety.md` apply. Console + file + OTLP layers redact free-form string fields before emission. Non-negotiable; even `trace` redacts unless `--no-redaction`.
 
 ---
 
@@ -225,13 +225,11 @@ hid_round_trip_seconds (histogram)
 
 ### 4.2 Metric labels
 
-Labels are bounded — never put unbounded values (session IDs, reflex IDs, image hashes) in a label. They explode cardinality.
+Labels are bounded. Never use unbounded values (session IDs, reflex IDs, image hashes) — cardinality explodes.
 
-Allowed labels: subsystem name, error code (from the closed set in `06_data_schemas.md` §8), CF name (closed set), backend, model_id (closed set, ~5 values), tool name (closed set, 30 tools).
+Allowed labels: subsystem name, error code (closed set from `06_data_schemas.md` §8), CF name (closed set), backend, model_id (~5 values), tool name (30 tools).
 
 ### 4.3 Exposition
-
-Three exposition mechanisms:
 
 | Mechanism | When | Format |
 |---|---|---|
@@ -239,23 +237,23 @@ Three exposition mechanisms:
 | `/metrics` HTTP endpoint | `--metrics-bind <addr>` set | Prometheus text format |
 | OTLP push | `--otlp-endpoint <url>` set | OTLP protobuf over gRPC |
 
-The Prometheus endpoint is the most common operator path. Hook into Grafana/Mimir and you have charts.
+Prometheus is the most common operator path. Hook into Grafana/Mimir for charts.
 
 ### 4.4 Local ringbuffer fallback
 
-If no OTLP / Prometheus endpoint is configured, last 6 hours of metric samples are kept in `CF_TELEMETRY`. Operator can query via:
+Without OTLP/Prometheus configured, last 6 hours of metrics are kept in `CF_TELEMETRY`. Query via:
 
 ```
 synapse-mcp metrics dump --since 1h --output csv > metrics.csv
 ```
 
-This is the "I noticed something weird, let me look at the last hour" workflow without needing external infra.
+For "I noticed something weird, let me look at the last hour" without external infra.
 
 ---
 
 ## 5. The `health` MCP tool (operator-and-agent view)
 
-Already documented in `05_mcp_tool_surface.md` §3.29. Repeating the response shape for completeness:
+Documented in `05_mcp_tool_surface.md` §3.29. Response shape:
 
 ```json
 {
@@ -281,15 +279,13 @@ Already documented in `05_mcp_tool_surface.md` §3.29. Repeating the response sh
 }
 ```
 
-Subsystem `status` values match `06_data_schemas.md::SensorStatus`.
-
-Agents poll this when they sense something off. Operators use it as the "everything OK?" dashboard.
+Subsystem `status` values match `06_data_schemas.md::SensorStatus`. Agents poll when sensing something off; operators use as "everything OK?" dashboard.
 
 ---
 
 ## 6. Debug overlay
 
-Optional in-process overlay window that renders telemetry over a transparent always-on-top window. Launched via:
+Optional in-process overlay rendering telemetry over a transparent always-on-top window:
 
 ```
 synapse-mcp overlay
@@ -298,14 +294,12 @@ synapse-mcp overlay
 Shows:
 
 - Real-time frame rate, detection p99, action queue depth
-- Active reflexes (each with name, fired count, last fired)
+- Active reflexes (name, fired count, last fired)
 - Recent events (rolling list)
-- Hot keys: `Ctrl+Alt+Shift+L` toggle, `Ctrl+Alt+Shift+P` panic (same as main)
+- Hot keys: `Ctrl+Alt+Shift+L` toggle, `Ctrl+Alt+Shift+P` panic
 - Disk pressure level + DB size
 
-Built with `egui` + `eframe`. Standalone binary; not part of `synapse-mcp` proper, but in the same workspace (`crates/synapse-overlay/`).
-
-The overlay is read-only — observes telemetry, doesn't emit actions. Operator-facing UX.
+Built with `egui` + `eframe`. Standalone binary in same workspace (`crates/synapse-overlay/`). Read-only — never emits actions.
 
 ---
 
@@ -321,70 +315,70 @@ synapse-mcp replay tail <session_id>        # follow live session
 synapse-mcp replay search "act_click"       # search by tool/event kind/text
 ```
 
-`replay show` outputs a JSONL transcript of events + actions + observations interleaved by time. Pipeable into `jq` for filtering.
+`replay show` outputs JSONL of events + actions + observations interleaved by time. Pipeable into `jq`.
 
-`replay export` produces a self-contained `.zip` (Synapse Web Replay format) with:
+`replay export` produces a self-contained `.zip` (Synapse Web Replay format):
 
 - `manifest.json` (session id, time range, Synapse version, agent client)
-- `events.jsonl` (full event log for the session)
+- `events.jsonl` (full event log)
 - `actions.jsonl` (full action log)
-- `observations/{seq}.json` (each persisted observation snapshot)
-- `frames/{seq}.webp` (if `--include-frames` and the session had bookmarked frames)
+- `observations/{seq}.json` (each persisted observation)
+- `frames/{seq}.webp` (if `--include-frames` and session had bookmarked frames)
 
-The `.zip` is plain — no encryption — and includes redaction applied per `11_security_and_safety.md` §5.
+`.zip` is plain — no encryption — and includes redaction per `11_security_and_safety.md` §5.
 
 ### 7.1 Replay viewer (future, not v1)
 
-A web-based replay viewer reads the `.zip` and shows a timeline with events, actions, and observations. Not built at v1; planned for v2 when there's a real reason to invest in UI.
+Web-based timeline viewer reading the `.zip`. Planned for v2.
 
 ---
 
 ## 8. Tracing in production
 
-In production runs (long-running daemon), tracing goes to file + (optionally) OTLP. `info` level is verbose enough to diagnose 90% of issues from logs alone:
+Production runs go to file + (optionally) OTLP. `info` is verbose enough for 90% of diagnoses:
 
 - Every session open/close → log line
 - Every profile activation → log line
-- Every action emission → log line (one per action, batched if rate > 100/s)
+- Every action emission → log line (batched if rate > 100/s)
 - Every reflex registration → log line
 - Every disk pressure transition → log line
 - Every model load → log line
 
-`debug` doubles the volume; `trace` is for development.
+`debug` doubles volume; `trace` is development-only.
 
-Log volume at info on a typical 1-hour gameplay session: ~50 MB uncompressed JSONL. After gzip rotation: ~5 MB.
+Volume at info on a 1-hour gameplay session: ~50 MB uncompressed JSONL. After gzip rotation: ~5 MB.
 
 ---
 
 ## 9. Crash dumps
 
-A panic hook in `synapse-telemetry::panic_handler`:
+Panic hook in `synapse-telemetry::panic_handler`:
 
-1. Logs the panic message + backtrace at `error`
-2. Writes a crash dump to `%LOCALAPPDATA%\synapse\crashes\YYYYMMDD-HHMMSS.dump` with the panic, version, build hash, last 100 log lines, and last 100 events
+1. Logs panic message + backtrace at `error`
+2. Writes crash dump to `%LOCALAPPDATA%\synapse\crashes\YYYYMMDD-HHMMSS.dump` with panic, version, build hash, last 100 log lines, last 100 events
 3. Fires `release_all` via the static handle (see `03_action.md` §11)
-4. Re-panics to abort the process
+4. Re-panics to abort
 
-Crash dumps retained for 30 days. Operator can attach to a bug report.
+Retained for 30 days; operator attaches to bug reports.
 
 ---
 
 ## 10. Performance profiling integration
 
-Standard `tracing-flame` + `pprof` available behind feature flags:
+`tracing-flame` + `pprof` behind feature flags:
 
 ```
 cargo run --features perf-profiling -- --mode stdio
 # Generates flamegraph.svg on Ctrl+C
 ```
 
-Not enabled by default; ~5% overhead when active. CI runs a perf-profiling job on a weekly basis to produce flamegraphs of the standard test scenarios.
+Not default; ~5% overhead when active. CI runs a weekly perf-profiling job producing flamegraphs of standard scenarios.
 
 ---
 
 ## 11. Specific dashboards (operator templates)
 
-Bundled Grafana dashboards JSON in `dashboards/` directory:
+Bundled Grafana dashboards in `dashboards/`:
 
 - `synapse_overview.json` — high-level health + uptime + sessions
 - `synapse_perception.json` — capture FPS, detection latency, OCR cache hit rate, a11y event rate
@@ -392,48 +386,48 @@ Bundled Grafana dashboards JSON in `dashboards/` directory:
 - `synapse_storage.json` — CF sizes, disk pressure, cache hit rates, GC frequency
 - `synapse_reflex.json` — active reflex count, tick jitter, fired counts by kind
 
-Operators import these into Grafana once. Dashboards drift slowly; we update them with major Synapse releases.
+Operators import once. Updated with major Synapse releases.
 
 ---
 
 ## 12. What to look at when something is wrong (operator playbook)
 
 **Symptom: actions feel laggy.**
-- Check `action_emit_seconds` p99 by backend
-- Check `action_queue_depth` (high = saturation)
-- Check `reflex_tick_jitter_seconds` (spikes = host overload)
+- `action_emit_seconds` p99 by backend
+- `action_queue_depth` (high = saturation)
+- `reflex_tick_jitter_seconds` (spikes = host overload)
 
 **Symptom: `observe()` is slow.**
-- Check `perception_observation_assemble_seconds` p99
-- Check `a11y_snapshot_seconds` p99 (high = UIA cross-process slowdown)
-- Check `detection_inference_seconds` p99 (high = GPU contention)
+- `perception_observation_assemble_seconds` p99
+- `a11y_snapshot_seconds` p99 (high = UIA cross-process slowdown)
+- `detection_inference_seconds` p99 (high = GPU contention)
 
 **Symptom: events feel stale.**
-- Check `event_to_subscriber_latency_seconds`
-- Check event bus drops via `events_dropped_for_subscriber{}` counter
+- `event_to_subscriber_latency_seconds`
+- `events_dropped_for_subscriber{}` counter
 
 **Symptom: DB growing.**
 - `synapse-mcp db status`
-- Look at `cf_size_bytes{cf}` to find the offender
-- Check disk pressure level + last GC time
+- `cf_size_bytes{cf}` to find the offender
+- Disk pressure level + last GC time
 
 **Symptom: hardware HID drops out.**
-- Check `hid_link_timeouts_total`
-- Check `hid_frames_naked_total{reason}`
-- Restart by reconnecting USB; auto-reconnect should kick in
+- `hid_link_timeouts_total`
+- `hid_frames_naked_total{reason}`
+- Reconnect USB; auto-reconnect should kick in
 
 **Symptom: a reflex misfires.**
-- `reflex_history --reflex-id <id>` to see fires + filter matches
-- Check `reflex_starved_total{reflex_id}`
-- Look at `CF_REFLEX_AUDIT` directly via `ldb`
+- `reflex_history --reflex-id <id>` for fires + filter matches
+- `reflex_starved_total{reflex_id}`
+- `CF_REFLEX_AUDIT` directly via `ldb`
 
-Every "symptom" has a metric. If you can't find one, file an issue — that's a doc bug.
+Every symptom has a metric. If you can't find one, file an issue — that's a doc bug.
 
 ---
 
 ## 13. What this doc does NOT cover
 
-- Per-tool metric details → in `05_mcp_tool_surface.md` and `10_performance_budget.md`
+- Per-tool metric details → `05_mcp_tool_surface.md` and `10_performance_budget.md`
 - Storage retention → `07_storage_and_profiles.md` §6
 - Replay format details → `07_storage_and_profiles.md` §5 + this doc §7
-- Specific Grafana dashboard JSON → `dashboards/` directory in the repo
+- Specific Grafana dashboard JSON → `dashboards/`

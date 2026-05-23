@@ -2,19 +2,19 @@
 
 ## 1. Mission
 
-**Give AI agents a body.** Modern frontier models (Claude, GPT, Gemini class) are excellent reasoners but blind, deaf, and limbless on a real computer. Synapse fixes that by exposing the operating system, every visible window, and every running game as a structured, queryable, controllable surface over the Model Context Protocol.
+**Give AI agents a body.** Frontier models (Claude, GPT, Gemini class) reason well but are blind, deaf, limbless on a real computer. Synapse exposes the OS, every visible window, and every running game as a structured, queryable, controllable surface over MCP.
 
-The agent thinks. Synapse perceives, acts, and reflexes.
+Agent thinks. Synapse perceives, acts, reflexes.
 
 ## 2. Problem statement
 
-Today, an AI agent that wants to operate a Windows machine has three bad choices:
+An AI agent operating Windows today has three bad choices:
 
-1. **Screenshot loops** — capture a PNG, pay 1500-2500 vision tokens, wait for the model to find a button, send a coordinate, screenshot again. Cost: ~$0.05-$0.20 per step. Latency: 500ms-3000ms per action. Cannot react to anything in real time. Fails on games entirely.
-2. **Browser-only tools** — Playwright/Puppeteer give rich structured DOM but cover ~5% of the desktop. Useless for native apps and games.
+1. **Screenshot loops** — capture PNG, pay 1500-2500 vision tokens, wait for model to find a button, send coord, repeat. Cost: ~$0.05-$0.20/step. Latency: 500ms-3000ms/action. No real-time reaction. Fails on games.
+2. **Browser-only tools** — Playwright/Puppeteer give rich DOM but cover ~5% of the desktop. Useless for native apps and games.
 3. **Custom OS automation libraries** (PyAutoGUI, AutoIt) — coordinate-based, brittle, no semantic state, no event push, no game support.
 
-None of these meet the bar a competent human operator hits: **see structure, react instantly, act precisely, work everywhere**.
+None meet the human-operator bar: **see structure, react instantly, act precisely, work everywhere**.
 
 Synapse is the missing primitive.
 
@@ -30,17 +30,17 @@ Synapse is the missing primitive.
 | **Speedrunning / TAS-adjacent research** | Frame-perfect inputs with structured state | Hardware HID gateway + reflex runtime |
 
 **Not** target users:
-- Cheaters on competitive PvP ladders. We are not building this for them.
+- Cheaters on competitive PvP ladders. NEVER build for them.
 - Bot farmers running massive parallel accounts. Single-machine system.
 - Mobile or console operators. Desktop only.
 
 ## 4. Why now
 
-Three things changed in the last 18 months that make this newly tractable:
+Three changes in the last 18 months:
 
-1. **MCP became a real standard.** Streamable HTTP transport (March 2025) supports both fast tool calls and long-lived event streams from one endpoint. Every major agent client (Claude Desktop, Cursor, Codex, VS Code, ChatGPT Desktop) now speaks it natively.
-2. **Frontier models gained tool-use loops.** Claude 3.5+, GPT-4o+, Gemini 2+ can plan and reflect across hundreds of tool calls. The "agent" is now a credible outer loop — we don't need to build planning, we just need to feed it good observations and act on its commands.
-3. **Consumer GPUs got absurdly capable.** RTX 4090 / 5090 class hardware runs YOLO-class detectors at 200+ FPS, ConvNeXt-tiny at 500+ FPS, small VLMs at 5-10 FPS. Real-time game perception on a single workstation is now trivially fast.
+1. **MCP became a real standard.** Streamable HTTP transport (March 2025) supports fast tool calls and long-lived event streams on one endpoint. Every major agent client (Claude Desktop, Cursor, Codex, VS Code, ChatGPT Desktop) speaks it natively.
+2. **Frontier models gained tool-use loops.** Claude 3.5+, GPT-4o+, Gemini 2+ plan and reflect across hundreds of tool calls. The agent is the outer loop — we feed it observations and execute its commands.
+3. **Consumer GPUs got capable.** RTX 4090 / 5090 runs YOLO-class detectors at 200+ FPS, ConvNeXt-tiny at 500+ FPS, small VLMs at 5-10 FPS. Real-time game perception on a single workstation is trivially fast.
 
 ## 5. Concrete capabilities at v1
 
@@ -48,25 +48,25 @@ When the agent connects to `synapse-mcp`, it gains these capabilities for any fo
 
 ### See (perception)
 
-- Read the structured tree of every accessible window (UIA), with names, roles, AutomationIds, bounding boxes, patterns, focus state, enabled state
-- Read the DOM and accessibility tree of any Chromium-based browser (CDP)
-- Read the structured state of any app exposing a known automation API (Office COM, terminal PTY, VS Code LSP via extension, Slack/Discord APIs)
-- Capture any window or the full desktop as a GPU texture at 60+ fps with zero CPU copy
-- Run a small object-detection model (YOLO-class, ~20MB ONNX) on captured frames at 50+ fps
-- OCR the screen or any subregion via WinRT `Windows.Media.Ocr` (no Tesseract dep) or a fine-tuned CRNN
-- Capture and transcribe system audio (WASAPI loopback + a small STT model)
-- Detect spatial direction of stereo audio events (FPS footstep direction)
-- Watch the filesystem for changes (`ReadDirectoryChangesW`)
-- Watch processes, sockets, and clipboard
-- Subscribe to all of the above as a push event stream over MCP notifications
+- Read structured tree of every accessible window (UIA): names, roles, AutomationIds, bounding boxes, patterns, focus, enabled state
+- Read DOM + accessibility tree of any Chromium-based browser (CDP)
+- Read structured state of apps with known automation APIs (Office COM, terminal PTY, VS Code LSP via extension, Slack/Discord APIs)
+- Capture window or full desktop as GPU texture at 60+ fps with zero CPU copy
+- Run small object-detection model (YOLO-class, ~20MB ONNX) on frames at 50+ fps
+- OCR screen/subregion via WinRT `Windows.Media.Ocr` (no Tesseract) or fine-tuned CRNN
+- Capture + transcribe system audio (WASAPI loopback + small STT)
+- Detect spatial direction of stereo audio (FPS footstep direction)
+- Watch filesystem (`ReadDirectoryChangesW`)
+- Watch processes, sockets, clipboard
+- Subscribe to all above as push event stream over MCP notifications
 
 ### Act (action)
 
 - Click, double-click, right-click, drag, scroll (mouse — software, virtual driver, or hardware HID)
 - Type text, press keys, hold modifiers, send chord combos (keyboard — same three paths)
-- Drive a virtual Xbox 360 / DualShock 4 controller (ViGEm)
+- Drive virtual Xbox 360 / DualShock 4 controller (ViGEm)
 - Send analog stick deltas, trigger pressures, button presses
-- Move the cursor with human-modeled aim curves (Bezier with micro-tremor + variable timing)
+- Move cursor with human-modeled aim curves (Bezier with micro-tremor + variable timing)
 - Type with human-modeled keystroke dynamics (Gaussian inter-arrival)
 - Send frame-perfect input sequences (fighting-game motion inputs)
 - Read/write clipboard
@@ -84,37 +84,37 @@ When the agent connects to `synapse-mcp`, it gains these capabilities for any fo
 
 ### Persist + observe
 
-- All events recorded to RocksDB with timestamps for replay debugging
+- All events recorded to RocksDB with timestamps for replay debug
 - All MCP requests/responses traced with `tracing` + OTLP export
 - Per-app/per-game profiles (HUD layout, keymap, capture region) loaded on-demand
 - Replay tool to play back any session deterministically
 
-## 6. Non-goals (what we explicitly do NOT build)
+## 6. Non-goals (explicitly NOT built)
 
-These are out of scope, full stop. Don't accept feature requests for them without an ADR.
+Out of scope. NEVER accept feature requests for these without an ADR.
 
-1. **No goal planning, no MCTS, no GOAP, no skill libraries.** The agent is the planner. We do not invent a per-game skill ontology, do not maintain a skill graph, do not run search over plan space. If the agent wants to compose actions into a multi-step plan, that's in its tokens, not ours.
-2. **No inner LLM.** Synapse loads no large model. Optional vision models stay small (≤100M params). The agent connecting over MCP is the only "intelligence."
-3. **No prediction / world model / learning head.** We do not predict future states, do not maintain a reward signal, do not adapt weights at runtime. Optional model inference is for perception (object detection / OCR), not for prediction or RL.
-4. **No anti-cheat-evasion for competitive PvP.** See `08_anti_cheat_policy.md`. We support hardware HID for legitimate purposes; we do not maintain a list of "what each anti-cheat detects."
-5. **No general-purpose RPA / web scraping framework.** A browser CDP integration ships because games and apps often have web subviews; it is not a Playwright competitor.
+1. **No goal planning, no MCTS, no GOAP, no skill libraries.** Agent is the planner. We do not invent per-game skill ontologies, do not maintain skill graphs, do not run plan-space search. Multi-step composition lives in agent tokens, not ours.
+2. **No inner LLM.** Synapse loads no large model. Optional vision models stay small (≤100M params). The connecting agent is the only "intelligence."
+3. **No prediction / world model / learning head.** No future-state prediction, no reward signal, no runtime weight adaptation. Optional model inference is perception (detection / OCR), not prediction or RL.
+4. **No anti-cheat-evasion for competitive PvP.** See `08_anti_cheat_policy.md`. Hardware HID supports legitimate purposes; we do NOT maintain a list of "what each anti-cheat detects."
+5. **No general-purpose RPA / web scraping framework.** Browser CDP ships because games and apps have web subviews; not a Playwright competitor.
 6. **No mobile, console, embedded.** Windows desktop only at v1. Linux/macOS v2.
 7. **No multiplayer / multi-machine orchestration.** One agent, one machine, one Synapse server.
-8. **No cloud service.** Synapse runs entirely on the operator's machine. No telemetry leaves the box without explicit opt-in.
+8. **No cloud service.** Runs entirely on operator's machine. No telemetry leaves the box without explicit opt-in.
 
 ## 7. Success criteria
 
 Synapse v1 is successful when:
 
-1. **An agent driving Claude via stdio MCP can open Notepad, type a paragraph, save the file to a specified path, and verify the file exists — using a total of ≤8 tool calls and ≤2500 tokens.** Today this takes ~30+ screenshot-based steps and ~30K tokens.
-2. **An agent can complete a 30-minute single-player game session** (e.g., play Minecraft from spawn → build a small shelter → kill a mob) using only Synapse, with no human intervention, and ≤200 tool calls.
-3. **An agent can react to in-game events at frame rate** for at least one supported FPS — i.e., agent says "track that enemy and shoot if visible," and the reflex runtime delivers a clicked shot within 33ms of the enemy becoming visible.
-4. **Steady-state token cost is ≤ 800 tokens per agent turn** for a structured observation, vs. ~1800 for a screenshot of the same scene.
+1. **An agent driving Claude via stdio MCP can open Notepad, type a paragraph, save to a path, verify file exists — ≤8 tool calls, ≤2500 tokens.** Today: ~30+ screenshot-based steps, ~30K tokens.
+2. **Agent completes a 30-minute single-player game session** (e.g., Minecraft from spawn → build shelter → kill a mob) using only Synapse, no human intervention, ≤200 tool calls.
+3. **Agent reacts to in-game events at frame rate** for at least one supported FPS — "track that enemy and shoot if visible," reflex runtime delivers clicked shot within 33ms of enemy becoming visible.
+4. **Steady-state token cost ≤ 800 tokens/turn** for structured observation, vs. ~1800 for a screenshot of the same scene.
 5. **Detection inference + capture stays under 16ms p99** on a 5090.
-6. **No silent failures.** Every MCP tool that fails to do its work returns a structured error code, not a `success: true` shell.
-7. **One-command install** on a fresh Windows 11 machine: `winget install Nefarius.ViGEmBus; cargo install --git ... synapse-mcp`.
+6. **No silent failures.** Every MCP tool failing to do its work returns a structured error code, never `success: true` shell.
+7. **One-command install** on fresh Windows 11: `winget install Nefarius.ViGEmBus; cargo install --git ... synapse-mcp`.
 
-## 8. Anti-success criteria (failure modes we want to avoid)
+## 8. Anti-success criteria (failure modes to avoid)
 
 | Failure mode | How we avoid |
 |---|---|
@@ -126,17 +126,15 @@ Synapse v1 is successful when:
 | Per-game special-casing in core code | Per-game logic lives in declarative profiles (`profiles/<id>.toml`), not Rust code |
 | Build complexity sprawl | Workspace ≤ 15 crates; one binary; no procmacro forests; no build.rs that hits the network |
 
-## 9. Definition of "done" for the PRD itself
+## 9. Definition of "done" for the PRD
 
-The PRD is done when:
+1. All 18 docs in this directory exist, internally consistent.
+2. Architecture in `01` matches structs in `06`, tools in `05`, milestones in `15`.
+3. Every external dep named with specific crate version range.
+4. Every external service / OS API identified by exact name + minimum Windows version.
+5. A new reader can sit down, read the PRD, begin coding `synapse-core` without a clarifying question.
 
-1. All 18 docs in this directory exist and are internally consistent.
-2. The architecture in `01` matches the structs in `06`, the tools in `05`, and the milestones in `15`.
-3. Every external dep is named with a specific crate version range.
-4. Every external service / OS API used is identified by exact name and minimum Windows version.
-5. A reader who has not been in our conversations can sit down, read the PRD, and begin coding `synapse-core` without asking us a single clarifying question.
-
-## 10. What ships at v1 vs deferred
+## 10. v1 vs deferred
 
 | At v1 | Deferred |
 |---|---|

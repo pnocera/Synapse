@@ -24,7 +24,7 @@ Synthesized from public research (see `17_research_appendix.md` §8). This is **
 |---|---|---|
 | DLL injection into game process | All major AC | We never do this. Forbidden in policy. |
 | Process memory reads/writes of game | All major AC | Out of scope at v1; explicit "memory hook" feature would require ADR + AC-aware gating. |
-| `SendInput` / `keybd_event` / `mouse_event` from third-party process | BattlEye (heuristic), EAC (heuristic), Vanguard (heuristic + via LBR-tracking on `MouseClassServiceCallback`) | This is our default action backend. Works for almost everything single-player. Flagged in competitive titles. |
+| `SendInput` / `keybd_event` / `mouse_event` from third-party process | BattlEye (heuristic), EAC (heuristic), Vanguard (heuristic + via LBR-tracking on `MouseClassServiceCallback`) | Our default action backend. Works for almost everything single-player. Flagged in competitive titles. |
 | Virtual HID drivers (ViGEm, similar) | Some AC flag; many allow | Optional, off-by-default in `pixel_only` profiles for AC-protected titles |
 | Kernel driver hooks (Interception, custom drivers) | All major AC catch most of these | Not used by Synapse |
 | DXGI Present hooks / D3D injection | All major AC | Not used; we use Graphics Capture API (non-injection) |
@@ -47,11 +47,11 @@ This is why the hardware HID path is mentioned at all: it is the only output cha
 
 ## 4. Three risk tiers for game support
 
-Profiles declare their tier. The active tier gates which back-ends are available.
+Profiles declare their tier. Active tier gates which back-ends are available.
 
 ### 4.1 Tier 0 — No AC
 
-Single-player and mod-friendly games. No anti-cheat in the binary at all.
+Single-player and mod-friendly games. No anti-cheat in the binary.
 
 Examples: Minecraft (Java), Factorio, Stardew Valley, Skyrim, most indie games, KSP, older titles, browser games, Roblox Studio, single-player AAA without online mode.
 
@@ -59,14 +59,14 @@ Examples: Minecraft (Java), Factorio, Stardew Valley, Skyrim, most indie games, 
 
 ### 4.2 Tier 1 — Light AC, single-player or sanctioned bot use
 
-Games with AC libraries that scan but don't aggressively ban for third-party tools when the game is single-player, in offline mode, in a developer/test mode, or playing on a community/private server.
+Games with AC libraries that scan but don't aggressively ban for third-party tools when single-player, offline, in dev/test mode, or on community/private servers.
 
 Examples: many Valve games in single-player, GTA V Story Mode (NOT online), modded servers with permissive admins, dedicated server PvE.
 
-**All Synapse features available**, with the following operator acknowledgments:
+**All Synapse features available**, with operator acknowledgments:
 
 - Profile must explicitly declare `tier = "tier1_singleplayer"` and the matched window must be the single-player launcher / offline mode.
-- If the game ever switches to online mode mid-session, Synapse's profile detector switches to a `tier2_blocked` profile and pauses input action emission until the operator confirms.
+- If the game switches to online mode mid-session, Synapse's profile detector switches to a `tier2_blocked` profile and pauses input action emission until the operator confirms.
 
 ### 4.3 Tier 2 — Active competitive AC
 
@@ -78,9 +78,9 @@ Examples: Valorant (Vanguard), CS2 (VAC), League of Legends (Vanguard on Korea, 
 
 For Tier 2 games:
 
-- Software input back-end is **disabled** in default profiles. Operator can re-enable via explicit profile flag if they have a legitimate use (e.g., recording bot footage on a private custom server). The flag's name is intentionally long: `backends.software_in_tier2_acknowledged = true`.
+- Software input back-end is **disabled** in default profiles. Operator can re-enable via explicit profile flag for legitimate use (e.g., recording bot footage on a private custom server). Flag name is intentionally long: `backends.software_in_tier2_acknowledged = true`.
 - ViGEm back-end is **disabled** by default. Same re-enable flag.
-- Hardware HID back-end is **available but defaults to off**. Operator must pass `--allow-hardware-in-tier2` AND the profile must set `backends.hardware_in_tier2_acknowledged = true` AND the operator must answer an interactive prompt on first use ("This will use a hardware HID device against a competitive-AC-protected game. ToS may prohibit. Continue?").
+- Hardware HID back-end is **available but defaults to off**. Operator must pass `--allow-hardware-in-tier2` AND profile must set `backends.hardware_in_tier2_acknowledged = true` AND operator must answer an interactive prompt on first use ("This will use a hardware HID device against a competitive-AC-protected game. ToS may prohibit. Continue?").
 
 The intent of the gating is not to make it impossible; experienced operators can flip every flag. The intent is to make it **impossible to do by accident** and to make the choice the operator's, recorded in their configuration, not ours.
 
@@ -88,12 +88,12 @@ The intent of the gating is not to make it impossible; experienced operators can
 
 ## 5. What we will not ship (binding)
 
-These are rejection-on-PR-sight features:
+Rejection-on-PR-sight features:
 
 1. **DLL injection into any process.** Not Synapse's, not the game's, not anything's.
-2. **Process memory read/write tooling** of any process other than Synapse itself. No Cheat-Engine-style RAM scanning. (Game-provided modding APIs that surface state through their own RAM-read mechanism are fine if the game documents them; e.g., Minecraft mods read game state through Minecraft's mod API, not raw memory.)
+2. **Process memory read/write tooling** of any process other than Synapse itself. No Cheat-Engine-style RAM scanning. (Game-provided modding APIs that surface state through their own RAM-read mechanism are fine if documented; e.g., Minecraft mods read game state through Minecraft's mod API, not raw memory.)
 3. **Kernel driver hooks.** Synapse is user-mode only. No `.sys` files in the install.
-4. **DXGI Present hooks** or any other graphics-pipeline injection. We use the Graphics Capture API, which is a Windows feature, not an injection.
+4. **DXGI Present hooks** or any other graphics-pipeline injection. We use the Graphics Capture API, a Windows feature, not an injection.
 5. **AC fingerprint database**, signature obfuscation, code virtualization, anti-debugger features. Synapse is open source and identifies itself plainly.
 6. **HID firmware that hides itself.** The bundled RP2040 firmware reports a clearly-identifiable VID/PID combination. Operators can rebuild firmware with different IDs for their own devices; we don't ship pre-built firmware that mimics specific commercial peripherals.
 7. **Automatic detection of which game is running for the purpose of opting into AC-risky modes.** Profile activation is operator-driven. Synapse never auto-flips into "stealthier" behavior because it noticed Vanguard is loaded.
@@ -104,13 +104,13 @@ These are rejection-on-PR-sight features:
 
 These features are deliberately included even though they have implications for AC-protected games. They serve legitimate use cases outside the AC context.
 
-1. **Human-modeled aim curves and keystroke dynamics.** Useful for accessibility (motor impairments simulating "natural" input), automation testing (RPA pipelines that must look human to web bot-detection), and game AI research. They are tunable; the default for productivity profiles is **off** (use `Instant` / `Burst`) because there's no reason to fake human authenticity for clicking the Save menu.
-2. **Hardware HID gateway.** Useful for accessibility (eye-tracking, sip-and-puff input), demo recording, dedicated game-AI research rigs, hardware testing, and AI tournaments with sanctioned bot interfaces. It is gated as described in §4.3.
-3. **Graphics Capture API**. Standard Windows screen capture used by OBS Studio and every screen recorder. No injection.
-4. **WASAPI loopback audio capture**. Standard Windows audio loopback used by every recorder. No injection.
-5. **WinEvent / UIA event subscribers**. Standard Windows accessibility APIs.
-6. **Chrome DevTools Protocol attachment**. Public, documented browser API.
-7. **Filesystem and process watchers**. Standard Windows APIs.
+1. **Human-modeled aim curves and keystroke dynamics.** Useful for accessibility (motor impairments simulating "natural" input), automation testing (RPA pipelines that must look human to web bot-detection), and game AI research. Tunable; default for productivity profiles is **off** (use `Instant` / `Burst`) because there's no reason to fake human authenticity for clicking the Save menu.
+2. **Hardware HID gateway.** Useful for accessibility (eye-tracking, sip-and-puff input), demo recording, dedicated game-AI research rigs, hardware testing, and AI tournaments with sanctioned bot interfaces. Gated as described in §4.3.
+3. **Graphics Capture API.** Standard Windows screen capture used by OBS Studio and every screen recorder. No injection.
+4. **WASAPI loopback audio capture.** Standard Windows audio loopback used by every recorder. No injection.
+5. **WinEvent / UIA event subscribers.** Standard Windows accessibility APIs.
+6. **Chrome DevTools Protocol attachment.** Public, documented browser API.
+7. **Filesystem and process watchers.** Standard Windows APIs.
 
 ---
 
@@ -120,10 +120,10 @@ By installing and configuring Synapse, the operator acknowledges:
 
 - They are responsible for compliance with the ToS of any software they automate.
 - Synapse's defaults aim to make AC-risky modes opt-in, not opt-out.
-- Enabling Tier 2 features against AC-protected games may result in account suspension or ban from the game in question.
+- Enabling Tier 2 features against AC-protected games may result in account suspension or ban.
 - The Synapse project does not provide indemnification or support for ToS violations.
 
-This acknowledgment is enforced via a first-run prompt:
+Enforced via a first-run prompt:
 
 ```
 Synapse is a powerful automation tool. By continuing you confirm:
@@ -138,22 +138,22 @@ Synapse is a powerful automation tool. By continuing you confirm:
 Type 'i agree' to continue. (Decline by closing this prompt.)
 ```
 
-The acknowledgment is recorded in `%APPDATA%\synapse\agreement.json` with a hash of the prompt text and a timestamp. A new major version may invalidate the previous acknowledgment.
+Acknowledgment is recorded in `%APPDATA%\synapse\agreement.json` with a hash of the prompt text and a timestamp. A new major version may invalidate the previous acknowledgment.
 
 ---
 
 ## 8. Detection responses
 
-When Synapse detects that a Tier 2 AC is loaded and an action is about to fire through a back-end that's flagged for that tier:
+When Synapse detects a Tier 2 AC is loaded and an action is about to fire through a back-end flagged for that tier:
 
 | Situation | Default behavior | Operator override |
 |---|---|---|
 | Tier 2 AC loaded, software back-end requested | Refuse action, return `SAFETY_AC_TIER2_BACKEND_BLOCKED`, log event | `backends.software_in_tier2_acknowledged = true` in profile |
 | Tier 2 AC loaded, ViGEm back-end requested | Refuse | profile flag |
 | Tier 2 AC loaded, hardware HID requested | Refuse unless all three gates passed (§4.3) | Three explicit acknowledgments |
-| AC drives detected via service enumeration (e.g., `BEService`, `EasyAntiCheat`, `vgc`) but no profile is loaded | Active profile is `tier_unknown`; software back-end allowed (likely productivity app on same machine) | n/a |
+| AC drives detected via service enumeration (e.g., `BEService`, `EasyAntiCheat`, `vgc`) but no profile loaded | Active profile is `tier_unknown`; software back-end allowed (likely productivity app on same machine) | n/a |
 
-Detection of "is this AC active" is heuristic: list of service names + driver names + window title regexes. Documented in `synapse-core::ac_heuristics`. The list is informational, not adversarial — it's only used to gate Synapse's own behavior, not to alter input to evade detection.
+Detection of "is this AC active" is heuristic: service names + driver names + window title regexes. Documented in `synapse-core::ac_heuristics`. The list is informational, not adversarial — it gates Synapse's own behavior, not alter input to evade detection.
 
 ---
 
@@ -177,7 +177,7 @@ Tier 1. Single-player only. Profile detects Story Mode by window title regex; sw
 
 ### 9.5 Skyrim, Witcher 3, Fallout 4
 
-Tier 0 for unmodded; Tier 1 for major-mod environments where mod authors prefer no automation. Default Tier 0; operator can downgrade.
+Tier 0 unmodded; Tier 1 for major-mod environments where mod authors prefer no automation. Default Tier 0; operator can downgrade.
 
 ### 9.6 Valorant, CS2, Apex, Fortnite
 
@@ -199,7 +199,7 @@ Browser games: same as Chrome. CDP is allowed; whether the game's own ToS allows
 
 If a game's AC posture changes (developer adds aggressive AC where there was none), the tier in the bundled profile changes in the next Synapse release. Operators are responsible for keeping Synapse up to date. We do not auto-update profiles without consent.
 
-The reverse — relaxing a tier — also goes through a release. We do not silently lower restrictions.
+Relaxing a tier also goes through a release. We do not silently lower restrictions.
 
 ---
 
@@ -208,7 +208,7 @@ The reverse — relaxing a tier — also goes through a release. We do not silen
 This policy is conservative on purpose. The realistic worst case is an operator who installs Synapse, enables every flag, and gets their main Valorant account banned. The policy can't prevent that — the operator pressed every button. What it can do is make sure:
 
 - No accident leads to a ban
-- The path to the AC-risky configuration is explicit, multi-step, and logged
+- The path to AC-risky configuration is explicit, multi-step, and logged
 - The project's stated purpose isn't "automate competitive PvP"
 - The features that exist for legitimate reasons (accessibility, research, demo) don't get blamed for being misused
 
@@ -218,7 +218,7 @@ That's the deal. Operators who want to do legitimate things with the tool can do
 
 ## 12. What this doc does NOT cover
 
-- Specific AC reverse-engineering (intentionally out of scope; see `17_research_appendix.md` §8 for public research that we read for context only)
-- Per-game AC posture tracking (lives in the per-profile TOML comments)
+- Specific AC reverse-engineering (intentionally out of scope; see `17_research_appendix.md` §8 for public research we read for context only)
+- Per-game AC posture tracking (lives in per-profile TOML comments)
 - Hardware HID firmware design → `09_hardware_hid_gateway.md`
-- The action back-end mechanics → `03_action.md`
+- Action back-end mechanics → `03_action.md`

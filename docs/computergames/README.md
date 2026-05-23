@@ -1,40 +1,40 @@
 # Synapse — Real-Time Computer-Use & Game-Control MCP for AI Agents
 
-**Project codename:** Synapse (rename freely; "the nerve connection between AI brain and computer body").
+**Project codename:** Synapse ("the nerve connection between AI brain and computer body"; rename freely).
 **Language:** Rust, edition 2024, MSRV 1.83. All Rust end-to-end; no Python, no C/C++ glue beyond unavoidable FFI to Windows SDK / RocksDB / WASAPI / RP2040 SDK.
 **Target host:** Windows 11 x64 (primary), Windows 10 x64 (best-effort). Linux/macOS deferred to v2.
 **License:** MIT or Apache-2.0 dual.
-**Repo:** fresh, independent. No upstream vendor dependencies; clean-room.
+**Repo:** fresh, independent. Clean-room, no upstream vendor dependencies.
 
 ---
 
 ## What this is
 
-Synapse is an **MCP (Model Context Protocol) server** that gives any MCP-aware AI agent (Claude, Codex, Cursor, custom runners) a fast, structured, low-token interface to **see**, **hear**, **act on**, and **react inside** any Windows desktop application — covering two equally important use modes:
+Synapse is an **MCP (Model Context Protocol) server** that gives any MCP-aware AI agent (Claude, Codex, Cursor, custom runners) a fast, structured, low-token interface to **see**, **hear**, **act on**, and **react inside** any Windows desktop application — covering two use modes:
 
 | Mode | Examples | Primary perception path |
 |---|---|---|
 | **Computer-use** | VS Code, Excel, Outlook, Slack, browsers, file explorer, terminals, design tools | Accessibility tree (UIA), DOM (CDP), app-specific APIs, OS event hooks |
 | **Game-control** | Single-player games, modded multiplayer, browser/Roblox games, real-time titles | GPU frame capture + small detection CNN, HUD OCR, spatial audio, game-specific RAM hooks where ethically allowed |
 
-Both modes share the same Rust workspace, the same MCP tool surface, the same action subsystem, and the same sub-frame reflex runtime. The perception subsystem auto-selects the cheapest path that yields fidelity. When an app has a rich a11y tree, we use it — sub-millisecond latency, zero tokens spent on pixels. When an app renders only to GPU (most games, some Electron apps, all canvas-heavy tools), we capture + infer.
+Both modes share the same Rust workspace, MCP tool surface, action subsystem, and sub-frame reflex runtime. Perception auto-selects the cheapest path that yields fidelity. Rich a11y tree → use it (sub-millisecond, zero tokens on pixels). GPU-only render (most games, some Electron, canvas-heavy tools) → capture + infer.
 
-The agent doesn't decide which path to use — it asks `observe()` and gets a structured response. The body picks the best sensor.
+Agent doesn't pick the path — it calls `observe()` and gets a structured response. The body picks the best sensor.
 
 **Synapse does NOT include:**
 
-- Any goal-planning, MCTS, GOAP, skill libraries, or hierarchical decomposition (the agent does this through its tool-use loop)
-- Any large prediction model, reward model, or learning loop (the agent does this in-context)
-- Any inner LLM (model lives outside; we are pure infrastructure)
-- Any anti-cheat-evasion features for unsanctioned online competitive play (see `08_anti_cheat_policy.md`)
+- Goal-planning, MCTS, GOAP, skill libraries, or hierarchical decomposition (agent handles via tool-use loop)
+- Large prediction model, reward model, or learning loop (agent does this in-context)
+- Inner LLM (model lives outside; we are pure infrastructure)
+- Anti-cheat-evasion features for unsanctioned online competitive play (see `08_anti_cheat_policy.md`)
 
 ---
 
 ## Why one system for both
 
-Computer-use and game-control look different on the surface but share the load-bearing primitives:
+Both modes share load-bearing primitives:
 
-| Primitive | Used by computer-use? | Used by game-control? |
+| Primitive | Computer-use | Game-control |
 |---|---|---|
 | Zero-copy GPU frame capture | Yes (for canvas/video/Electron a11y holes) | Yes (primary perception) |
 | Accessibility tree (UIA) walk + event hook | Yes (primary perception) | Sometimes (UI overlays, menus) |
@@ -48,7 +48,7 @@ Computer-use and game-control look different on the surface but share the load-b
 | Per-app/per-game profile system | Yes | Yes |
 | Token-efficient `observe()` JSON | Yes | Yes |
 
-Shipping these as two separate products would duplicate ~90% of the engineering. **Synapse ships them once.**
+Shipping these separately would duplicate ~90% of engineering. **Synapse ships them once.**
 
 ---
 
@@ -58,15 +58,15 @@ Shipping these as two separate products would duplicate ~90% of the engineering.
 |---|---|---|
 | README | this file | Always start here |
 | 00 | [`00_vision_and_scope.md`](00_vision_and_scope.md) | First. Mission, users, non-goals. |
-| 01 | [`01_architecture.md`](01_architecture.md) | Understanding the moving parts. Processes, threads, Rust workspace. |
-| 02 | [`02_perception.md`](02_perception.md) | Building the eyes/ears. Capture, detection, a11y, OCR, audio, events. |
-| 03 | [`03_action.md`](03_action.md) | Building the hands. Mouse/kbd/controller/HID. |
+| 01 | [`01_architecture.md`](01_architecture.md) | Moving parts. Processes, threads, Rust workspace. |
+| 02 | [`02_perception.md`](02_perception.md) | Eyes/ears. Capture, detection, a11y, OCR, audio, events. |
+| 03 | [`03_action.md`](03_action.md) | Hands. Mouse/kbd/controller/HID. |
 | 04 | [`04_reflex_runtime.md`](04_reflex_runtime.md) | Sub-frame reactive controllers. Event bus. |
-| 05 | [`05_mcp_tool_surface.md`](05_mcp_tool_surface.md) | The public API. Every tool, parameter, return, error. |
+| 05 | [`05_mcp_tool_surface.md`](05_mcp_tool_surface.md) | Public API. Every tool, parameter, return, error. |
 | 06 | [`06_data_schemas.md`](06_data_schemas.md) | Rust structs, JSON envelopes, event types, error codes. |
-| 07 | [`07_storage_and_profiles.md`](07_storage_and_profiles.md) | RocksDB schema, runtime files, per-app/per-game profile system. |
+| 07 | [`07_storage_and_profiles.md`](07_storage_and_profiles.md) | RocksDB schema, runtime files, profile system. |
 | 08 | [`08_anti_cheat_policy.md`](08_anti_cheat_policy.md) | What we will/won't do, scope, kernel-AC notes. |
-| 09 | [`09_hardware_hid_gateway.md`](09_hardware_hid_gateway.md) | Pi Pico HID firmware + serial protocol + Rust host driver. |
+| 09 | [`09_hardware_hid_gateway.md`](09_hardware_hid_gateway.md) | Pi Pico HID firmware + serial protocol + host driver. |
 | 10 | [`10_performance_budget.md`](10_performance_budget.md) | Latency targets, profiling, optimization rules. |
 | 11 | [`11_security_and_safety.md`](11_security_and_safety.md) | Threat model, permissions, redaction, kill switches. |
 | 12 | [`12_observability.md`](12_observability.md) | Logging, tracing, metrics, debug overlay, replay tool. |
@@ -74,7 +74,7 @@ Shipping these as two separate products would duplicate ~90% of the engineering.
 | 14 | [`14_build_and_packaging.md`](14_build_and_packaging.md) | Workspace, deps, profiles, installer, signing. |
 | 15 | [`15_roadmap_and_milestones.md`](15_roadmap_and_milestones.md) | M0-M5 phases, scope per milestone, demo criteria. |
 | 16 | [`16_open_questions.md`](16_open_questions.md) | Unresolved decisions, ADRs needed. |
-| 17 | [`17_research_appendix.md`](17_research_appendix.md) | Web research, comparable projects, references with URLs. |
+| 17 | [`17_research_appendix.md`](17_research_appendix.md) | Web research, comparable projects, references. |
 
 ---
 
@@ -129,7 +129,7 @@ A Rust MCP server that exposes structured desktop and game state as low-token JS
                 Windows OS + GPU + foreground apps and games
 ```
 
-Slow loop (model → MCP → response) runs at human-decision rate. Fast loop (reflex runtime) runs at frame rate. They are decoupled by the event bus.
+Slow loop (model → MCP → response) runs at human-decision rate. Fast loop (reflex runtime) runs at frame rate. Decoupled by the event bus.
 
 ---
 
@@ -152,7 +152,7 @@ Detailed budget and profiling discipline: `10_performance_budget.md`.
 
 ---
 
-## Quick start (target M3+ developer experience)
+## Quick start (target M3+ DX)
 
 ```powershell
 # One-time prerequisites
@@ -171,11 +171,11 @@ synapse-mcp --mode http --bind 127.0.0.1:7700
 cargo run -p synapse-hid-host -- flash --device COM7
 ```
 
-Configure your agent client to launch `synapse-mcp` as an MCP server. The agent immediately gains every tool defined in `05_mcp_tool_surface.md`.
+Configure your agent client to launch `synapse-mcp` as an MCP server. The agent gains every tool in `05_mcp_tool_surface.md`.
 
 ---
 
-## Repository layout (fresh repo, to be built)
+## Repository layout
 
 ```
 synapse/
@@ -208,18 +208,18 @@ synapse/
     └── fixtures/
 ```
 
-Full crate boundaries and dep graph in `01_architecture.md`. Build details in `14_build_and_packaging.md`.
+Crate boundaries and dep graph in `01_architecture.md`. Build details in `14_build_and_packaging.md`.
 
 ---
 
 ## Out of scope (explicit non-goals)
 
-1. **Online competitive PvP cheating.** Synapse is for single-player, PvE, modded, dev-mode, custom-server, research, accessibility, and computer-use automation. It ships no anti-cheat-evasion logic for ladder/ranked play. The hardware HID path exists for legitimate accessibility, automation, and AI-tournament use — not unsanctioned competitive advantage. See `08_anti_cheat_policy.md`.
-2. **Goal/planning/skill libraries.** The agent does this through its native tool-use loop.
+1. **Online competitive PvP cheating.** Synapse is for single-player, PvE, modded, dev-mode, custom-server, research, accessibility, and computer-use automation. Ships no anti-cheat-evasion logic for ladder/ranked. The hardware HID path exists for legitimate accessibility, automation, and AI-tournament use — not unsanctioned competitive advantage. See `08_anti_cheat_policy.md`.
+2. **Goal/planning/skill libraries.** Agent does this via tool-use loop.
 3. **Inner LLM.** Optional small vision models (YOLO-nano, ConvNeXt-tiny) only.
-4. **Cross-platform v1.** Windows first. Linux/macOS exist as v2.
+4. **Cross-platform v1.** Windows first. Linux/macOS are v2.
 5. **General-purpose RPA.** Web/SaaS form-filling is a side-effect, not a target.
-6. **Reverse-engineering proprietary game protocols.** RAM reads / packet inspection only for games the operator owns and where ToS permits.
+6. **Reverse-engineering proprietary game protocols.** RAM reads / packet inspection only for games operator owns and where ToS permits.
 
 ---
 
@@ -227,7 +227,7 @@ Full crate boundaries and dep graph in `01_architecture.md`. Build details in `1
 
 | Phase | Status |
 |---|---|
-| PRD | This doc set. In active drafting. |
+| PRD | Active drafting |
 | M0 — bootstrap | Not started |
 | M1 — perception MVP (a11y + capture) | Not started |
 | M2 — action MVP (kbd/mouse/pad) | Not started |
@@ -246,9 +246,9 @@ See `15_roadmap_and_milestones.md`.
 - All errors carry `SCREAMING_SNAKE_CASE` codes via `thiserror`. No `anyhow` in library crates.
 - Public APIs and CF names are `pub const`s — no magic strings.
 - `tracing` for everything. `println!` is a code-review rejection.
-- No silent successes. If a tool didn't do the work, it returns an error code.
+- No silent successes. If a tool didn't do the work, return an error code.
 - No mocks in tests that gate completion. Real captures, real input, real RocksDB.
-- Pre-production tree: schema changes = wipe-and-rebuild, no migration shims.
+- Pre-production: schema changes = wipe-and-rebuild, no migration shims.
 
 ---
 

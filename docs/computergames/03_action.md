@@ -2,31 +2,31 @@
 
 ## 1. The hands
 
-`synapse-action` is the only crate that emits input to the OS or to a virtual / hardware device. The contract is short:
+`synapse-action` is the only crate that emits input to the OS or to a virtual / hardware device. Contract:
 
 > **Anything the agent or the reflex runtime decides to do flows through one mpsc actor that serializes by device and emits at the requested back-end. Nothing else touches the input APIs.**
 
-This serialization guarantee is non-negotiable. It prevents stuck modifiers, double-clicks merging, and ordering bugs in combos.
+Serialization is non-negotiable. Prevents stuck modifiers, double-clicks merging, and combo ordering bugs.
 
 ---
 
 ## 2. Back-ends
 
-Three back-ends ship at v1. Per call, the caller (or the active profile) picks one.
+Three back-ends ship at v1. Per call, the caller (or active profile) picks one.
 
 | Back-end | Path | Use |
 |---|---|---|
-| `software` | Win32 `SendInput` via the `enigo` crate (or direct `windows-rs` if `enigo` is limiting) | Default. Cheapest. Works for most apps and many single-player games. |
+| `software` | Win32 `SendInput` via `enigo` crate (or direct `windows-rs` if `enigo` is limiting) | Default. Cheapest. Works for most apps and many single-player games. |
 | `vigem` | Virtual Xbox 360 / DualShock 4 controller via `vigem-client` crate | Games that require a gamepad (analog movement, controller-only menus). Many games accept ViGEm even when they reject software input. |
 | `hardware` | Serial to RP2040 HID gateway over USB-CDC | Games where ViGEm is detected. Single-player only. See `09_hardware_hid_gateway.md`. |
 
 Selection rules:
 
-1. If the caller explicitly names a back-end, use it.
-2. Else, if the active profile names a default back-end, use it.
+1. If caller explicitly names a back-end, use it.
+2. Else, if active profile names a default back-end, use it.
 3. Else, use `software`.
 
-ViGEm requires the ViGEmBus driver to be installed (one-time, signed). Hardware requires a flashed RP2040 board and a `--hardware-hid <COM_port>` argument or `SYNAPSE_HARDWARE_HID_PORT` env.
+ViGEm requires ViGEmBus driver installed (one-time, signed). Hardware requires a flashed RP2040 board and `--hardware-hid <COM_port>` argument or `SYNAPSE_HARDWARE_HID_PORT` env.
 
 ---
 
@@ -65,7 +65,7 @@ pub enum Action {
 }
 ```
 
-`KeyChord { ctrl+s }` is the cleanest way to express a hotkey. `Combo` is for frame-accurate sequences (e.g., fighting-game motions: `↓ → A` within 3 frames).
+`KeyChord { ctrl+s }` expresses a hotkey. `Combo` is frame-accurate sequences (fighting-game motions: `↓ → A` within 3 frames).
 
 ---
 
@@ -112,19 +112,19 @@ impl ActionHandle {
 }
 ```
 
-The bounded channel capacity is 256 actions. Saturation returns `ACTION_QUEUE_FULL` to the caller; this is a sign of agent runaway or reflex misconfiguration.
+Bounded channel capacity is 256 actions. Saturation returns `ACTION_QUEUE_FULL` — a sign of agent runaway or reflex misconfiguration.
 
 ---
 
 ## 5. Software back-end (`SendInput`)
 
-Wraps `enigo` 0.6+ but with several behavior overrides:
+Wraps `enigo` 0.6+ with overrides:
 
-- **Absolute mouse moves are sent as relative deltas in steps,** following an `AimCurve`. Single absolute jump is reserved for `MouseMove { curve: Instant, .. }`.
-- **`SendInput` is called in batches** when emitting curve steps (e.g., 50 deltas in one `SendInput([..50])` call). Per-call overhead amortizes from ~2 µs to ~0.04 µs per delta.
-- **Modifier state is tracked locally.** `held_keys` ensures `ReleaseAll` releases everything we pressed, even on panic.
-- **Unicode text** uses `KEYEVENTF_UNICODE` for arbitrary text. Falls back to per-char scan-code when an active game ignores Unicode input (game profile flag).
-- **Raw scan codes** can be requested for games that read keyboard via raw input (most FPS games). Profile flag `keyboard.use_scancodes = true`.
+- **Absolute mouse moves are sent as relative deltas in steps,** following an `AimCurve`. Single absolute jump reserved for `MouseMove { curve: Instant, .. }`.
+- **`SendInput` is called in batches** when emitting curve steps (e.g., 50 deltas in one `SendInput([..50])` call). Per-call overhead amortizes ~2 µs to ~0.04 µs per delta.
+- **Modifier state tracked locally.** `held_keys` ensures `ReleaseAll` releases everything we pressed, even on panic.
+- **Unicode text** uses `KEYEVENTF_UNICODE`. Falls back to per-char scan-code when an active game ignores Unicode input (game profile flag).
+- **Raw scan codes** can be requested for games reading keyboard via raw input (most FPS games). Profile flag `keyboard.use_scancodes = true`.
 
 Latency p99 (idle Windows 11, RTX 3060, foreground app responsive):
 
@@ -147,26 +147,26 @@ Latency p99 (idle Windows 11, RTX 3060, foreground app responsive):
 | `Instant` | Single jump to target | Productivity (click a menu); only when speed matters more than naturalness |
 | `Linear` | Constant velocity | Simple lerp; for `mouse_move` requests with explicit duration |
 | `EaseInOut` | Smoothstep velocity | Default for productivity UI clicks |
-| `Bezier { p1, p2 }` | Cubic Bezier with two control points | Default for game aim; control points sampled stochastically from a bounded region |
+| `Bezier { p1, p2 }` | Cubic Bezier with two control points | Default for game aim; control points sampled stochastically from bounded region |
 | `Natural { tremor, micro_correct }` | Bezier with overshoot + micro-correction + sub-pixel tremor | Anti-detection profile; mimics human motor signature |
 
-Each curve emits `N` steps over the requested `duration`. Default `N = max(8, duration_ms / 4)`. Steps are spaced by:
+Each curve emits `N` steps over the requested `duration`. Default `N = max(8, duration_ms / 4)`. Step spacing:
 
 - `Linear`: uniform
 - `EaseInOut`: smoothstep `t' = 3t² - 2t³`
 - `Bezier`: cubic Bezier sampling
-- `Natural`: Bezier + Gaussian sub-pixel jitter per step + a final 1-3 step micro-correction sequence
+- `Natural`: Bezier + Gaussian sub-pixel jitter per step + final 1-3 step micro-correction sequence
 
 ### Why `Natural` matters
 
-Modern anti-cheat systems and anti-bot frameworks detect linear / perfectly-Bezier cursor motion via:
+Anti-cheat / anti-bot frameworks detect linear / perfectly-Bezier cursor motion via:
 
 - Inter-arrival timing variance (humans have Gaussian-ish per-step delays)
 - Velocity profile (humans accelerate-decelerate, not constant)
 - Endpoint precision (humans overshoot then micro-correct)
-- Sub-pixel positioning (humans don't land on pixel-aligned targets perfectly)
+- Sub-pixel positioning (humans don't land perfectly pixel-aligned)
 
-`Natural` curve injects all four characteristics. Parameters are profile-tunable; the curve is deterministic given the same seed (we expose a seed for replay determinism).
+`Natural` injects all four characteristics. Parameters are profile-tunable; the curve is deterministic given the same seed (seed exposed for replay determinism).
 
 ### Curve parameters
 
@@ -181,7 +181,7 @@ pub struct AimNaturalParams {
 }
 ```
 
-Defaults are tuned to match published human-aim datasets. The agent rarely needs to touch these; profiles set them per game.
+Defaults tuned against published human-aim datasets. Agent rarely touches these; profiles set them per game.
 
 ---
 
@@ -197,9 +197,9 @@ pub enum KeystrokeDynamics {
 }
 ```
 
-`Natural` samples inter-keystroke interval (IKI) from a Gaussian; if `bigram_bias`, common bigrams ("th", "he", "in") get reduced IKI to match human bigram statistics.
+`Natural` samples inter-keystroke interval (IKI) from Gaussian; if `bigram_bias`, common bigrams ("th", "he", "in") get reduced IKI matching human bigram stats.
 
-Default for productivity apps: `Burst`. Default for game profiles where typing in chat matters: `Natural`.
+Default for productivity apps: `Burst`. Default for game profiles where chat typing matters: `Natural`.
 
 ---
 
@@ -218,10 +218,10 @@ enum VigemPad {
 }
 ```
 
-- One `Client` per process (singleton). Connection is opened lazily on first `PadButton` / `PadStick` / `PadTrigger` / `PadReport`.
-- Pads are plugged in on first reference; unplugged on shutdown (RAII; also handled via panic hook).
-- `wait_for_ready` is called on plug-in to avoid `TargetNotReady` errors.
-- `GamepadReport` is updated by accumulating partial commands (a `PadButton(A, down)` flips a bit in the cached report and re-sends).
+- One `Client` per process (singleton). Connection opened lazily on first `PadButton` / `PadStick` / `PadTrigger` / `PadReport`.
+- Pads plugged in on first reference; unplugged on shutdown (RAII; also via panic hook).
+- `wait_for_ready` called on plug-in to avoid `TargetNotReady` errors.
+- `GamepadReport` updated by accumulating partial commands (a `PadButton(A, down)` flips a bit in cached report and re-sends).
 
 ### Pad state model
 
@@ -237,21 +237,21 @@ pub struct GamepadReport {
 }
 ```
 
-Compatible with both X360 and DS4 reports. The back-end translates fields per pad type.
+Compatible with both X360 and DS4 reports. Back-end translates fields per pad type.
 
 ### Pad analog handling
 
 `PadStick { x, y }` accepts -1.0..1.0; multiplied by 32767 internally. `PadTrigger { value }` accepts 0.0..1.0; multiplied by 255.
 
-Smoothing: by default, stick deltas of >0.5 in 16ms snap immediately (game-driven smoothing handles overshoot). For racing/sim profiles, an `AnalogCurve::Smooth { tau_ms }` can be configured to interpolate stick movement over time.
+Smoothing: by default, stick deltas >0.5 in 16ms snap immediately (game-driven smoothing handles overshoot). For racing/sim profiles, `AnalogCurve::Smooth { tau_ms }` interpolates stick movement over time.
 
 ---
 
 ## 9. Hardware HID back-end
 
-When `--hardware-hid <port>` is set, an additional back-end is available. Routes to a serial-protocol driver in `synapse-hid-host` that talks to an RP2040 board running our firmware (`firmware/pico-hid/`).
+When `--hardware-hid <port>` is set, an additional back-end is available. Routes to a serial-protocol driver in `synapse-hid-host` talking to an RP2040 board running our firmware (`firmware/pico-hid/`).
 
-The board enumerates as a generic HID composite device (mouse + keyboard + gamepad). The PC sees it as a real USB peripheral. No `SendInput`, no virtual driver, no signal interception possible.
+The board enumerates as generic HID composite device (mouse + keyboard + gamepad). PC sees a real USB peripheral. No `SendInput`, no virtual driver, no signal interception possible.
 
 Routing:
 
@@ -267,13 +267,13 @@ match action {
 }
 ```
 
-Protocol, latency, and firmware design are in `09_hardware_hid_gateway.md`. Host driver in `synapse-hid-host`.
+Protocol, latency, and firmware design: `09_hardware_hid_gateway.md`. Host driver: `synapse-hid-host`.
 
 ---
 
 ## 10. High-level intents
 
-`AimAt` and `Combo` are not transmitted to OS directly — they are compiled at the actor into a sequence of primitive actions.
+`AimAt` and `Combo` are NOT transmitted to OS directly — compiled at the actor into primitive action sequences.
 
 ### AimAt compilation
 
@@ -311,7 +311,7 @@ Action::Combo {
 schedules each step on the reflex runtime's tick wheel at the exact ms offset
 ```
 
-Combo execution runs on the reflex runtime thread to hit frame-accurate timing.
+Combo execution runs on reflex runtime thread for frame-accurate timing.
 
 ---
 
@@ -319,9 +319,9 @@ Combo execution runs on the reflex runtime thread to hit frame-accurate timing.
 
 Three layers ensure no stuck inputs:
 
-1. **Per-action timeout.** `KeyDown` without a paired `KeyUp` within `held_key_max_duration_ms` (default 30s) emits an automatic `KeyUp` and logs `STUCK_KEY_AUTO_RELEASED`.
-2. **Shutdown handler.** `ReleaseAll` is sent on SIGINT / SIGTERM and on the tokio cancellation token's cancellation.
-3. **Panic hook.** A process-wide panic hook (`std::panic::set_hook`) calls a static `RELEASE_ALL_HANDLE: OnceCell<ActionHandle>` to fire `ReleaseAll` even on unhandled panic before the process dies.
+1. **Per-action timeout.** `KeyDown` without paired `KeyUp` within `held_key_max_duration_ms` (default 30s) emits an automatic `KeyUp` and logs `STUCK_KEY_AUTO_RELEASED`.
+2. **Shutdown handler.** `ReleaseAll` sent on SIGINT / SIGTERM and on tokio cancellation token's cancellation.
+3. **Panic hook.** Process-wide panic hook (`std::panic::set_hook`) calls static `RELEASE_ALL_HANDLE: OnceCell<ActionHandle>` to fire `ReleaseAll` even on unhandled panic before the process dies.
 
 `ReleaseAll` does:
 
@@ -330,13 +330,13 @@ Three layers ensure no stuck inputs:
 - All ViGEm pads → neutral report (no buttons, sticks centered, triggers 0)
 - All hardware HID inputs → neutral
 
-This runs in ≤ 10 ms.
+Runs in ≤ 10 ms.
 
 ---
 
 ## 12. Authorization layer
 
-Not every action is allowed by default. The MCP handler applies:
+Not every action is allowed by default. MCP handler applies:
 
 | Action class | Default | Override |
 |---|---|---|
@@ -352,15 +352,15 @@ See `11_security_and_safety.md` for the full permission model.
 
 ## 13. Click-on-element semantics
 
-A common agent pattern is "click the Save button." Two layers of resolution:
+Common agent pattern: "click the Save button." Two resolution layers:
 
-1. **A11y-targeted click.** Caller passes an `element_id` from a recent `observe()` result. The actor:
-   - Re-resolves the element via UIA (it may have moved).
-   - Calls `IUIAutomationInvokePattern::Invoke` if the element supports Invoke — semantic click, no cursor movement.
-   - Falls back to clicking the center of the element's bounding rect with the chosen curve.
+1. **A11y-targeted click.** Caller passes an `element_id` from a recent `observe()` result. Actor:
+   - Re-resolves element via UIA (may have moved).
+   - Calls `IUIAutomationInvokePattern::Invoke` if element supports Invoke — semantic click, no cursor movement.
+   - Falls back to clicking center of element's bounding rect with chosen curve.
 2. **Coordinate click.** Caller passes raw `(x, y)`. Pure pixel click.
 
-Semantic invoke is faster and more reliable than coordinate click for productivity apps; it's the default when an element_id is provided.
+Semantic invoke is faster and more reliable than coordinate click for productivity apps; default when `element_id` is provided.
 
 For games (no a11y), only coordinate clicks are possible.
 
@@ -368,16 +368,16 @@ For games (no a11y), only coordinate clicks are possible.
 
 ## 14. Drag, scroll, multi-click
 
-- **Drag.** `MouseDrag { from, to, ... }` = `MouseButton(down) + MouseMove(curve) + MouseButton(up)`. Curve drives the in-flight motion.
-- **Scroll.** `MouseScroll { dy, dx }` uses `SendInput` with `MOUSEEVENTF_WHEEL` / `MOUSEEVENTF_HWHEEL`. Optional `at` point first moves the cursor.
-- **Double-click.** Two `MouseButton` actions within `GetDoubleClickTime()` (default 500ms). The actor injects the gap; the agent doesn't manage it.
+- **Drag.** `MouseDrag { from, to, ... }` = `MouseButton(down) + MouseMove(curve) + MouseButton(up)`. Curve drives in-flight motion.
+- **Scroll.** `MouseScroll { dy, dx }` uses `SendInput` with `MOUSEEVENTF_WHEEL` / `MOUSEEVENTF_HWHEEL`. Optional `at` point first moves cursor.
+- **Double-click.** Two `MouseButton` actions within `GetDoubleClickTime()` (default 500ms). Actor injects the gap; agent doesn't manage it.
 - **Triple-click.** Three within the same time window. For text-selection ops on plain edit fields.
 
 ---
 
 ## 15. Input rate limiting
 
-Per back-end caps to prevent the OS or virtual device from being overwhelmed:
+Per back-end caps prevent OS or virtual device overwhelm:
 
 | Back-end | Per-second cap |
 |---|---|
@@ -385,21 +385,21 @@ Per back-end caps to prevent the OS or virtual device from being overwhelmed:
 | ViGEm | 1000 reports/s (Xbox 360 USB poll rate ~1ms anyway) |
 | Hardware HID | depends on USB poll rate; default 1000 events/s |
 
-Saturation returns `ACTION_RATE_LIMITED` and re-queues the action with a small backoff.
+Saturation returns `ACTION_RATE_LIMITED` and re-queues with a small backoff.
 
 ---
 
 ## 16. Determinism and replay
 
-Every action sent through the actor is persisted to `CF_EVENTS` with:
+Every action through the actor is persisted to `CF_EVENTS` with:
 
-- The originating call site (MCP tool / reflex id)
-- The actual back-end used
-- The exact parameters
-- The success/failure result
-- The completion timestamp
+- Originating call site (MCP tool / reflex id)
+- Actual back-end used
+- Exact parameters
+- Success/failure result
+- Completion timestamp
 
-`synapse-mcp replay <session_id>` replays the actions deterministically (same seeds, same curves) against the same back-end. Used for debug and for regression testing.
+`synapse-mcp replay <session_id>` replays actions deterministically (same seeds, same curves) against the same back-end. Used for debug and regression testing.
 
 ---
 
@@ -420,9 +420,9 @@ pub const SAFETY_RELEASE_ALL_FIRED: &str = "SAFETY_RELEASE_ALL_FIRED";
 
 ---
 
-## 18. What this doc does NOT cover
+## 18. Out of scope for this doc
 
 - Reflex bindings (aim_track, on_event) → `04_reflex_runtime.md`
-- MCP tool surface that wraps these actions → `05_mcp_tool_surface.md`
+- MCP tool surface wrapping these actions → `05_mcp_tool_surface.md`
 - Hardware HID firmware design → `09_hardware_hid_gateway.md`
 - Anti-cheat policy and back-end gating → `08_anti_cheat_policy.md`

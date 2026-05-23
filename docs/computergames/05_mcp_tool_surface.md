@@ -2,17 +2,15 @@
 
 ## 1. Design rules
 
-These rules constrain every tool we ship.
-
-1. **Tool count cap: 30 at v1.** Tools that overlap are merged. Profile and parameter knobs are the escape hatches.
+1. **Tool count cap: 30 at v1.** Overlapping tools merge. Profile and parameter knobs are the escape hatches.
 2. **One tool, one verb.** No `do_everything(action_kind, ...)` mega-tools.
 3. **Structured input, structured output.** Every tool defines a JSON Schema with `additionalProperties: false`. Every response carries explicit fields, no free-form text.
-4. **No silent success.** If the tool did not do the work, it returns an MCP error with `code: SCREAMING_SNAKE_CASE`, never `success: true` with a partial result.
+4. **No silent success.** If a tool did not do the work, it returns an MCP error with `code: SCREAMING_SNAKE_CASE`, never `success: true` with a partial result.
 5. **All async; all cancellable.** Long-running tools support progress notifications via Streamable HTTP SSE upgrade.
-6. **Idempotency tokens where it matters.** `act_run_shell`, `act_launch`, and similar accept an optional `idempotency_key` so the agent can retry safely.
-7. **Stable identifiers.** `element_id`, `entity_id`, `track_id`, `reflex_id`, `session_id` are returned by tools and accepted unchanged by subsequent calls. The agent never invents these.
+6. **Idempotency tokens where it matters.** `act_run_shell`, `act_launch`, and similar accept an optional `idempotency_key` for safe retries.
+7. **Stable identifiers.** `element_id`, `entity_id`, `track_id`, `reflex_id`, `session_id` are returned by tools and accepted unchanged by subsequent calls. Agent never invents these.
 
-The tool list below is the contract. Schemas use abbreviated JSON Schema syntax; the canonical schema lives in `synapse-mcp/src/tools/definitions/*.rs` and is exported as part of the standard MCP `tools/list` response.
+The tool list below is the contract. Schemas use abbreviated JSON Schema syntax; canonical schema lives in `synapse-mcp/src/tools/definitions/*.rs` and is exported via standard MCP `tools/list`.
 
 ---
 
@@ -59,7 +57,7 @@ The tool list below is the contract. Schemas use abbreviated JSON Schema syntax;
 
 ### 3.1 `observe`
 
-Returns the current unified perception observation.
+Returns current unified perception observation.
 
 ```json
 {
@@ -84,7 +82,7 @@ Returns the current unified perception observation.
 
 Returns `Observation` (see `06_data_schemas.md`). Typical size 1–6 KB.
 
-Errors: `OBSERVE_NO_PERCEPTION_AVAILABLE` (all sensors down), `OBSERVE_INTERNAL` (unexpected).
+Errors: `OBSERVE_NO_PERCEPTION_AVAILABLE` (all sensors down), `OBSERVE_INTERNAL`.
 
 ### 3.2 `find`
 
@@ -136,7 +134,7 @@ Implementation: combines string similarity against UIA names/automation IDs and 
 
 ### 3.3 `describe`
 
-Slow-path natural-language description of the screen using a small VLM. Used for first-orientation on unknown games or when a11y + detection produce sparse results.
+Slow-path natural-language description via small VLM. Used for first-orientation on unknown games or when a11y + detection produce sparse results.
 
 ```json
 {
@@ -162,7 +160,7 @@ Returns:
 }
 ```
 
-Latency is high (100–500 ms). Agents should use this sparingly; default to `observe` + `find` first.
+Latency 100–500 ms. Use sparingly; default to `observe` + `find` first.
 
 ### 3.4 `read_text`
 
@@ -226,7 +224,7 @@ Errors: `HUD_NO_ACTIVE_PROFILE`, `HUD_FIELD_NOT_DEFINED`.
 
 ### 3.6 `audio_tail`
 
-Returns a summary of recent audio events.
+Returns summary of recent audio events.
 
 ```json
 {
@@ -281,7 +279,7 @@ Returns:
 
 ### 3.8 `subscribe`
 
-Opens a push stream (SSE) of filtered events. Returns immediately with a `subscription_id`; events arrive as MCP notifications.
+Opens a push stream (SSE) of filtered events. Returns immediately with `subscription_id`; events arrive as MCP notifications.
 
 ```json
 {
@@ -305,11 +303,11 @@ Returns:
 
 Push events arrive as JSON-RPC notifications with method `synapse/event` and params containing the `Event` value.
 
-To cancel: `mcp/cancelled` JSON-RPC notification with the original request id. Synapse also exposes `subscribe_cancel(subscription_id)` for explicit teardown.
+To cancel: `mcp/cancelled` JSON-RPC notification with original request id. Also exposes `subscribe_cancel(subscription_id)` for explicit teardown.
 
 ### 3.9 `set_capture_target`
 
-Reconfigures the active capture target.
+Reconfigures active capture target.
 
 ```json
 {
@@ -655,7 +653,7 @@ Returns `{ "reflex_id": "..." }`.
 
 ### 3.24 `reflex_list`
 
-Returns all currently-active reflexes for this session with their state.
+Returns all currently-active reflexes for this session with state.
 
 ### 3.25 `reflex_history`
 
@@ -682,7 +680,7 @@ Returns past reflex events (fires, cancellations, lifetime expiries, conflicts) 
 {"name": "release_all", "input_schema": {"type": "object", "additionalProperties": false}}
 ```
 
-Returns the count of released inputs by class.
+Returns count of released inputs by class.
 
 ### 3.27 `profile_list`
 
@@ -782,7 +780,7 @@ All errors follow JSON-RPC `error` shape:
 }
 ```
 
-`code: SCREAMING_SNAKE_CASE` in `data.code` is the stable identifier; the numeric JSON-RPC `code` is always `-32099` (server-defined error) or `-32602` (invalid params).
+`code: SCREAMING_SNAKE_CASE` in `data.code` is the stable identifier; numeric JSON-RPC `code` is always `-32099` (server-defined error) or `-32602` (invalid params).
 
 Full error code catalog in `06_data_schemas.md` §Error codes.
 
@@ -795,21 +793,21 @@ Full error code catalog in `06_data_schemas.md` §Error codes.
 | stdio | Local agent client (Claude Desktop, Codex CLI) | Tool calls + push notifications via the same stream |
 | Streamable HTTP | Remote / multi-agent | Tool calls (POST JSON), push events (SSE upgrade on GET), session via `Mcp-Session-Id` header |
 
-The server binary selects via `--mode {stdio|http}`. `--bind 127.0.0.1:7700` for HTTP; default bind is localhost-only.
+Server binary selects via `--mode {stdio|http}`. `--bind 127.0.0.1:7700` for HTTP; default bind is localhost-only.
 
-For long-running tools (e.g., `describe` with VLM inference, `audio_transcribe`), the server upgrades to SSE and emits progress notifications:
+For long-running tools (`describe` with VLM inference, `audio_transcribe`), server upgrades to SSE and emits progress notifications:
 
 ```json
 {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"...","progress":50,"total":100,"message":"Inference 50% done"}}
 ```
 
-The final response arrives as a normal JSON-RPC reply when complete.
+Final response arrives as a normal JSON-RPC reply when complete.
 
 ---
 
 ## 6. Session model
 
-`initialize` creates a session. The server returns `Mcp-Session-Id` (HTTP) or implicitly tracks the stdio process. Per-session state:
+`initialize` creates a session. Server returns `Mcp-Session-Id` (HTTP) or implicitly tracks the stdio process. Per-session state:
 
 - Active capture target
 - Active perception mode
@@ -821,13 +819,13 @@ The final response arrives as a normal JSON-RPC reply when complete.
 
 Closing the session (or process exit) cancels all subscriptions and reflexes, releases all held inputs (via `release_all`), and persists session metadata to `CF_SESSIONS`.
 
-A `delete` request to the MCP endpoint with the session id explicitly tears down the session.
+`delete` request to the MCP endpoint with session id explicitly tears down the session.
 
 ---
 
 ## 7. Push event format
 
-When a subscription fires, the server emits:
+On subscription fire, server emits:
 
 ```json
 {
@@ -846,9 +844,9 @@ When a subscription fires, the server emits:
 }
 ```
 
-The agent's MCP client must implement notification handling (most do natively).
+Agent's MCP client must implement notification handling (most do natively).
 
-For resumability over HTTP, each SSE event carries `id: <seq>`. On reconnect, the client sends `Last-Event-ID: <seq>` and the server replays buffered events from there. Buffer depth is 4096 events per subscription.
+For resumability over HTTP, each SSE event carries `id: <seq>`. On reconnect, client sends `Last-Event-ID: <seq>` and server replays buffered events from there. Buffer depth: 4096 events per subscription.
 
 ---
 
@@ -902,10 +900,10 @@ For resumability over HTTP, each SSE event carries `id: <seq>`. On reconnect, th
 
 ---
 
-## 9. What this doc does NOT cover
+## 9. Out of scope
 
 - Internal `Action` enum and back-end selection → `03_action.md`
 - Reflex semantics in detail → `04_reflex_runtime.md`
 - Observation struct fields → `06_data_schemas.md`
 - Profile TOML fields → `07_storage_and_profiles.md`
-- HTTP transport details → `01_architecture.md` and reference `rmcp` docs
+- HTTP transport details → `01_architecture.md` and `rmcp` reference docs

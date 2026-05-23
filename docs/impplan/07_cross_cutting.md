@@ -1,0 +1,228 @@
+# 07 — Cross-cutting concerns
+
+Discipline applied across M0-M5, not owned by any single phase. Pointers to authoritative PRD sections; impplan adds enforcement rules.
+
+---
+
+## 1. Perf gate workflow (per PR, every phase)
+
+Per `10_performance_budget.md` + `13_testing_strategy.md` §7.
+
+Tracked benches (perf-regression CI):
+
+| Bench | Target p99 | First defined in |
+|---|---|---|
+| `observe_warm_a11y_only` | ≤ 10 ms | M1 |
+| `observe_warm_hybrid` | ≤ 30 ms | M1 |
+| `event_to_subscriber` | ≤ 50 ms | M3 |
+| `reflex_tick_jitter_idle` | ≤ 200 µs | M3 |
+| `reflex_tick_jitter_under_load` | ≤ 500 µs | M3 |
+| `aim_curve_step_calc_natural` | ≤ 1 µs/step | M2 |
+| `action_software_press` | ≤ 3 ms | M2 |
+| `action_hardware_press` | ≤ 5 ms | M4 |
+| `detection_yolov10n_640` | ≤ 8 ms (GPU) | M1 (model present) / M4 (in profile) |
+| `ocr_winrt_120x32` | ≤ 8 ms | M1 |
+| `serialize_observation_typical` | ≤ 5 ms | M1 |
+
+PR delta > 20% on any tracked bench ⇒ merge blocked until either (a) fix, (b) ADR amending the target with measurable justification.
+
+Spike check active in production (`10 §15`): any subsystem > 2× p99 for > 5 s ⇒ `synapse-performance-degraded` event + `health.subsystems.X.status="degraded_latency"`.
+
+---
+
+## 2. Security review checklist (per PR touching action / capture / storage / mcp transport)
+
+Per `11_security_and_safety.md`.
+
+```
+✓ Loopback-only default unchanged (or ADR for new bind)
+✓ Bearer-token auth path unchanged for HTTP routes (or rotation tested)
+✓ Origin/Host check intact
+✓ No new path bypasses redaction (synapse-core::redact applied to all 8 surfaces in 11 §5.3)
+✓ No new permission class without default-deny + explicit `--allow-X` gate
+✓ Forbidden capabilities still compile-time disabled (11 §7)
+✓ `unsafe` only in synapse-capture / synapse-hid-host / firmware/pico-hid
+✓ `cargo deny check` clean for any new dep
+✓ `cargo audit` clean
+✓ AC tier gating unchanged (08 §4 / §8) or extended w/ ADR
+```
+
+For PRs adding a new MCP tool: declare `required_permissions(params)` returning the `Permission` set; MCP layer checks before dispatch.
+
+---
+
+## 3. Observability gate (per PR)
+
+Per `12_observability.md`.
+
+```
+✓ Every non-trivial fn has tracing::instrument or manual span!
+✓ Metric labels bounded (no session_id / image_hash as label keys)
+✓ Log level appropriate (error/warn/info/debug/trace)
+✓ Subsystem status surfaceable via health tool
+✓ New error code paths emit the code via tracing + structured fields
+✓ Replay log (CF_EVENTS) captures the new event kind if user-visible
+```
+
+For PRs adding new event kinds: register in `06 §3.1` catalog + update `synapse-core::Event::kind` validators.
+
+---
+
+## 4. Test discipline (per PR)
+
+Per `13_testing_strategy.md`.
+
+| Layer | Required for | Notes |
+|---|---|---|
+| Unit | every pub fn w/ non-trivial logic | error variant must be triggered |
+| Integration | every subsystem boundary | real OS where possible (capture, RocksDB, UIA on Win) |
+| Property | filter eval, aim curves, keystroke, coord transforms, bincode round-trip | `proptest` |
+| Snapshot | tool schemas, observation shape, error response shape | `insta` |
+| Bench | tracked perf bench list (§1 above) | `criterion`, regression PR gate |
+| E2E | each milestone's demo scenario | real Notepad, real Minecraft, real RP2040 |
+| Fuzz | protocol parsers (MCP JSON-RPC, HID serial, EventFilter, Profile TOML) | `cargo-fuzz` 10 min/target nightly |
+| Soak | weekly per `13 §12` | 8 h synthetic workload |
+
+**No mocks gate completion** (PRD authoring rule). Mocks acceptable for fast unit-level isolation; real-OS coverage required for integration + E2E.
+
+---
+
+## 5. Dep + license policy (per PR adding deps)
+
+Per `14_build_and_packaging.md` §14 + `deny.toml`.
+
+Allowed: `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `MPL-2.0`, `ISC`, `Zlib`, `Unicode-DFS-2016`.
+Blocked: `GPL-*`, `AGPL-*`, `SSPL-*`, vendored deps w/o SPDX id.
+
+Adding a dep requires:
+
+1. Pin version in `[workspace.dependencies]`
+2. Justification in PR description (what it replaces / why no smaller alt)
+3. License field in dep's manifest matches allowed list
+4. Update `THIRD-PARTY-LICENSES.md` via `cargo about`
+
+AGPL ML weights (Ultralytics YOLO trained checkpoints) **never bundled** per `OQ-025`. Operator downloads themselves.
+
+---
+
+## 6. Release process (per tag)
+
+Per `14 §12`. Applies to every `vX.Y.Z` tag (and the M0-M4 archival `v0.1.0-mN` tags).
+
+```
+1. Branch release/x.y.z from main
+2. Tag vx.y.z on the commit
+3. CI release job builds + signs:
+   - synapse-mcp.exe (release profile)
+   - synapse-overlay.exe
+   - SynapseSetup-x.y.z.msi
+   - synapse-portable-x.y.z-windows-x64.zip
+   - synapse-pico-hid-x.y.z.uf2
+4. Upload to GitHub Releases w/ release notes
+5. (v1.0+) cargo publish for library crates
+6. (v1.0+) winget manifest PR
+```
+
+Each tag requires:
+
+- All acceptance gates of the corresponding phase green
+- Manual test plan signed off (`13 §15`) for v1.0.0+
+- CHANGELOG entry summarizing changes
+- Schema-compat note if any storage shape changed
+
+---
+
+## 7. ADR workflow (when `16_open_questions.md` resolves)
+
+Per `00_methodology.md` §10.
+
+1. Check OQ list for matching entry
+2. Create `docs/adr/NNN-<title>.md` with:
+   - Context (what changed; what evidence forces a decision)
+   - Decision
+   - Consequences (PRD diffs, code impact, what new OQs open)
+3. Update OQ entry to `## OQ-NNN — <summary> — DECIDED <YYYY-MM-DD>` + ADR link
+4. Patch any PRD doc whose claim becomes stale (same PR)
+5. PR title: `adr(NNN): <one-line>`
+
+ADRs are append-only once merged. Revisions create new ADRs (`NNN-superseded-by-MMM`).
+
+---
+
+## 8. Documentation hygiene (per PR touching docs)
+
+Per `compressionprompt.md` doctrine (universal):
+
+| Rule | Mechanism |
+|---|---|
+| Numbers, paths, error codes verbatim | manual review + grep gate for known dupe forms |
+| Markdown headings + tables + code fences as primary structure | review pattern |
+| Cross-doc references by file path, not restated content | `scripts/check_docs.ps1` resolves all `[text](path.md)` links |
+| Defined terms once at top of each doc, used densely below | review pattern |
+| One instruction per sentence in normative rules | review pattern (ASD-STE100 §4.12) |
+| No emojis unless user-requested | CI grep |
+
+When PRD §X content moves: leave a one-line `→ see §Y` stub for the link target, don't silently delete.
+
+---
+
+## 9. Open question decision targets — phase mapping
+
+Closes during the phase that hits the decision:
+
+| Phase | Open questions to close |
+|---|---|
+| M1 | OQ-009 (max_elements default; M5 telem feedback expected); OQ-010 (CDP auto-attach); OQ-024 (token budget enforcement); OQ-023 (element_id stability) |
+| M2 | OQ-004 (productivity aim curve default) — partial; final at M5 |
+| M3 | OQ-001 (RocksDB primary or sled flip); OQ-015 (profile match precedence final); OQ-022 (recursion guard); OQ-029 (per-event vs batched notifications); OQ-005 (reflex priority); OQ-012 (multi-monitor) |
+| M4 | OQ-003 (detection model default — YOLOv10n vs RT-DETR-s); OQ-013 (aim_track EMA smoothing); OQ-016 (action coalescing on hardware) |
+| M5 | OQ-008 (VLM bundling); OQ-014 (Whisper-tiny vs base); OQ-017 (disk pressure thresholds); OQ-019 (telemetry split); OQ-020 (`game_screenshot_once` exposure); OQ-030 (GC cadence final) |
+| v1.x | OQ-006 (per-session permissions); OQ-007 (profile signing); OQ-021 (HRTF audio); OQ-027 (Tier 2 2FA); OQ-028 (migrations vs wipe); OQ-026 (cross-platform start trigger); OQ-018 (replay format final) |
+
+OQs not landing in a phase ⇒ deferred forward with explicit note in `16_open_questions.md`.
+
+---
+
+## 10. CI matrix authority
+
+Per `13_testing_strategy.md` §14. Repeated for forcing function:
+
+| Job | OS | Trigger |
+|---|---|---|
+| `cargo fmt --check` | ubuntu | every PR |
+| `cargo clippy --workspace --all-targets -- -D warnings` | windows | every PR |
+| `cargo test --workspace` | windows | every PR |
+| `cargo test --workspace --no-default-features` | windows | every PR |
+| `cargo build --release --workspace` | windows | every PR |
+| `cargo deny check` | ubuntu | every PR |
+| `cargo audit` | ubuntu | every PR + daily cron |
+| `insta review --check` | ubuntu | every PR |
+| `scripts/check_docs.ps1` | ubuntu | every PR |
+| `e2e-real-windows` | self-hosted windows | nightly |
+| `bench-regression` | self-hosted windows | weekly + PR delta gate |
+| `hardware-in-loop` | self-hosted w/ Pico | weekly |
+| `soak` | self-hosted windows | weekly |
+| `fuzz` | ubuntu | nightly, 10 min/target |
+
+PR cannot merge without "every PR" jobs green. Nightly/weekly failures block the next phase tag.
+
+---
+
+## 11. Coverage targets (per `13 §16`)
+
+| Crate | Target | Tool |
+|---|---|---|
+| `synapse-core` | 95% | `tarpaulin` (Linux for pure crates) |
+| `synapse-storage`, `synapse-profiles`, `synapse-reflex`, `synapse-action` | 85% | tarpaulin |
+| `synapse-capture`, `synapse-a11y`, `synapse-audio`, `synapse-perception` | 70% | OS-bound; Windows tarpaulin where supported |
+| `synapse-models`, `synapse-hid-host`, `synapse-telemetry` | 80% | tarpaulin |
+
+> 5% drop on a PR blocks merge.
+
+---
+
+## 12. The single-line invariant
+
+> The model is the brain. Synapse is the body. (`00_vision_and_scope.md` §12)
+
+Every PR must preserve this. PRs that add planning, MCTS, GOAP, skill libraries, inner LLM, world model, or learning loops ⇒ rejected without ADR.

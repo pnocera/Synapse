@@ -1,8 +1,8 @@
 # 06 — Data Schemas
 
-Canonical type definitions live in `synapse-core`. JSON serialization via `serde` (`#[serde(rename_all = "snake_case")]` everywhere). Bincode for RocksDB hot paths only.
+Canonical types live in `synapse-core`. JSON serialization via `serde` (`#[serde(rename_all = "snake_case")]` everywhere). Bincode for RocksDB hot paths only.
 
-This doc is the spec; the Rust code in `synapse-core/src/types.rs` is the implementation. Drift between them is a CI failure.
+This doc is the spec; `synapse-core/src/types.rs` is the implementation. Drift between them is a CI failure.
 
 ---
 
@@ -62,13 +62,13 @@ pub type SubscriptionId = String; // UUID-v7
 pub type ProfileId = String;     // "namespace.name", e.g., "minecraft.java"
 ```
 
-`ElementId` is composite: the window HWND plus the UIA `RuntimeId` hex. This is stable across snapshots within a session but NOT across sessions; a re-launched window gets a new RuntimeId.
+`ElementId` is composite: window HWND plus UIA `RuntimeId` hex. Stable across snapshots within a session but NOT across sessions; a re-launched window gets a new RuntimeId.
 
 ---
 
 ## 2. Observation
 
-The unified perception result returned by `observe()`.
+Unified perception result returned by `observe()`.
 
 ```rust
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -308,7 +308,7 @@ pub struct EventRef {
 }
 ```
 
-`EventSummary` is the trimmed form returned in `Observation.recent_events`:
+`EventSummary` is the trimmed form in `Observation.recent_events`:
 
 ```rust
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -351,7 +351,7 @@ This is the v1 catalog. Additions go through ADR.
 
 ### 3.2 EventFilter
 
-The mini-language used by `subscribe()` and `reflex_register(on_event)`.
+Mini-language used by `subscribe()` and `reflex_register(on_event)`.
 
 ```rust
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -382,7 +382,7 @@ pub enum DataPredicate {
 }
 ```
 
-`path` is JSON-Pointer style: `/track_id`, `/field`, `/bbox/x`. The evaluator is in `synapse-core::filter`.
+`path` is JSON-Pointer style: `/track_id`, `/field`, `/bbox/x`. Evaluator in `synapse-core::filter`.
 
 Example: "low HP event":
 
@@ -401,7 +401,7 @@ Example: "low HP event":
 
 ## 4. Action types
 
-The full `Action` enum referenced in `03_action.md`. Each variant carries a `backend` field where applicable.
+Full `Action` enum referenced in `03_action.md`. Each variant carries a `backend` field where applicable.
 
 ```rust
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -614,7 +614,7 @@ pub enum ReflexStatus {
 
 ## 6. Profile schema
 
-Stored as TOML on disk under `profiles/<id>.toml`. Loaded into:
+Stored as TOML under `profiles/<id>.toml`. Loaded into:
 
 ```rust
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -733,7 +733,7 @@ Profile TOML examples in `07_storage_and_profiles.md`.
 
 ## 7. Storage records (RocksDB values)
 
-Most CF values are bincode-serialized for storage efficiency; some are JSON for human inspection. The choice is documented in `07_storage_and_profiles.md`.
+Most CF values are bincode-serialized for storage efficiency; some are JSON for human inspection. Choice documented in `07_storage_and_profiles.md`.
 
 ```rust
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -914,19 +914,19 @@ SAFETY_LAUNCH_DENIED_BY_POLICY
 SAFETY_SECRET_REDACTED
 ```
 
-All codes are exported as `pub const NAME: &str = "NAME";` in `synapse-core::error_codes`. Tests assert the constants match their literal string.
+All codes exported as `pub const NAME: &str = "NAME";` in `synapse-core::error_codes`. Tests assert constants match their literal string.
 
 ---
 
 ## 9. Versioning
 
-`SCHEMA_VERSION` constant in `synapse-core`. Every persisted record carries this version. Reading a record with mismatched version returns `STORAGE_SCHEMA_MISMATCH`; the operator wipes the DB and restarts.
+`SCHEMA_VERSION` constant in `synapse-core`. Every persisted record carries this version. Reading a record with mismatched version returns `STORAGE_SCHEMA_MISMATCH`; operator wipes the DB and restarts.
 
-Pre-v1 versions: bump major freely. Post-v1: schema changes require ADR + migration plan or DB wipe with release-notes warning.
+Pre-v1: bump major freely. Post-v1: schema changes require ADR + migration plan or DB wipe with release-notes warning.
 
 ---
 
-## 10. What this doc does NOT cover
+## 10. Out of scope
 
 - Storage layout, CF list, key encoding → `07_storage_and_profiles.md`
 - Profile TOML examples → `07_storage_and_profiles.md`
