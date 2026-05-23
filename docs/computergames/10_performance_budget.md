@@ -101,7 +101,7 @@ Different profiles change the load. A game profile must not blow up productivity
 | Minecraft (pixel_only) | 60 | YOLOv10n | HUD continuous | ~4% | ~12% |
 | FPS demo (pixel_only) | 60 | YOLOv10n | HUD continuous + audio | ~5% | ~14% |
 
-Higher capture FPS (e.g., 144 for competitive replay) scales CPU/GPU linearly. Documented in profile TOML comments.
+Higher capture FPS (e.g., 144 for high-fps replay analysis) scales CPU/GPU linearly. Documented in profile TOML comments.
 
 ---
 

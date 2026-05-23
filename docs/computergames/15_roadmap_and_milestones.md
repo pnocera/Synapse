@@ -162,7 +162,7 @@ Agent registers `on_event` reflex: "when Save dialog appears, type path + Enter.
 - `firmware/pico-hid/`: RP2040 firmware in Rust with `embassy-rp`; USB HID composite (mouse + keyboard + pad) + CDC ACM serial; watchdog, protocol parser, LED status, `.uf2` build pipeline
 - `synapse-mcp` adds: `act_combo` (reflex scheduler), `act_run_shell` (gated), `act_launch` (gated), `hid identify`, `hid flash`
 - First game profile: `minecraft.java` — HUD (hp_hearts, hunger, xp); keymap with Minecraft defaults; detection YOLOv10n_general (no MC fine-tune); `event_extensions` (`creeper_nearby`, `low_hp`)
-- Anti-cheat policy enforcement (`08_anti_cheat_policy.md`): profile tier flagging, backend gating
+- Supported-use policy enforcement (`08`): profile `use_scope` metadata, backend permission gating
 
 ### Out of scope
 

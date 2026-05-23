@@ -1,10 +1,10 @@
 # 05 — M4: Hardware HID + First Game Profile (2-3 weeks)
 
-PRD: `15_roadmap_and_milestones.md` §6. Hardware: `09_hardware_hid_gateway.md`. Firmware: `09 §4`. Wire protocol: `09 §5`. AC policy: `08_anti_cheat_policy.md`.
+PRD: `15_roadmap_and_milestones.md` §6. Hardware: `09_hardware_hid_gateway.md`. Firmware: `09 §4`. Wire protocol: `09 §5`. Supported-use policy: `08`.
 
 ## Goal
 
-RP2040 firmware (Rust + `embassy-rp`) + serial driver (`synapse-hid-host`) + `act_combo` MCP tool. First game profile `minecraft.java` with HUD extractors + keymap. AC tier gating enforced.
+RP2040 firmware (Rust + `embassy-rp`) + serial driver (`synapse-hid-host`) + `act_combo` MCP tool. First game profile `minecraft.java` with HUD extractors + keymap. Profile permission gates enforced.
 
 ## Demo gate
 
@@ -97,7 +97,7 @@ Per `07 §8.2` (full example included there). Key fields:
 - `[[hud]]` `hp_hearts` (template match), `hunger`, `xp` (regions anchored to `bottom_left`/`bottom_right`)
 - `[keymap]` `attack=lmb`, `place=rmb`, `inventory=e`, `forward=w`, etc.
 - `[[event_extensions]]` `creeper_nearby` (filter: kind=entity-appeared AND class=creeper AND bbox.w>80 ⇒ emit `creeper-imminent`)
-- `tier = "tier0_no_ac"`
+- `use_scope = "single_player"`
 - `mouse_curve_default = "natural"` + `keyboard_dynamics_default = "natural"` per OQ-004 DECIDED. Aim style `Snap` (50 ms) for menu clicks; combat aim uses reflex `aim_track` w/ Natural per-tick deltas (gain tuned, EMA smoothing α=0.7 per OQ-013); no `Instant` curves in any keymap or HUD action
 
 ### HUD asset bundle (`profiles/assets/minecraft.java/`)
@@ -109,14 +109,14 @@ hunger/full.png, hunger/half.png, hunger/empty.png
 
 Template-match extractor in `synapse-perception::hud` (`02 §5 hud section`).
 
-### Anti-cheat policy enforcement
+### Supported-use policy enforcement
 
-Per `08_anti_cheat_policy.md` §4 + §8:
+Per `08` §3 + §6:
 
-- `Profile.tier` field (new): `tier0_no_ac` | `tier1_singleplayer` | `tier2_competitive_ac` | `tier_unknown`
-- AC heuristics module `synapse-core::ac_heuristics`: list of service/driver names (`BEService`, `EasyAntiCheat`, `vgc`, ...) for informational gating
-- MCP layer checks tier + backend before dispatching `Action`; refuses w/ `SAFETY_AC_TIER2_BACKEND_BLOCKED` if Tier 2 + non-acked backend
-- Three-gate Tier 2 hardware: `--allow-hardware-in-tier2` CLI + profile `backends.hardware_in_tier2_acknowledged = true` + interactive y/n prompt first time
+- `Profile.use_scope` field (new): `productivity` | `single_player` | `operator_owned_test` | `sanctioned_research` | `unknown`
+- MCP layer checks profile scope + session permissions + backend availability before dispatching `Action`
+- `use_scope = "unknown"` refuses write/action tools with `SAFETY_PROFILE_ACTION_DENIED` until an operator activates a reviewed profile or explicit override
+- Hardware HID requires `--hardware-hid <port|auto>` plus first-use operator confirmation when configured interactively
 
 ### Error codes (must throw + test)
 
@@ -128,7 +128,7 @@ HID_FIRMWARE_VERSION_MISMATCH
 HID_COMMAND_REJECTED
 HID_LINK_TIMEOUT
 ACTION_HID_PORT_DISCONNECTED
-SAFETY_AC_TIER2_BACKEND_BLOCKED
+SAFETY_PROFILE_ACTION_DENIED
 SAFETY_LAUNCH_DENIED_BY_POLICY
 SAFETY_SHELL_DENIED_BY_POLICY
 SAFETY_OPERATOR_HOTKEY_FIRED
@@ -177,12 +177,12 @@ SAFETY_OPERATOR_HOTKEY_FIRED
 | 18 | `feat(perception): event_extensions evaluator (filter ⇒ emit_kind)` | `creeper_nearby` filter test: synthetic entity-appeared event w/ class=creeper bbox.w=100 ⇒ `creeper-imminent` emitted |
 | 19 | `test(e2e): minecraft_5min` (manual-gated by maintainer w/ Minecraft running) | 5 min run completes the demo scenario hands-off |
 
-### Block E — AC policy (work-items 20-21)
+### Block E — supported-use gates (work-items 20-21)
 
 | # | Title | Acceptance |
 |---|---|---|
-| 20 | `feat(core): ac_heuristics + Profile.tier field + tier-aware backend gating in MCP` | Tier 2 + non-acked backend ⇒ `SAFETY_AC_TIER2_BACKEND_BLOCKED`; Tier 0 unaffected |
-| 21 | `feat(safety): three-gate Tier 2 hardware (CLI + profile flag + interactive prompt)` | missing any gate ⇒ refused w/ specific gate named; all gates ⇒ proceeds + acknowledgment recorded in `%APPDATA%\synapse\agreement.json` |
+| 20 | `feat(core): Profile.use_scope field + scope-aware action gating in MCP` | `unknown` scope + write/action tool ⇒ `SAFETY_PROFILE_ACTION_DENIED`; `single_player` Minecraft profile unaffected |
+| 21 | `feat(safety): hardware HID explicit enablement + interactive prompt` | missing hardware enablement ⇒ refused with specific gate named; enabled path proceeds + acknowledgment recorded in `%APPDATA%\synapse\agreement.json` |
 
 ### Block F — bench + release (work-items 22-23)
 
@@ -201,7 +201,7 @@ SAFETY_OPERATOR_HOTKEY_FIRED
 ✓ Bench action_hardware_press p99 ≤ 5 ms (10 §12)
 ✓ Bench combo step interval within 0.5 ms (13 §9 hid_combo_timing)
 ✓ Firmware watchdog fires within 1 s of host stop; release_all observed
-✓ AC Tier 2 hardware: refused w/o all three gates; works w/ all three
+✓ Hardware HID: refused without explicit enablement; works with configured port/auto-detect and acknowledgment
 ✓ All M4 error codes throwable + tested
 ✓ HID protocol roundtrip fuzz: 10 min/target no crashes (13 §11)
 ✓ Reflash via `hid flash` end-to-end on a Pico
@@ -219,8 +219,8 @@ SAFETY_OPERATOR_HOTKEY_FIRED
 | Minecraft detection accuracy weak (Ultralytics weights AGPL — `OQ-025`) | Use any permissively-licensed substitute (RT-DETR-s or community fine-tune); document accuracy lower than `15 §6`; fine-tune planned for v1.x |
 | HUD OCR/template-match flakes on varied lighting | Test set across day/night/biome; threshold tuning per profile via `confidence_threshold`; fallback to WinRT OCR + regex parser |
 | Hardware HID latency under sustained load | Pipeline depth = 16 outstanding; firmware buffer 64; coalescing per `OQ-016` on hardware backend for sub-2 ms pending small moves |
-| ViGEm + hardware HID interplay | Backend selection explicit per call; default per profile; no auto-fallback between virtual ↔ hardware (would mask AC posture changes) |
-| AC tier flip mid-session (GTA V Story → Online) | `15 §6` profile detector switches to `tier2_blocked` and pauses action emission until operator confirms |
+| ViGEm + hardware HID interplay | Backend selection explicit per call; default per profile; no auto-fallback between virtual ↔ hardware (would mask profile-permission changes) |
+| Profile scope changes mid-session | Profile detector re-evaluates `use_scope`; moving into `unknown` pauses write/action emission until the operator activates a reviewed profile |
 | `OQ-013` aim_track smoothing under detection jitter | EMA `alpha = 0.7` default; configurable per reflex params; tune from Minecraft gameplay footage |
 
 ---

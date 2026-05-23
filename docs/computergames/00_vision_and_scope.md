@@ -30,8 +30,7 @@ Synapse is the missing primitive.
 | **Speedrunning / TAS-adjacent research** | Frame-perfect inputs with structured state | Hardware HID gateway + reflex runtime |
 
 **Not** target users:
-- Cheaters on competitive PvP ladders. NEVER build for them.
-- Bot farmers running massive parallel accounts. Single-machine system.
+- Mass-account operators running parallel unattended sessions. Single-machine system.
 - Mobile or console operators. Desktop only.
 
 ## 4. Why now
@@ -66,8 +65,8 @@ When the agent connects to `synapse-mcp`, it gains these capabilities for any fo
 - Type text, press keys, hold modifiers, send chord combos (keyboard — same three paths)
 - Drive virtual Xbox 360 / DualShock 4 controller (ViGEm)
 - Send analog stick deltas, trigger pressures, button presses
-- Move cursor with human-modeled aim curves (Bezier with micro-tremor + variable timing)
-- Type with human-modeled keystroke dynamics (Gaussian inter-arrival)
+- Move cursor with smooth aim curves (Bezier with micro-tremor + variable timing)
+- Type with configurable keystroke pacing (Gaussian inter-arrival)
 - Send frame-perfect input sequences (fighting-game motion inputs)
 - Read/write clipboard
 - Launch / focus / close windows
@@ -96,7 +95,7 @@ Out of scope. NEVER accept feature requests for these without an ADR.
 1. **No goal planning, no MCTS, no GOAP, no skill libraries.** Agent is the planner. We do not invent per-game skill ontologies, do not maintain skill graphs, do not run plan-space search. Multi-step composition lives in agent tokens, not ours.
 2. **No inner LLM.** Synapse loads no large model. Optional vision models stay small (≤100M params). The connecting agent is the only "intelligence."
 3. **No prediction / world model / learning head.** No future-state prediction, no reward signal, no runtime weight adaptation. Optional model inference is perception (detection / OCR), not prediction or RL.
-4. **No anti-cheat-evasion for competitive PvP.** See `08_anti_cheat_policy.md`. Hardware HID supports legitimate purposes; we do NOT maintain a list of "what each anti-cheat detects."
+4. **No unsupported process-manipulation or device-identity features.** Hardware HID supports accessibility, QA, research, simulation, and local game-control workflows; bundled firmware identifies itself plainly.
 5. **No general-purpose RPA / web scraping framework.** Browser CDP ships because games and apps have web subviews; not a Playwright competitor.
 6. **No mobile, console, embedded.** Windows desktop only at v1. Linux/macOS v2.
 7. **No multiplayer / multi-machine orchestration.** One agent, one machine, one Synapse server.
@@ -120,7 +119,7 @@ Synapse v1 is successful when:
 |---|---|
 | Screenshot-loop fallback masquerading as "structured" perception | Hard rule: `observe()` returns structured data; if both a11y and detection fail, return `OBSERVE_NO_PERCEPTION_AVAILABLE` error with diagnostics, never silently include a screenshot |
 | Slow path becoming the only path | Per-tool p99 latency budgets enforced in CI; perf regressions block merge |
-| Anti-cheat detection landing operators in trouble | All AC-risky paths gated behind explicit env var + agent capability flag; default-off |
+| Sensitive input paths enabled by accident | Hardware HID, shell, process launch, non-loopback networking, and redaction changes require explicit operator configuration |
 | Tool-bloat (200+ MCP tools, agent confused) | Hard cap: ≤ 30 tools at v1. Anything else is a profile, a parameter, or a sub-command of an existing tool |
 | Token bloat per observation | Hard cap: `observe()` returns ≤ 1500 tokens by default; agent must `expand(slot)` for more |
 | Per-game special-casing in core code | Per-game logic lives in declarative profiles (`profiles/<id>.toml`), not Rust code |
@@ -154,7 +153,7 @@ Synapse v1 is successful when:
 | Risk | Impact | Mitigation |
 |---|---|---|
 | Microsoft tightens GPU capture permissioning in a future Windows update | High — perception breaks | Maintain DXGI Output Duplication fallback in addition to Graphics Capture API |
-| Game anti-cheat starts flagging ViGEm | Medium — game support narrows | Hardware HID is the contingency; document it as the supported path for AC-protected games (single-player only) |
+| A game ignores or mishandles virtual controller input | Medium — some game support narrows | Hardware HID remains an optional physical-input path for accessibility, rigs, and local game profiles |
 | MCP transport spec changes again | Low — minor refactor | Stay on official `rmcp` crate; track spec releases |
 | Vision-model dependency on bundled ONNX files | Medium — install size, licensing | Default-bundle only models with permissive licenses; download larger models on first run with explicit consent |
 | RocksDB on Windows is sometimes finicky | Low | Pin a known-good `rocksdb` crate version; have a `sled` fallback feature flag |

@@ -86,17 +86,17 @@ Synapse-mcp adds system tray (`--no-tray` opt-out):
 
 All new profiles set `mouse_curve_default = "natural"` + `keyboard_dynamics_default = "natural"` per OQ-004 DECIDED. Profile-validation smoke test asserts every bundled `.toml` carries Natural defaults (no `Instant`/`Burst` defaults shipped).
 
-| Profile | Tier | Notes |
+| Profile | Use scope | Notes |
 |---|---|---|
-| `factorio.toml` | tier0 | mod-friendly, no AC |
+| `factorio.toml` | single_player | mod-friendly automation profile |
 | `discord.toml` | n/a (productivity) | a11y_only |
 | `slack.toml` | n/a | a11y_only |
 | `file_explorer.toml` | n/a | a11y_only |
-| `<one_fps>.toml` | tier1_singleplayer | TBD free single-player FPS for the M5 demo |
-| `roblox_studio.toml` | tier0 (Studio only; Roblox player tier varies per experience) | |
+| `<one_fps>.toml` | single_player | TBD free single-player FPS for the M5 demo |
+| `roblox_studio.toml` | operator_owned_test | Studio only; runtime experiences start as unknown until profiled |
 | Pre-existing M3/M4: `notepad`, `vscode`, `chrome`, `terminal`, `minecraft.java` | | already shipped |
 
-Plus empty stubs for Tier 2 titles per `08 §4.3` (Valorant, CS2, Apex, Fortnite, LoL, Dota 2 — empty mode/keymap with documented warnings in TOML comments).
+Plus inert `unknown` profile templates for local experiments: parseable, no keymap, no bundled game-specific assets, and explicit comments requiring a documented environment before actions are enabled.
 
 ### Grafana dashboards (`12 §11`)
 
@@ -161,7 +161,7 @@ STORAGE_DISK_PRESSURE_LEVEL_4
 | # | Title | Acceptance |
 |---|---|---|
 | 8 | `feat(profiles): factorio + discord + slack + file_explorer + <one_fps> + roblox_studio TOMLs` | each parses; profile_list shows all; bundled assets (HUD templates, if any) present |
-| 9 | `feat(profiles): empty Tier 2 stubs (valorant, cs2, apex, fortnite, lol, dota2)` | parse; tier = "tier2_competitive_ac"; keymap empty; mode pixel_only; warning comment present |
+| 9 | `feat(profiles): inert unknown-scope profile templates` | parse; `use_scope = "unknown"`; keymap empty; mode pixel_only; reviewed-profile comment present |
 | 10 | `feat(profiles): smoke tests per profile (13 §10)` | each bundled profile passes its smoke test in CI |
 
 ### Block D — perf + soak (work-items 11-13)
@@ -237,7 +237,7 @@ STORAGE_DISK_PRESSURE_LEVEL_4
 | MSI signing cert availability | Self-sign at v1.0 ⇒ SmartScreen "Verified Publisher" prompt once; document; EV cert tracked as fundraising/community workstream |
 | VLM bundle size | NOT bundled per `OQ-008`; download on first use w/ consent; `MODEL_NOT_LOADED` until present |
 | `<one_fps>` profile choice (free game TBD) | Decision deferred to start of M5; bundled stub if no good free FPS lands |
-| Roblox player game tiering varies per experience | Roblox Studio = tier0; player runtime = `tier_unknown`; operator picks profile manually |
+| Roblox runtime profile scope varies per experience | Roblox Studio = `operator_owned_test`; player runtime = `unknown`; operator picks profile manually |
 | Reproducible builds incomplete (`14 §13`) | PE timestamps + COFF section ordering vary on Win; document; post-v1 work |
 | Whisper-base bundle decision (`OQ-014`) | Default Whisper-tiny-int8 at M5; revisit if disk-size budget permits |
 | Sled vs RocksDB final (`OQ-001`) | Default RocksDB unless > 2 RocksDB crashes traced during soak; flip via feature flag if needed |

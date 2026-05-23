@@ -69,7 +69,7 @@ A work-item is "done" iff:
 | Crate boundaries, threading, channels | `01_architecture.md` |
 | Tool schemas, error response shape, transports | `05_mcp_tool_surface.md`, `06_data_schemas.md` §8 |
 | Storage CFs, TTLs, GC layers, profile TOML | `07_storage_and_profiles.md` |
-| AC policy + tier gating | `08_anti_cheat_policy.md` |
+| Supported-use policy + permission gates | `08` |
 | Latency budgets per stage / per tool | `10_performance_budget.md` §2/§12 |
 | Permissions, redaction, kill switches | `11_security_and_safety.md` |
 | Tracing, metrics, OTLP, dashboards | `12_observability.md` |

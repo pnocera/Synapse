@@ -226,9 +226,9 @@ Disabled at compile time; enabling requires code change + ADR.
 
 | Operation | Why disabled |
 |---|---|
-| DLL injection (any process) | AC policy + general "we don't do that" |
-| Kernel driver loading | Same |
-| Raw process memory reads of other processes | AC policy + scope |
+| DLL injection (any process) | Scope boundary + process integrity |
+| Kernel driver loading | User-mode product boundary |
+| Raw process memory reads of other processes | Scope boundary |
 | File system writes outside profile-declared paths | Scope; no FS write needed yet |
 | Sending network requests on behalf of agent | RPA scope; out of v1 |
 | Listening on non-loopback by default | Forces explicit opt-in |
@@ -260,7 +260,7 @@ Interactive confirmation for first-use of dangerous capabilities (prompts are mi
 
 | Action | Prompt |
 |---|---|
-| First use of hardware HID against Tier 2 game | Console prompt requiring `y` (`08_anti_cheat_policy.md` §4.3) |
+| First use of hardware HID | Console prompt requiring `y` when enabled interactively |
 | First use of `act_run_shell` after install | Console prompt |
 | Binding to non-loopback | Console prompt |
 | First use of `--no-redaction` | Console prompt |
@@ -352,7 +352,7 @@ The operator owns the trust boundary. Synapse ensures the operator can always:
 
 ## 16. What this doc does NOT cover
 
-- AC-policy specifics → `08_anti_cheat_policy.md`
+- Supported-use policy specifics → `08`
 - Per-tool permission requirements → `05_mcp_tool_surface.md`
 - Specific redaction patterns implementation → `synapse-core::redact`
 - Observability config (OTLP, log format) → `12_observability.md`

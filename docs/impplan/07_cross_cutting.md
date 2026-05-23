@@ -44,7 +44,7 @@ Per `11_security_and_safety.md`.
 ✓ `unsafe` only in synapse-capture / synapse-hid-host / firmware/pico-hid
 ✓ `cargo deny check` clean for any new dep
 ✓ `cargo audit` clean
-✓ AC tier gating unchanged (08 §4 / §8) or extended w/ ADR
+✓ Supported-use gates unchanged (08 §3 / §6) or extended w/ ADR
 ```
 
 For PRs adding a new MCP tool: declare `required_permissions(params)` returning the `Permission` set; MCP layer checks before dispatch.
@@ -177,7 +177,7 @@ Closes during the phase that hits the decision:
 | M3 | OQ-001 (RocksDB primary or sled flip); OQ-015 (profile match precedence final); OQ-022 (recursion guard); OQ-029 (per-event vs batched notifications); OQ-005 (reflex priority); OQ-012 (multi-monitor) |
 | M4 | OQ-003 (detection model default — YOLOv10n vs RT-DETR-s); OQ-013 (aim_track EMA smoothing); OQ-016 (action coalescing on hardware) |
 | M5 | OQ-008 (VLM bundling); OQ-014 (Whisper-tiny vs base); OQ-017 (disk pressure thresholds); OQ-019 (telemetry split); OQ-020 (`game_screenshot_once` exposure); OQ-030 (GC cadence final) |
-| v1.x | OQ-006 (per-session permissions); OQ-007 (profile signing); OQ-021 (HRTF audio); OQ-027 (Tier 2 2FA); OQ-028 (migrations vs wipe); OQ-026 (cross-platform start trigger); OQ-018 (replay format final) |
+| v1.x | OQ-006 (per-session permissions); OQ-007 (profile signing); OQ-021 (HRTF audio); OQ-027 (hardware HID 2FA); OQ-028 (migrations vs wipe); OQ-026 (cross-platform start trigger); OQ-018 (replay format final) |
 
 OQs not landing in a phase ⇒ deferred forward with explicit note in `16_open_questions.md`.
 

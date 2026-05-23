@@ -317,6 +317,7 @@ Concrete TOML mapped to the `Profile` Rust struct from `06_data_schemas.md`. Pro
 id = "vscode"
 label = "Visual Studio Code"
 version = "1.0.0"
+use_scope = "productivity"
 
 [[matches]]
 exe = "Code.exe"
@@ -362,6 +363,7 @@ Game example:
 id = "minecraft.java"
 label = "Minecraft Java Edition"
 version = "1.0.0"
+use_scope = "single_player"
 
 [[matches]]
 exe = "javaw.exe"
@@ -446,10 +448,10 @@ On foreground window change, profile detection runs: walk all loaded profiles in
 | `slack` | Slack desktop |
 | `discord` | Discord desktop |
 | `minecraft.java` | Minecraft Java Edition (single-player) |
-| `factorio` | Factorio (no anti-cheat, mod-friendly) |
+| `factorio` | Factorio (mod-friendly automation profile) |
 | `<one FPS>` | TBD — a single-player FPS for the M3 demo (likely a free game) |
 
-Profiles for AC-protected titles ship empty by default (`pixel_only`, no keymap) so the agent can run them in sandbox modes but does nothing competitive-impacting without operator intent.
+Profiles with `use_scope = "unknown"` ship with minimal action defaults until reviewed. Observation can work before a keymap exists, but write/action behavior should be added only when the intended environment is documented.
 
 ### 8.5 Profile hot reload
 

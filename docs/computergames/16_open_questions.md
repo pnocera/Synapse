@@ -46,7 +46,7 @@ When resolved, replace entry with "→ decided in ADR-NNN". ADRs live in `docs/a
 
 **Decision.** **`Natural` (with `AimNaturalParams::FAST` preset) is the default everywhere — productivity profiles, game profiles, all aim styles. `Instant` is never a default; it stays in the enum solely for explicit caller opt-in (e.g., test harnesses requiring pixel-perfect positioning).** No curve defaults to a discontinuous jump.
 
-**Rationale.** A single doctrine — smooth + natural + very fast — is simpler than per-profile branching and protects against ToS/anti-bot ambiguity at zero perf cost when params are tuned `FAST` (50 ms total travel for `Snap`). See `03_action.md` §6 (`AimNaturalParams::FAST` preset).
+**Rationale.** A single doctrine — smooth + natural + very fast — is simpler than per-profile branching, avoids discontinuous cursor jumps, and preserves replay readability at zero perf cost when params are tuned `FAST` (50 ms total travel for `Snap`). See `03_action.md` §6 (`AimNaturalParams::FAST` preset).
 
 **Consequence.**
 
@@ -72,7 +72,7 @@ When resolved, replace entry with "→ decided in ADR-NNN". ADRs live in `docs/a
 
 ## OQ-006 — Permission model: profile-level vs session-level
 
-**Q.** Permissions (`allow_launch`, `allow_shell`, `allow_hardware_hid_tier2`) per-profile, per-session, or global?
+**Q.** Permissions (`allow_launch`, `allow_shell`, `allow_hardware_hid`) per-profile, per-session, or global?
 
 **Trade-off.** Per-profile: per-app posture, clean but verbose. Per-session: agent caller scopes itself. Global: simplest.
 
@@ -322,15 +322,15 @@ When resolved, replace entry with "→ decided in ADR-NNN". ADRs live in `docs/a
 
 ---
 
-## OQ-027 — Operator multi-factor for Tier 2 hardware HID
+## OQ-027 — Operator multi-factor for hardware HID
 
-**Q.** Hardware-HID against Tier 2 games require second-factor (physical Pico button) instead of CLI flags?
+**Q.** Should hardware HID require a second factor (physical Pico button) instead of CLI flags?
 
-**Trade-off.** Higher friction: harder to abuse and harder to use legitimately.
+**Trade-off.** Higher friction reduces accidental activation but makes legitimate hardware workflows slower.
 
-**Default.** CLI flag + interactive prompt + per-call profile flag (three gates) is sufficient.
+**Default.** CLI/config flag + interactive prompt + profile permission metadata is sufficient.
 
-**Target.** v2 if abuse observed.
+**Target.** v2 if operator-safety feedback calls for it.
 
 ---
 

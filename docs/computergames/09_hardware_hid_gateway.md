@@ -2,13 +2,13 @@
 
 ## 1. Why hardware
 
-`SendInput`, `keybd_event`, `mouse_event`, and ViGEm virtual controllers are software-layer input. A determined detection system can know they're not real peripherals. We want a fallback that is genuinely a real peripheral for three reasons:
+`SendInput`, `keybd_event`, `mouse_event`, and ViGEm virtual controllers are software-layer input. Some accessibility, research, and simulation setups need output that the OS receives as a physical peripheral. We want a real-device path for three reasons:
 
 1. **Accessibility.** A user with motor impairments using eye-tracking or sip-and-puff input deserves a peripheral the OS treats the same as a real mouse. Synapse becoming that bridge is valuable.
-2. **AI research and tournaments.** Sanctioned bot tournaments and university research often require the AI's output to flow through real hardware for fair comparison with human play.
+2. **AI research and tournaments.** Sanctioned AI tournaments and university research often require the AI's output to flow through real hardware for fair comparison with human play.
 3. **Demo recording / sim rigs.** People building dedicated rigs (sim cockpits, arcade cabinets, modded controllers) want a programmable HID device.
 
-Optional component; Synapse runs without it. For the last 1% of authenticity or a Tier 2 use case (`08_anti_cheat_policy.md` §4.3), build and flash a board.
+Optional component; Synapse runs without it. Build and flash a board only when the workflow needs a physical-input path.
 
 This doc specifies firmware design, host-side serial driver in `synapse-hid-host`, and wire protocol.
 
@@ -59,9 +59,9 @@ VID: 0x1209  (pid.codes community VID)
 PID: 0xC0C0  (Synapse-allocated within the pid.codes range)
 ```
 
-pid.codes is the open community VID block for hobbyist projects; avoids spoofing any commercial VID/PID. Operators can rebuild firmware with their own — `VID`/`PID`/`MANUFACTURER_STR`/`PRODUCT_STR` are build-time constants.
+pid.codes is the open community VID block for hobbyist projects; avoids using any commercial VID/PID. Operators can rebuild firmware with their own — `VID`/`PID`/`MANUFACTURER_STR`/`PRODUCT_STR` are build-time constants.
 
-We deliberately do **not** ship firmware that mimics specific commercial peripherals (Razer DeathAdder VID/PID, Xbox controller VID/PID). Operators wanting that must rebuild firmware with their own choice.
+Release firmware ships only the Synapse VID/PID. Operators who need different IDs for their own hardware must rebuild firmware with their own choice.
 
 ---
 
@@ -348,7 +348,7 @@ Status LED:
 | Firmware: HID report → on the USB IN endpoint | next 1 ms poll |
 | End-to-end: host call → physical USB IN packet | ≤ 4 ms p99 |
 
-1 ms USB poll is the hard floor. Hardware HID will always be ~3 ms slower than software `SendInput` (which doesn't go over USB). The cost of authenticity.
+1 ms USB poll is the hard floor. Hardware HID will always be ~3 ms slower than software `SendInput` (which doesn't go over USB). That is the cost of going through a physical USB device.
 
 ---
 
@@ -378,7 +378,7 @@ CI runs protocol roundtrip tests on Linux (no hardware required). Firmware-loopb
 
 ## 13. What this doc does NOT cover
 
-- Anti-cheat policy gating around hardware backend → `08_anti_cheat_policy.md`
+- Supported-use policy and hardware permission gates → `08`
 - High-level action API routing to hardware → `03_action.md`
 - Action serialization invariants → `03_action.md` §4
 - Build pipeline / installer integration → `14_build_and_packaging.md`

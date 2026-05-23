@@ -26,7 +26,7 @@ Agent doesn't pick the path — it calls `observe()`. The body picks the best se
 - Goal-planning, MCTS, GOAP, skill libraries, or hierarchical decomposition (agent handles via tool-use loop)
 - Large prediction model, reward model, or learning loop (agent does this in-context)
 - Inner LLM (model lives outside; pure infrastructure)
-- Anti-cheat-evasion for unsanctioned online competitive play (see `08_anti_cheat_policy.md`)
+- Unsupported process-manipulation, device-identity, or scaled unattended account-operation features
 
 ---
 
@@ -41,8 +41,8 @@ Shared load-bearing primitives:
 | Structured semantic event stream | Yes (focus / mutation / file change) | Yes (entity appeared / HUD change / audio cue) |
 | Keyboard / mouse SendInput | Yes | Yes |
 | Virtual controller (ViGEm) | Rarely | Yes |
-| Hardware HID (RP2040 gateway) | Rarely | Yes for AC-protected games |
-| Aim curves / human-modeled cursor | Optional | Critical for games |
+| Hardware HID (RP2040 gateway) | Rarely | Yes for physical-input rigs |
+| Aim curves / smooth cursor motion | Optional | Critical for games |
 | Sub-frame reflex runtime | Helpful (auto-dismiss popups) | Critical (frame-perfect inputs) |
 | OCR fallback | Yes (when a11y is sparse) | Yes (HUD readouts) |
 | Per-app/per-game profile system | Yes | Yes |
@@ -65,7 +65,7 @@ Two separate products would duplicate ~90% of engineering. **Synapse ships them 
 | 05 | [`05_mcp_tool_surface.md`](05_mcp_tool_surface.md) | Public API. Every tool, parameter, return, error. |
 | 06 | [`06_data_schemas.md`](06_data_schemas.md) | Rust structs, JSON envelopes, event types, error codes. |
 | 07 | [`07_storage_and_profiles.md`](07_storage_and_profiles.md) | RocksDB schema, runtime files, profile system. |
-| 08 | [`08_anti_cheat_policy.md`](08_anti_cheat_policy.md) | What we will/won't do, scope, kernel-AC notes. |
+| 08 | Supported use policy | What we will/won't ship, supported contexts, operator acknowledgments. |
 | 09 | [`09_hardware_hid_gateway.md`](09_hardware_hid_gateway.md) | Pi Pico HID firmware + serial protocol + host driver. |
 | 10 | [`10_performance_budget.md`](10_performance_budget.md) | Latency targets, profiling, optimization rules. |
 | 11 | [`11_security_and_safety.md`](11_security_and_safety.md) | Threat model, permissions, redaction, kill switches. |
@@ -214,12 +214,12 @@ Crate boundaries and dep graph in `01_architecture.md`. Build details in `14_bui
 
 ## Out of scope (explicit non-goals)
 
-1. **Online competitive PvP cheating.** Synapse is for single-player, PvE, modded, dev-mode, custom-server, research, accessibility, computer-use automation. Ships no anti-cheat-evasion for ladder/ranked. Hardware HID exists for legitimate accessibility, automation, AI-tournament use — not unsanctioned competitive advantage. See `08_anti_cheat_policy.md`.
+1. **Unsupported process manipulation or scaled unattended account operation.** Synapse is for local computer-use automation, accessibility, QA, research, simulation rigs, and single-player/sanctioned game-control environments.
 2. **Goal/planning/skill libraries.** Agent via tool-use loop.
 3. **Inner LLM.** Optional small vision models (YOLO-nano, ConvNeXt-tiny) only.
 4. **Cross-platform v1.** Windows first. Linux/macOS v2.
 5. **General-purpose RPA.** Web/SaaS form-filling is a side-effect, not target.
-6. **Reverse-engineering proprietary game protocols.** RAM reads / packet inspection only for games operator owns and where ToS permits.
+6. **Reverse-engineering proprietary game protocols.** RAM reads / packet inspection are out of v1 unless an application exposes an official local API for that purpose.
 
 ---
 

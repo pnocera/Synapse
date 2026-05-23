@@ -110,7 +110,7 @@ Per `11_security_and_safety.md`:
 - Forbidden capabilities (compile-time `#[cfg(feature)]` off): DLL injection, kernel drivers, raw process memory r/w, FS writes outside profile paths, non-loopback by default
 - Panic hotkey `Ctrl+Alt+Shift+P` registered via `RegisterHotKey`; fires `ReleaseAll` + reflex disable in ≤ 50 ms
 - `cargo deny`: allow only `MIT`, `Apache-2.0`, `BSD-2/3`, `MPL-2.0`, `ISC`, `Zlib`, `Unicode-DFS-2016`. Block GPL/AGPL/SSPL.
-- AC policy gating: `08_anti_cheat_policy.md` §4.3 — three explicit acks for Tier 2 hardware HID
+- Supported-use gates: `08` §6 — explicit operator configuration for hardware HID and other sensitive capabilities
 
 ---
 

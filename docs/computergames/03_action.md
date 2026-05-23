@@ -161,14 +161,14 @@ Each curve emits `N` steps over the requested `duration`. Default `N = max(8, du
 
 ### Why `Natural` matters
 
-Anti-cheat / anti-bot frameworks detect linear / perfectly-Bezier cursor motion via:
+Straight-line cursor jumps are visually jarring and produce brittle recordings. `Natural` gives every coordinate action a smooth path with bounded timing:
 
-- Inter-arrival timing variance (humans have Gaussian-ish per-step delays)
-- Velocity profile (humans accelerate-decelerate, not constant)
-- Endpoint precision (humans overshoot then micro-correct)
-- Sub-pixel positioning (humans don't land perfectly pixel-aligned)
+- Inter-arrival timing variance
+- Acceleration/deceleration instead of constant velocity
+- Small overshoot and micro-correction for large moves
+- Sub-pixel tremor to avoid perfectly quantized paths
 
-`Natural` injects all four characteristics. Parameters are profile-tunable; the curve is deterministic given the same seed (seed exposed for replay determinism).
+Parameters are profile-tunable; the curve is deterministic given the same seed (seed exposed for replay determinism).
 
 ### Curve parameters
 
@@ -212,7 +212,7 @@ Profiles can override `FAST` with their own params (e.g., a sim-racing profile m
 
 ## 7. Keystroke dynamics
 
-Typing has the same authenticity problem. `KeystrokeDynamics`:
+Typing has the same pacing problem. `KeystrokeDynamics`:
 
 ```rust
 pub enum KeystrokeDynamics {
@@ -222,9 +222,9 @@ pub enum KeystrokeDynamics {
 }
 ```
 
-`Natural` samples inter-keystroke interval (IKI) from Gaussian; if `bigram_bias`, common bigrams ("th", "he", "in") get reduced IKI matching human bigram stats.
+`Natural` samples inter-keystroke interval (IKI) from Gaussian; if `bigram_bias`, common bigrams ("th", "he", "in") get reduced IKI for smoother text entry.
 
-**Default policy (v1.0+): `Natural` is the default everywhere — productivity, games, chat. `Burst` exists in the enum but is never a default; reserved for explicit caller opt-in (e.g., pasting machine-generated tokens where authenticity is irrelevant).**
+**Default policy (v1.0+): `Natural` is the default everywhere — productivity, games, chat. `Burst` exists in the enum but is never a default; reserved for explicit caller opt-in (e.g., pasting machine-generated tokens where pacing is irrelevant).**
 
 ### `KeystrokeDynamics::Natural::FAST` — the default preset
 
@@ -462,4 +462,4 @@ pub const SAFETY_RELEASE_ALL_FIRED: &str = "SAFETY_RELEASE_ALL_FIRED";
 - Reflex bindings (aim_track, on_event) → `04_reflex_runtime.md`
 - MCP tool surface wrapping these actions → `05_mcp_tool_surface.md`
 - Hardware HID firmware design → `09_hardware_hid_gateway.md`
-- Anti-cheat policy and back-end gating → `08_anti_cheat_policy.md`
+- Supported-use policy and permission gates → `08`

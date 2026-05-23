@@ -271,7 +271,7 @@ Air-gapped installs: `.zip` with binaries + bundled models + profiles. Extract a
 `synapse-mcp setup` is the one-time wizard:
 
 1. **Permissions check.** Confirm user can write to `%LOCALAPPDATA%\synapse\`.
-2. **License agreement acknowledgment.** (Per `08_anti_cheat_policy.md` §7.)
+2. **Supported-use acknowledgment.** (Per `08` §5.)
 3. **ViGEmBus check.** Detect; if missing, offer to download and run Nefarius installer.
 4. **Model selection.** Show detection / OCR / STT models with sizes. Operator picks which to download.
 5. **Profile selection.** Show profiles; default = enable all bundled.
@@ -340,7 +340,7 @@ hardware_hid_port = ""                # empty = auto-detect
 panic_hotkey = "ctrl+alt+shift+p"
 allow_launch = []                     # list of regexes
 allow_shell = []                      # list of regexes
-allow_hardware_hid_tier2 = false
+allow_hardware_hid = false
 no_redaction = false
 require_acknowledge_on_start = true
 
@@ -400,7 +400,7 @@ Top-level flags:
   --hardware-hid <port>
   --allow-launch <regex>
   --allow-shell <regex>
-  --allow-hardware-hid-tier2
+  --allow-hardware-hid
   --no-redaction
   --otlp-endpoint <url>
   --metrics-bind <addr>

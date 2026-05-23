@@ -73,7 +73,7 @@ Anthropic computer_20251124 action set: `key`, `hold_key`, `type`, `cursor_posit
 | Simon Mourier — DXGI Output Duplication + WIC | https://www.simonmourier.com/blog/Capturing-desktop-using-DXGI-s-Output-Duplication-and-saving-it-to-a-jpeg-file-u/ |
 | Capture method comparison (BitBlt vs Duplication vs Graphics Capture vs DwmThumbnail) | https://github.com/mika-f/dotnet-window-capture |
 
-Decision: **Windows Graphics Capture API** via `windows-capture` primary, **DXGI Output Duplication** fallback. Both expose zero-copy `ID3D11Texture2D`. DXGI Present hooking avoided (triggers most kernel anti-cheats).
+Decision: **Windows Graphics Capture API** via `windows-capture` primary, **DXGI Output Duplication** fallback. Both expose zero-copy `ID3D11Texture2D`. DXGI Present hooking avoided because injected capture is unnecessary and outside the project boundary.
 
 ---
 
@@ -112,56 +112,26 @@ Decision: `enigo` for keyboard/mouse software input. `vigem-client` for virtual 
 
 | Reference | URL | Notes |
 |---|---|---|
-| `vynxc/VBox` — RP2040 HID forwarder + KMBox-compatible serial | https://github.com/vynxc/VBox | Reference firmware design; mirrors VID/PID, serial commands |
+| `vynxc/VBox` — RP2040 HID forwarder + serial protocol | https://github.com/vynxc/VBox | Reference firmware design and serial commands |
 | `jfedor2/hid-forwarder` — Pi Pico receiver, wired + Bluetooth | https://github.com/jfedor2/hid-forwarder | Protocol reference |
-| `Foxtrott7/Foxbot-AI-Aimbot` — YOLO + Arduino HID bridge example | https://github.com/Foxtrott7/Foxbot-AI-Aimbot | Demonstrates AC-bypass legal-gray pattern |
-| UnknownCheats — HID over USB Host Shield writeup (Vanguard) | https://www.unknowncheats.me/forum/valorant/686973-undetected-mouse-movement-using-arduino-usb-host-shield-com-port.html | Detection vectors for hardware bridges |
-| `jsonmeister/color-aimbot` — TCP socket → MCU, no COM port | https://github.com/jsonmeister/color-aimbot | Architecture reference |
 | `Fenrified/Gordons-Sim-Controller` — RP2040 config-driven HID input | https://github.com/Fenrified/Gordons-Sim-Controller | Embedded HID best practices |
 
 Decision: ship firmware for RP2040 (Pi Pico, $4). Serial @ 1 Mbaud over USB CDC. Spec in `09_hardware_hid_gateway.md`.
 
 ---
 
-## 8. Anti-cheat detection vectors (informational; we don't evade)
+## 8. Aim curves / input pacing
 
 | Reference | URL |
 |---|---|
-| Adrian's security research — BattlEye BEDaisy reverse | https://s4dbrd.github.io/posts/reversing-bedaisy/ |
-| Riot Vanguard vgk.sys analysis | https://gist.github.com/rhaym-tech/f636b76deeca15528e70304b5ee95980 |
-| Archie — Vanguard syscall dispatch table hooks | https://archie-osu.github.io/2025/04/11/vanguard-research.html |
-| Secret Club — BattlEye analysis 2019 | https://secret.club/2019/02/10/battleye-anticheat.html |
-| Secret Club — anti-cheat hypervisor detection 2020 | https://secret.club/2020/04/13/how-anti-cheats-detect-system-emulation.html |
-
-What anti-cheats catch (informs what NOT to do for competitive PvP):
-
-- DLL injection / process memory writes — banned instantly
-- `SendInput` from unsigned process — flagged, banned heuristically
-- `mouse_event` / `keybd_event` — same
-- Kernel driver hooks — banned (Vanguard) or scanned (BattlEye)
-- ViGEm virtual controllers — flagged by some, allowed by others; depends on title
-- Hardware HID with bezier-curve human-modeled aim — hard to detect statistically; flagged manually via gameplay-pattern analysis
-- DXGI Present hooks — flagged by all kernel-level AC
-- ETW / LBR / PMC-based detection of LBR-stomping (Vanguard) — advanced kernel-mode cheats
-
-Synapse policy: **default-off for any AC-protected title**. Operator must explicitly enable. See `08_anti_cheat_policy.md`.
-
----
-
-## 9. Aim curves / human input modeling
-
-| Reference | URL |
-|---|---|
-| `iisHong0w0/Axiom-AI-Aimbot` — PID + Bezier humanization | https://github.com/iisHong0w0/Axiom-AI_Aimbot |
-| `NeedlessPage819/ShadowCursor` — humanized cursor lib | https://github.com/NeedlessPage819/ShadowCursor |
-| HAWK gameplay-behavior cheating-detection paper | https://arxiv.org/pdf/2409.14830 |
-| Synthetic Keystroke Dynamics & Bezier Mouse Emulation (Blue-team detection) | https://www.theauditveteran.com/bot-mechanics/synthetic-keystroke-dynamics-bezier-mouse-emulation/ |
+| `NeedlessPage819/ShadowCursor` — cursor motion library | https://github.com/NeedlessPage819/ShadowCursor |
+| PyAutoGUI tween / easing functions | https://pyautogui.readthedocs.io/en/latest/mouse.html |
 
 Synapse: **cubic Bezier mouse curves + Gaussian-jittered control points + Xorshift sub-pixel tremor**. Type-text: Gaussian inter-keystroke timing with optional bigram-distance modulation. Parameterizable; default off (linear) for productivity, on for game profiles.
 
 ---
 
-## 10. Object detection models for real-time use
+## 9. Object detection models for real-time use
 
 | Reference | URL | Latency on consumer GPU |
 |---|---|---|
@@ -175,7 +145,7 @@ Decision: default **YOLOv8n / YOLOv10n** (anchor-free, small, ~3-6ms on RTX 30x0
 
 ---
 
-## 11. Audio capture (WASAPI loopback) and spatial audio
+## 10. Audio capture (WASAPI loopback) and spatial audio
 
 | Reference | URL |
 |---|---|
@@ -188,7 +158,7 @@ Decision: `wasapi` for capture. STT via Whisper-tiny ONNX through `synapse-model
 
 ---
 
-## 12. UI grounding / set-of-marks (informational)
+## 11. UI grounding / set-of-marks (informational)
 
 | Reference | URL |
 |---|---|
@@ -201,7 +171,7 @@ Synapse v1 does NOT use OmniParser — UIA gives this free on Windows. Considere
 
 ---
 
-## 13. Token-efficiency research
+## 12. Token-efficiency research
 
 | Reference | URL |
 |---|---|
@@ -215,7 +185,7 @@ Synapse's diff-driven event push (send only what changed) aligns. Structured-sta
 
 ---
 
-## 14. Browser automation (CDP)
+## 13. Browser automation (CDP)
 
 | Reference | URL |
 |---|---|
@@ -226,7 +196,7 @@ Chromium browsers exposed via CDP attach (foreground window is browser + CDP por
 
 ---
 
-## 15. RP2040 firmware
+## 14. RP2040 firmware
 
 | Reference | URL |
 |---|---|
@@ -239,7 +209,7 @@ Firmware: `embassy-rp` cooperative async on Cortex-M0+; USB CDC for serial; cust
 
 ---
 
-## 16. Adjacent prior work
+## 15. Adjacent prior work
 
 | Reference | URL | What we borrow |
 |---|---|---|
@@ -253,7 +223,7 @@ Firmware: `embassy-rp` cooperative async on Cortex-M0+; USB CDC for serial; cust
 
 ---
 
-## 17. Comparable commercial products
+## 16. Comparable commercial products
 
 | Product | Notes |
 |---|---|
@@ -266,7 +236,7 @@ Firmware: `embassy-rp` cooperative async on Cortex-M0+; USB CDC for serial; cust
 
 ---
 
-## 18. Bibliographic notes
+## 17. Bibliographic notes
 
 All URLs valid at authoring. When a URL rots, find the crate/repo via `cargo search` or web search of the identifier. `docs.rs` links are version-pinned via `crates.io` and stable.
 

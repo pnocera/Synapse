@@ -622,6 +622,7 @@ pub struct Profile {
     pub id: ProfileId,
     pub label: String,
     pub version: String,                       // semver of this profile
+    pub use_scope: ProfileUseScope,
     pub matches: Vec<ProfileMatch>,
     pub mode: PerceptionMode,
     pub capture: ProfileCapture,
@@ -638,6 +639,16 @@ pub struct ProfileMatch {
     pub exe: Option<String>,                   // basename or full path regex
     pub title_regex: Option<String>,
     pub steam_appid: Option<u32>,
+}
+
+#[derive(Copy, Clone, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProfileUseScope {
+    Productivity,
+    SinglePlayer,
+    OperatorOwnedTest,
+    SanctionedResearch,
+    Unknown,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
