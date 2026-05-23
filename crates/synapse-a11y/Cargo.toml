@@ -18,5 +18,21 @@ chromiumoxide.workspace = true
 uiautomation.workspace = true
 windows.workspace = true
 
-[lints]
-workspace = true
+[dev-dependencies]
+criterion.workspace = true
+proptest.workspace = true
+
+[[bench]]
+name = "uia_snapshot_depth2_60elem"
+harness = false
+
+[lints.rust]
+unsafe_code = "allow"
+unused = { level = "warn", priority = -1 }
+
+[lints.clippy]
+all = "deny"
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "deny"

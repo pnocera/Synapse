@@ -2597,6 +2597,8 @@ name = "synapse-a11y"
 version = "0.1.0"
 dependencies = [
  "chromiumoxide",
+ "criterion",
+ "proptest",
  "serde",
  "synapse-core",
  "thiserror",
