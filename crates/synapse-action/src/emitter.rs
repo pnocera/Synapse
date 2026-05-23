@@ -339,7 +339,16 @@ impl ActionEmitter {
     }
 
     #[tracing::instrument(skip_all, fields(action_kind = "run"))]
-    pub async fn run(mut self, cancel: CancellationToken) -> ActionStateSnapshot {
+    pub async fn run(self, cancel: CancellationToken) -> ActionStateSnapshot {
+        self.run_with_connection_closed_cancel(cancel, None).await
+    }
+
+    #[tracing::instrument(skip_all, fields(action_kind = "run"))]
+    pub async fn run_with_connection_closed_cancel(
+        mut self,
+        shutdown_cancel: CancellationToken,
+        connection_closed_cancel: Option<CancellationToken>,
+    ) -> ActionStateSnapshot {
         loop {
             tokio::select! {
                 Some((action, ack)) = self.rx.recv() => {
@@ -352,8 +361,12 @@ impl ActionEmitter {
                 Some(auto_release) = self.auto_release_rx.recv() => {
                     let _emitted_action = self.auto_release_held_key(&auto_release);
                 },
-                () = cancel.cancelled() => {
+                () = shutdown_cancel.cancelled() => {
                     self.release_all("shutdown").await;
+                    return self.snapshot();
+                },
+                () = connection_closed_cancelled(connection_closed_cancel.as_ref()), if connection_closed_cancel.is_some() => {
+                    self.release_all("connection_closed").await;
                     return self.snapshot();
                 },
                 else => {
@@ -641,6 +654,14 @@ impl ActionEmitter {
 impl Drop for ActionEmitter {
     fn drop(&mut self) {
         self.abort_all_held_key_timers();
+    }
+}
+
+async fn connection_closed_cancelled(cancel: Option<&CancellationToken>) {
+    if let Some(cancel) = cancel {
+        cancel.cancelled().await;
+    } else {
+        std::future::pending::<()>().await;
     }
 }
 

@@ -189,6 +189,30 @@ impl StdioMcpClient {
         Ok(status)
     }
 
+    #[cfg(unix)]
+    pub async fn send_sigint_and_wait(mut self) -> anyhow::Result<std::process::ExitStatus> {
+        let pid = self.child_id().context("child pid missing")?;
+        let kill_status = Command::new("kill")
+            .args(["-INT", &pid.to_string()])
+            .status()
+            .await
+            .context("send SIGINT to child")?;
+        if !kill_status.success() {
+            bail!("kill -INT failed with status {kill_status}");
+        }
+
+        let mut child = self.child.take().context("child already reaped")?;
+        let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
+            .await
+            .context("timed out waiting for child after SIGINT")?
+            .context("wait for child after SIGINT")?;
+
+        if let Some(stderr_task) = self.stderr_task.take() {
+            let _stderr = stderr_task.await.context("join stderr reader")?;
+        }
+        Ok(status)
+    }
+
     #[must_use]
     pub fn raw_received(&self) -> &[String] {
         &self.raw_rx

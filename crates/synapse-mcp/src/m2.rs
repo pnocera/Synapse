@@ -16,7 +16,7 @@ use std::{
 use synapse_action::{
     ActionEmitter, ActionEmitterSnapshotHandle, ActionHandle, ActionStateSnapshot, RecordingBackend,
 };
-use tokio::task::JoinHandle;
+use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 pub use aim::{ActAimParams, ActAimResponse, act_aim_with_handle};
@@ -40,6 +40,7 @@ pub struct M2State {
     retained_emitter: Option<ActionEmitter>,
     emitter_cancel: Option<CancellationToken>,
     emitter_task: Option<JoinHandle<ActionStateSnapshot>>,
+    emitter_done: Option<watch::Receiver<Option<ActionStateSnapshot>>>,
 }
 
 impl M2State {
@@ -50,20 +51,61 @@ impl M2State {
     }
 
     #[must_use]
+    pub fn from_env_with_shutdown_tokens(
+        shutdown_cancel: CancellationToken,
+        connection_closed_cancel: Option<CancellationToken>,
+    ) -> Self {
+        let recording_backend = std::env::var(RECORDING_BACKEND_ENV).ok();
+        Self::from_recording_backend_env_with_shutdown_tokens(
+            recording_backend.as_deref(),
+            shutdown_cancel,
+            connection_closed_cancel,
+        )
+    }
+
+    #[must_use]
     pub fn from_recording_backend_env(recording_backend: Option<&str>) -> Self {
+        Self::from_recording_backend_env_with_cancel(recording_backend, CancellationToken::new())
+    }
+
+    #[must_use]
+    pub fn from_recording_backend_env_with_cancel(
+        recording_backend: Option<&str>,
+        emitter_cancel: CancellationToken,
+    ) -> Self {
+        Self::from_recording_backend_env_with_shutdown_tokens(
+            recording_backend,
+            emitter_cancel,
+            None,
+        )
+    }
+
+    #[must_use]
+    pub fn from_recording_backend_env_with_shutdown_tokens(
+        recording_backend: Option<&str>,
+        shutdown_cancel: CancellationToken,
+        connection_closed_cancel: Option<CancellationToken>,
+    ) -> Self {
         let recording =
             recording_backend_enabled(recording_backend).then(|| Arc::new(RecordingBackend::new()));
         if tokio::runtime::Handle::try_current().is_ok() {
-            let emitter_cancel = CancellationToken::new();
-            let (emitter_handle, snapshot_handle, emitter_task) =
-                ActionEmitter::spawn(emitter_cancel.clone());
+            let (emitter_handle, snapshot_handle, emitter) = ActionEmitter::channel();
+            let (done_tx, done_rx) = watch::channel(None);
+            let emitter_task = tokio::spawn(async move {
+                let snapshot = emitter
+                    .run_with_connection_closed_cancel(shutdown_cancel, connection_closed_cancel)
+                    .await;
+                let _send_result = done_tx.send(Some(snapshot.clone()));
+                snapshot
+            });
             return Self {
                 emitter_handle,
                 snapshot_handle,
                 recording,
                 retained_emitter: None,
-                emitter_cancel: Some(emitter_cancel),
+                emitter_cancel: None,
                 emitter_task: Some(emitter_task),
+                emitter_done: Some(done_rx),
             };
         }
 
@@ -75,6 +117,7 @@ impl M2State {
             retained_emitter: Some(emitter),
             emitter_cancel: None,
             emitter_task: None,
+            emitter_done: None,
         }
     }
 
@@ -99,6 +142,11 @@ impl M2State {
     pub fn emitter_available(&self) -> bool {
         self.emitter_retained() || self.emitter_running()
     }
+
+    #[must_use]
+    pub fn emitter_done_receiver(&self) -> Option<watch::Receiver<Option<ActionStateSnapshot>>> {
+        self.emitter_done.clone()
+    }
 }
 
 impl Default for M2State {
@@ -117,16 +165,9 @@ impl fmt::Debug for M2State {
             .field("retained_emitter", &self.emitter_retained())
             .field("emitter_cancel", &self.emitter_cancel.is_some())
             .field("emitter_task", &self.emitter_running())
+            .field("emitter_done", &self.emitter_done.is_some())
             .field("emitter_available", &self.emitter_available())
             .finish()
-    }
-}
-
-impl Drop for M2State {
-    fn drop(&mut self) {
-        if let Some(cancel) = &self.emitter_cancel {
-            cancel.cancel();
-        }
     }
 }
 
@@ -136,12 +177,26 @@ pub fn shared_m2_state_from_env() -> SharedM2State {
 }
 
 #[must_use]
+pub fn shared_m2_state_from_env_with_shutdown_tokens(
+    shutdown_cancel: CancellationToken,
+    connection_closed_cancel: Option<CancellationToken>,
+) -> SharedM2State {
+    Arc::new(Mutex::new(M2State::from_env_with_shutdown_tokens(
+        shutdown_cancel,
+        connection_closed_cancel,
+    )))
+}
+
+#[must_use]
 pub fn recording_backend_enabled(value: Option<&str>) -> bool {
     value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
 #[cfg(test)]
 mod tests {
+    use synapse_core::{Action, Backend, Key, KeyCode};
+    use tokio_util::sync::CancellationToken;
+
     use super::{M2State, RECORDING_BACKEND_ENV, recording_backend_enabled};
 
     #[test]
@@ -191,6 +246,67 @@ mod tests {
         assert!(snapshot.pad_state.is_empty());
     }
 
+    #[tokio::test]
+    async fn m2_state_uses_injected_cancel_token_to_release_all_on_shutdown() {
+        let before = Some("false");
+        let cancel = CancellationToken::new();
+        let mut state = M2State::from_recording_backend_env_with_cancel(before, cancel.clone());
+        let key = key_named("m2-cancel-token");
+        println!(
+            "source_of_truth=m2_state scenario=injected_cancel before_cancelled:{} emitter_running:{}",
+            cancel.is_cancelled(),
+            state.emitter_running()
+        );
+
+        state
+            .emitter_handle
+            .execute(Action::KeyDown {
+                key: key.clone(),
+                backend: Backend::Software,
+            })
+            .await
+            .unwrap_or_else(|error| panic!("KeyDown should reach emitter before cancel: {error}"));
+        let before_cancel = state
+            .snapshot_handle
+            .snapshot()
+            .await
+            .unwrap_or_else(|error| panic!("snapshot before cancel should succeed: {error}"));
+        assert_eq!(before_cancel.held_keys, vec![key.clone()]);
+        let done = state
+            .emitter_done_receiver()
+            .unwrap_or_else(|| panic!("runtime M2 state should expose emitter done receiver"));
+
+        cancel.cancel();
+        let join = state
+            .emitter_task
+            .take()
+            .unwrap_or_else(|| panic!("runtime M2 state should retain emitter join handle"));
+        let after_cancel = join
+            .await
+            .unwrap_or_else(|error| panic!("emitter join should complete after cancel: {error}"));
+        let done_snapshot = done
+            .borrow()
+            .clone()
+            .unwrap_or_else(|| panic!("emitter done receiver should contain final snapshot"));
+
+        println!(
+            "source_of_truth=m2_state scenario=injected_cancel after_cancelled:{} before_held_keys:{:?} after_held_keys:{:?} done_held_keys:{:?} after_timer_count:{} after_buttons:{:?} after_pad_state_len:{}",
+            cancel.is_cancelled(),
+            before_cancel.held_keys,
+            after_cancel.held_keys,
+            done_snapshot.held_keys,
+            after_cancel.held_key_timer_count,
+            after_cancel.held_buttons,
+            after_cancel.pad_state.len()
+        );
+        assert!(cancel.is_cancelled());
+        assert!(after_cancel.held_keys.is_empty());
+        assert_eq!(done_snapshot, after_cancel);
+        assert_eq!(after_cancel.held_key_timer_count, 0);
+        assert!(after_cancel.held_buttons.is_empty());
+        assert!(after_cancel.pad_state.is_empty());
+    }
+
     #[test]
     fn recording_backend_env_parser_handles_happy_path_and_edges() {
         let cases = [
@@ -217,6 +333,15 @@ mod tests {
             assert_eq!(state.recording_enabled(), expected);
             assert!(state.emitter_available());
             assert_eq!(event_count, 0);
+        }
+    }
+
+    fn key_named(name: &str) -> Key {
+        Key {
+            code: KeyCode::Named {
+                value: name.to_owned(),
+            },
+            use_scancode: false,
         }
     }
 }

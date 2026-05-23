@@ -87,8 +87,15 @@ fn configure_telemetry(cli: &Cli) -> anyhow::Result<TelemetryGuard> {
 
 async fn run_stdio(telemetry_guard: TelemetryGuard) -> anyhow::Result<ExitCode> {
     tracing::info!(code = "MCP_STDIO_STARTED", "starting stdio MCP transport");
-    let token = CancellationToken::new();
-    let start = SynapseService::new().serve_with_ct(rmcp::transport::stdio(), token.clone());
+    let rmcp_token = CancellationToken::new();
+    let emitter_shutdown_token = CancellationToken::new();
+    let emitter_connection_closed_token = CancellationToken::new();
+    let service = SynapseService::with_m2_shutdown_tokens(
+        emitter_shutdown_token.clone(),
+        emitter_connection_closed_token.clone(),
+    );
+    let m2_emitter_done = service.m2_emitter_done_receiver();
+    let start = service.serve_with_ct(rmcp::transport::stdio(), rmcp_token.clone());
     tokio::pin!(start);
     let service = tokio::select! {
         service = &mut start => match service {
@@ -102,7 +109,8 @@ async fn run_stdio(telemetry_guard: TelemetryGuard) -> anyhow::Result<ExitCode> 
         },
         signal = tokio::signal::ctrl_c() => {
             signal.context("wait for ctrl-c during startup")?;
-            token.cancel();
+            rmcp_token.cancel();
+            emitter_shutdown_token.cancel();
             tracing::info!(code = "MCP_SHUTDOWN_GRACEFUL", "shutdown signal received before init");
             drop(telemetry_guard);
             std::process::exit(0);
@@ -114,22 +122,47 @@ async fn run_stdio(telemetry_guard: TelemetryGuard) -> anyhow::Result<ExitCode> 
     let code = tokio::select! {
         wait = &mut wait_task => {
             wait.context("join rmcp service")??;
+            emitter_connection_closed_token.cancel();
+            wait_for_m2_emitter_done(m2_emitter_done).await;
             ExitCode::SUCCESS
         }
         signal = tokio::signal::ctrl_c() => {
             signal.context("wait for ctrl-c")?;
             tracing::info!(code = "MCP_SHUTDOWN_GRACEFUL", "shutdown signal received");
+            emitter_shutdown_token.cancel();
             shutdown.cancel();
             if let Ok(wait) = tokio::time::timeout(Duration::from_secs(5), &mut wait_task).await {
                 wait.context("join rmcp service after shutdown")??;
-                ExitCode::SUCCESS
+                wait_for_m2_emitter_done(m2_emitter_done).await;
+                drop(telemetry_guard);
+                std::process::exit(0);
             } else {
                 tracing::error!(code = "MCP_SHUTDOWN_TIMEOUT", "shutdown timeout");
-                ExitCode::from(124)
+                drop(telemetry_guard);
+                std::process::exit(124);
             }
         }
     };
 
     drop(telemetry_guard);
     Ok(code)
+}
+
+async fn wait_for_m2_emitter_done(
+    done: Option<tokio::sync::watch::Receiver<Option<synapse_action::ActionStateSnapshot>>>,
+) {
+    let Some(mut done) = done else {
+        return;
+    };
+    let _wait_result = tokio::time::timeout(Duration::from_secs(1), async {
+        loop {
+            if done.borrow().is_some() {
+                break;
+            }
+            if done.changed().await.is_err() {
+                break;
+            }
+        }
+    })
+    .await;
 }

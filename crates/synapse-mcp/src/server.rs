@@ -13,8 +13,10 @@ use rmcp::{
     model::{Implementation, ServerCapabilities, ServerInfo},
     tool, tool_handler, tool_router,
 };
-use synapse_action::RecordingBackend;
+use synapse_action::{ActionStateSnapshot, RecordingBackend};
 use synapse_core::Health;
+use tokio::sync::watch;
+use tokio_util::sync::CancellationToken;
 
 use crate::{
     m1::{
@@ -31,6 +33,7 @@ use crate::{
         act_click_with_handle, act_clipboard, act_drag_with_handle, act_pad_with_handle,
         act_press_with_handle, act_scroll_with_handle, act_type_with_handle,
         release_all_with_handles, shared_m2_state_from_env,
+        shared_m2_state_from_env_with_shutdown_tokens,
     },
 };
 
@@ -51,6 +54,29 @@ impl SynapseService {
             m1_state: SharedM1State::default(),
             m2_state: shared_m2_state_from_env(),
         }
+    }
+
+    #[must_use]
+    pub fn with_m2_shutdown_tokens(
+        shutdown_cancel: CancellationToken,
+        connection_closed_cancel: CancellationToken,
+    ) -> Self {
+        Self {
+            started_at: Instant::now(),
+            tool_router: Self::tool_router(),
+            m1_state: SharedM1State::default(),
+            m2_state: shared_m2_state_from_env_with_shutdown_tokens(
+                shutdown_cancel,
+                Some(connection_closed_cancel),
+            ),
+        }
+    }
+
+    pub fn m2_emitter_done_receiver(&self) -> Option<watch::Receiver<Option<ActionStateSnapshot>>> {
+        self.m2_state
+            .lock()
+            .ok()
+            .and_then(|state| state.emitter_done_receiver())
     }
 
     fn health_payload(&self) -> Health {

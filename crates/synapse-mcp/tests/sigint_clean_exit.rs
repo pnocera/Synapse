@@ -1,50 +1,59 @@
 #![cfg(unix)]
 
-use std::{process::Stdio, time::Duration};
-
-use anyhow::Context;
+use serde_json::Value;
+use synapse_core::error_codes;
+use synapse_test_utils::stdio_mcp_client::StdioMcpClient;
 use tempfile::TempDir;
-use tokio::process::Command;
 
 #[tokio::test]
 async fn synthetic_sigint_results_in_exit_0_and_flushed_log() -> anyhow::Result<()> {
     let dir = TempDir::new()?;
-    let mut child = Command::new(env!("CARGO_BIN_EXE_synapse-mcp"))
-        .args(["--mode", "stdio"])
-        .env("SYNAPSE_LOG_LEVEL", "debug")
-        .env("SYNAPSE_LOG_DIR", dir.path())
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()?;
-    let _stdin = child.stdin.take().context("child stdin missing")?;
+    let client = StdioMcpClient::launch_and_init_with_log_dir(Some(dir.path())).await?;
+    let before_logs = read_logs(dir.path())?;
+    println!(
+        "source_of_truth=daemon_log edge=sigint before_shutdown_count={} before_safety_count={}",
+        event_code_count(&before_logs, "MCP_SHUTDOWN_GRACEFUL"),
+        safety_reason_count(&before_logs, "shutdown")
+    );
 
-    wait_for_log(dir.path(), "MCP_STDIO_STARTED").await?;
-    let pid = child.id().context("child pid missing")?;
-    let kill_status = Command::new("kill")
-        .args(["-INT", &pid.to_string()])
-        .status()
-        .await?;
-    assert!(kill_status.success());
-
-    let status = tokio::time::timeout(Duration::from_secs(10), child.wait())
-        .await
-        .context("timed out waiting for sigint exit")??;
-    assert_eq!(status.code(), Some(0));
+    let status = client.send_sigint_and_wait().await?;
 
     let logs = read_logs(dir.path())?;
-    assert!(logs.contains("MCP_SHUTDOWN_GRACEFUL"));
+    let shutdown_count = event_code_count(&logs, "MCP_SHUTDOWN_GRACEFUL");
+    let safety_count = safety_reason_count(&logs, "shutdown");
+    println!(
+        "source_of_truth=daemon_log edge=sigint after_shutdown_count={shutdown_count} after_safety_count={safety_count} exit_code={:?}",
+        status.code()
+    );
+    assert_eq!(status.code(), Some(0));
+    assert!(
+        shutdown_count >= 1,
+        "expected shutdown log, got logs: {logs}"
+    );
+    assert!(
+        safety_count >= 1,
+        "expected shutdown release_all safety log, got logs: {logs}"
+    );
     Ok(())
 }
 
-async fn wait_for_log(path: &std::path::Path, needle: &str) -> anyhow::Result<()> {
-    for _ in 0..20 {
-        if read_logs(path)?.contains(needle) {
-            return Ok(());
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-    anyhow::bail!("timed out waiting for log line {needle}");
+#[tokio::test]
+async fn stdio_connection_closed_emits_release_all_log() -> anyhow::Result<()> {
+    let dir = TempDir::new()?;
+    let client = StdioMcpClient::launch_and_init_with_log_dir(Some(dir.path())).await?;
+    println!("source_of_truth=daemon_log edge=connection_closed before=safety_count:0");
+
+    let status = client.shutdown().await?;
+    assert!(status.success());
+
+    let logs = read_logs(dir.path())?;
+    let safety_count = safety_reason_count(&logs, "connection_closed");
+    println!("source_of_truth=daemon_log edge=connection_closed after_safety_count={safety_count}");
+    assert!(
+        safety_count >= 1,
+        "expected connection_closed release_all safety log, got logs: {logs}"
+    );
+    Ok(())
 }
 
 fn read_logs(path: &std::path::Path) -> anyhow::Result<String> {
@@ -56,4 +65,27 @@ fn read_logs(path: &std::path::Path) -> anyhow::Result<String> {
         }
     }
     Ok(logs)
+}
+
+fn safety_reason_count(logs: &str, reason: &str) -> usize {
+    logs.lines()
+        .filter_map(parse_log_fields)
+        .filter(|fields| {
+            fields.get("code").and_then(Value::as_str)
+                == Some(error_codes::SAFETY_RELEASE_ALL_FIRED)
+                && fields.get("reason").and_then(Value::as_str) == Some(reason)
+        })
+        .count()
+}
+
+fn event_code_count(logs: &str, code: &str) -> usize {
+    logs.lines()
+        .filter_map(parse_log_fields)
+        .filter(|fields| fields.get("code").and_then(Value::as_str) == Some(code))
+        .count()
+}
+
+fn parse_log_fields(line: &str) -> Option<Value> {
+    let value: Value = serde_json::from_str(line).ok()?;
+    Some(value.get("fields")?.clone())
 }
