@@ -78,6 +78,25 @@ async fn m2_tools_list_contains_exact_sorted_surface_fsv() -> anyhow::Result<()>
         m2_action_tools.len()
     );
 
+    let default_rows = default_rows();
+    assert_eq!(default_rows.len(), 23);
+    for (tool_name, field, expected) in &default_rows {
+        let actual = schema_default(tools, tool_name, field)?;
+        println!(
+            "source_of_truth=schema_default tool={tool_name} field={field} before={} after={}",
+            printable_value(expected),
+            printable_value(actual)
+        );
+        assert_eq!(
+            actual, expected,
+            "{tool_name}.{field} schema default must match M2 default table"
+        );
+    }
+    println!(
+        "source_of_truth=schema_default edge=m2 after=checked_defaults:{}",
+        default_rows.len()
+    );
+
     let mut projection = tools
         .iter()
         .map(|tool| {
@@ -105,6 +124,61 @@ async fn m2_tools_list_contains_exact_sorted_surface_fsv() -> anyhow::Result<()>
 
     assert!(client.shutdown().await?.success());
     Ok(())
+}
+
+fn default_rows() -> Vec<(&'static str, &'static str, Value)> {
+    vec![
+        ("act_click", "curve", json!("natural")),
+        ("act_click", "duration_ms", json!(50)),
+        ("act_click", "button", json!("left")),
+        ("act_click", "clicks", json!(1)),
+        ("act_click", "use_invoke_pattern", json!(true)),
+        ("act_click", "backend", json!("auto")),
+        ("act_type", "dynamics", json!("natural")),
+        ("act_type", "backend", json!("auto")),
+        ("act_type", "press_enter_after", json!(false)),
+        ("act_type", "use_scancodes", json!(false)),
+        ("act_press", "hold_ms", json!(33)),
+        ("act_press", "backend", json!("auto")),
+        ("act_aim", "style", json!("snap")),
+        ("act_aim", "deadline_ms", json!(80)),
+        ("act_drag", "curve", json!("natural")),
+        ("act_drag", "duration_ms", json!(200)),
+        ("act_drag", "button", json!("left")),
+        ("act_scroll", "dy", json!(0)),
+        ("act_scroll", "dx", json!(0)),
+        ("act_scroll", "smooth", json!(false)),
+        ("act_pad", "pad_id", json!(0)),
+        ("act_pad", "backend", json!("vigem")),
+        ("act_clipboard", "format", json!("unicode")),
+    ]
+}
+
+fn schema_default<'a>(
+    tools: &'a [Value],
+    tool_name: &str,
+    field: &str,
+) -> anyhow::Result<&'a Value> {
+    tool_by_name(tools, tool_name)?
+        .get("inputSchema")
+        .and_then(|schema| schema.get("properties"))
+        .and_then(|properties| properties.get(field))
+        .and_then(|property| property.get("default"))
+        .with_context(|| format!("{tool_name}.{field} default missing from tools/list schema"))
+}
+
+fn tool_by_name<'a>(tools: &'a [Value], tool_name: &str) -> anyhow::Result<&'a Value> {
+    tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some(tool_name))
+        .with_context(|| format!("{tool_name} missing from tools/list"))
+}
+
+fn printable_value(value: &Value) -> String {
+    match value {
+        Value::String(value) => value.clone(),
+        _ => value.to_string(),
+    }
 }
 
 fn assert_closed_schema(value: &Value, path: &str) {
