@@ -13,16 +13,18 @@ async fn synthetic_sigint_results_in_exit_0_and_flushed_log() -> anyhow::Result<
     println!(
         "source_of_truth=daemon_log edge=sigint before_shutdown_count={} before_safety_count={}",
         event_code_count(&before_logs, "MCP_SHUTDOWN_GRACEFUL"),
-        safety_reason_count(&before_logs, "shutdown")
+        safety_reason_count(&before_logs, "sigint")
     );
 
     let status = client.send_sigint_and_wait().await?;
 
     let logs = read_logs(dir.path())?;
     let shutdown_count = event_code_count(&logs, "MCP_SHUTDOWN_GRACEFUL");
-    let safety_count = safety_reason_count(&logs, "shutdown");
+    let safety_lines = safety_reason_lines(&logs, "sigint");
+    let safety_count = safety_lines.len();
     println!(
-        "source_of_truth=daemon_log edge=sigint after_shutdown_count={shutdown_count} after_safety_count={safety_count} exit_code={:?}",
+        "source_of_truth=daemon_log edge=sigint after_shutdown_count={shutdown_count} after_safety_count={safety_count} after_line={:?} exit_code={:?}",
+        safety_lines.first(),
         status.code()
     );
     assert_eq!(status.code(), Some(0));
@@ -47,8 +49,12 @@ async fn stdio_connection_closed_emits_release_all_log() -> anyhow::Result<()> {
     assert!(status.success());
 
     let logs = read_logs(dir.path())?;
-    let safety_count = safety_reason_count(&logs, "connection_closed");
-    println!("source_of_truth=daemon_log edge=connection_closed after_safety_count={safety_count}");
+    let safety_lines = safety_reason_lines(&logs, "connection_closed");
+    let safety_count = safety_lines.len();
+    println!(
+        "source_of_truth=daemon_log edge=connection_closed after_safety_count={safety_count} after_line={:?}",
+        safety_lines.first()
+    );
     assert!(
         safety_count >= 1,
         "expected connection_closed release_all safety log, got logs: {logs}"
@@ -68,14 +74,20 @@ fn read_logs(path: &std::path::Path) -> anyhow::Result<String> {
 }
 
 fn safety_reason_count(logs: &str, reason: &str) -> usize {
+    safety_reason_lines(logs, reason).len()
+}
+
+fn safety_reason_lines(logs: &str, reason: &str) -> Vec<String> {
     logs.lines()
-        .filter_map(parse_log_fields)
-        .filter(|fields| {
-            fields.get("code").and_then(Value::as_str)
-                == Some(error_codes::SAFETY_RELEASE_ALL_FIRED)
-                && fields.get("reason").and_then(Value::as_str) == Some(reason)
+        .filter(|line| {
+            parse_log_fields(line).is_some_and(|fields| {
+                fields.get("code").and_then(Value::as_str)
+                    == Some(error_codes::SAFETY_RELEASE_ALL_FIRED)
+                    && fields.get("reason").and_then(Value::as_str) == Some(reason)
+            })
         })
-        .count()
+        .map(ToOwned::to_owned)
+        .collect()
 }
 
 fn event_code_count(logs: &str, code: &str) -> usize {

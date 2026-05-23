@@ -51,14 +51,16 @@ impl M2State {
     }
 
     #[must_use]
-    pub fn from_env_with_shutdown_tokens(
+    pub fn from_env_with_shutdown_reason(
         shutdown_cancel: CancellationToken,
+        shutdown_reason: &'static str,
         connection_closed_cancel: Option<CancellationToken>,
     ) -> Self {
         let recording_backend = std::env::var(RECORDING_BACKEND_ENV).ok();
         Self::from_recording_backend_env_with_shutdown_tokens(
             recording_backend.as_deref(),
             shutdown_cancel,
+            shutdown_reason,
             connection_closed_cancel,
         )
     }
@@ -76,6 +78,7 @@ impl M2State {
         Self::from_recording_backend_env_with_shutdown_tokens(
             recording_backend,
             emitter_cancel,
+            "shutdown",
             None,
         )
     }
@@ -84,6 +87,7 @@ impl M2State {
     pub fn from_recording_backend_env_with_shutdown_tokens(
         recording_backend: Option<&str>,
         shutdown_cancel: CancellationToken,
+        shutdown_reason: &'static str,
         connection_closed_cancel: Option<CancellationToken>,
     ) -> Self {
         let recording =
@@ -93,7 +97,11 @@ impl M2State {
             let (done_tx, done_rx) = watch::channel(None);
             let emitter_task = tokio::spawn(async move {
                 let snapshot = emitter
-                    .run_with_connection_closed_cancel(shutdown_cancel, connection_closed_cancel)
+                    .run_with_shutdown_reason(
+                        shutdown_cancel,
+                        shutdown_reason,
+                        connection_closed_cancel,
+                    )
                     .await;
                 let _send_result = done_tx.send(Some(snapshot.clone()));
                 snapshot
@@ -177,12 +185,14 @@ pub fn shared_m2_state_from_env() -> SharedM2State {
 }
 
 #[must_use]
-pub fn shared_m2_state_from_env_with_shutdown_tokens(
+pub fn shared_m2_state_from_env_with_shutdown_reason(
     shutdown_cancel: CancellationToken,
+    shutdown_reason: &'static str,
     connection_closed_cancel: Option<CancellationToken>,
 ) -> SharedM2State {
-    Arc::new(Mutex::new(M2State::from_env_with_shutdown_tokens(
+    Arc::new(Mutex::new(M2State::from_env_with_shutdown_reason(
         shutdown_cancel,
+        shutdown_reason,
         connection_closed_cancel,
     )))
 }

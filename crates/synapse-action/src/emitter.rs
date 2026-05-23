@@ -345,8 +345,19 @@ impl ActionEmitter {
 
     #[tracing::instrument(skip_all, fields(action_kind = "run"))]
     pub async fn run_with_connection_closed_cancel(
+        self,
+        shutdown_cancel: CancellationToken,
+        connection_closed_cancel: Option<CancellationToken>,
+    ) -> ActionStateSnapshot {
+        self.run_with_shutdown_reason(shutdown_cancel, "shutdown", connection_closed_cancel)
+            .await
+    }
+
+    #[tracing::instrument(skip_all, fields(action_kind = "run"))]
+    pub async fn run_with_shutdown_reason(
         mut self,
         shutdown_cancel: CancellationToken,
+        shutdown_reason: &'static str,
         connection_closed_cancel: Option<CancellationToken>,
     ) -> ActionStateSnapshot {
         loop {
@@ -362,7 +373,7 @@ impl ActionEmitter {
                     let _emitted_action = self.auto_release_held_key(&auto_release);
                 },
                 () = shutdown_cancel.cancelled() => {
-                    self.release_all("shutdown").await;
+                    self.release_all(shutdown_reason).await;
                     return self.snapshot();
                 },
                 () = connection_closed_cancelled(connection_closed_cancel.as_ref()), if connection_closed_cancel.is_some() => {
@@ -459,11 +470,21 @@ impl ActionEmitter {
 
     #[tracing::instrument(skip_all, fields(action_kind = "release_all"))]
     async fn release_all(&mut self, reason: &'static str) {
+        let before = self.snapshot();
+        let mut held_pad_ids: Vec<_> = before.pad_state.keys().copied().collect();
+        held_pad_ids.sort_unstable();
         let cancelled_key_timers = self.abort_all_held_key_timers();
         let (released_keys, released_buttons, released_pads) = self.state.release_all();
         tracing::warn!(
             code = error_codes::SAFETY_RELEASE_ALL_FIRED,
             reason,
+            held_keys = ?before.held_keys,
+            held_key_bits = ?before.held_key_bits,
+            held_key_timer_keys = ?before.held_key_timer_keys,
+            held_key_timer_count = before.held_key_timer_count,
+            held_buttons = ?before.held_buttons,
+            held_button_bits = ?before.held_button_bits,
+            held_pad_ids = ?held_pad_ids,
             released_keys,
             released_buttons,
             released_pads,

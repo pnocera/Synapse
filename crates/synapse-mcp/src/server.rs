@@ -33,7 +33,7 @@ use crate::{
         act_click_with_handle, act_clipboard, act_drag_with_handle, act_pad_with_handle,
         act_press_with_handle, act_scroll_with_handle, act_type_with_handle,
         release_all_with_handles, shared_m2_state_from_env,
-        shared_m2_state_from_env_with_shutdown_tokens,
+        shared_m2_state_from_env_with_shutdown_reason,
     },
 };
 
@@ -57,16 +57,18 @@ impl SynapseService {
     }
 
     #[must_use]
-    pub fn with_m2_shutdown_tokens(
+    pub fn with_m2_shutdown_reason(
         shutdown_cancel: CancellationToken,
+        shutdown_reason: &'static str,
         connection_closed_cancel: CancellationToken,
     ) -> Self {
         Self {
             started_at: Instant::now(),
             tool_router: Self::tool_router(),
             m1_state: SharedM1State::default(),
-            m2_state: shared_m2_state_from_env_with_shutdown_tokens(
+            m2_state: shared_m2_state_from_env_with_shutdown_reason(
                 shutdown_cancel,
+                shutdown_reason,
                 Some(connection_closed_cancel),
             ),
         }
