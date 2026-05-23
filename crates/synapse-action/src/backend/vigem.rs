@@ -2,13 +2,13 @@ use synapse_core::{Action, ButtonAction, GamepadReport, PadButton, PadId, Stick,
 
 use crate::{ActionBackend, ActionError, EmitState};
 
-/// M2 placeholder for the ViGEm driver-backed gamepad backend.
+/// M2 placeholder for the `ViGEm` driver-backed gamepad backend.
 ///
 /// The production gamepad driver is tracked under issue #156. Until that ships,
 /// every `Action::Pad*` is applied to the emitter's `EmitState::pad_state` only,
 /// so safety paths (`ReleaseAll`, snapshots, neutral coalescing) still see the
 /// commanded gamepad state. Non-pad actions return
-/// `ACTION_BACKEND_UNAVAILABLE` because dispatching them through the ViGEm
+/// `ACTION_BACKEND_UNAVAILABLE` because dispatching them through the `ViGEm`
 /// path would be a category error.
 #[derive(Debug, Default)]
 pub struct VigemStateOnlyBackend;

@@ -1,3 +1,7 @@
+// Example harnesses bypass the crate's production lint level so the trigger
+// -> assert flow stays readable; failures in the harness are intentional
+// panics rather than handled errors.
+#![allow(clippy::expect_used, clippy::unwrap_used)]
 //! Manual FSV harness for GitHub issue #228.
 //!
 //! Drives synthetic inputs through `ActionEmitter` wired to a
@@ -7,15 +11,12 @@
 //! confirm dispatch happened.
 //!
 //! Run with:
-//!     cargo run -p synapse-action --example issue_228_manual_fsv
+//!     `cargo run -p synapse-action --example issue_228_manual_fsv`
 
 use std::sync::Arc;
 use std::time::Instant;
 
-use synapse_action::{
-    ActionBackend, ActionEmitter, ActionHandle, ActionStateSnapshot, RecordedInput,
-    RecordingBackend,
-};
+use synapse_action::{ActionBackend, ActionEmitter, ActionHandle, RecordedInput, RecordingBackend};
 use synapse_core::{
     Action, AimCurve, AimStyle, AimTarget, Backend, ButtonAction, ComboInput, ComboStep,
     GamepadReport, Key, KeyCode, KeystrokeDynamics, MouseButton, MouseTarget, PadButton, Point,
@@ -520,7 +521,3 @@ async fn edge_unmatched_key_up_does_not_break_state(
         "actor must still dispatch the unmatched KeyUp"
     );
 }
-
-// `ActionStateSnapshot` is re-exported for trace clarity in the printlns.
-#[allow(dead_code)]
-fn _unused(_: &ActionStateSnapshot) {}

@@ -105,6 +105,7 @@ impl M2State {
     /// require the production OS — e.g. `RecordingBackend`. Production code
     /// passes `actor_backend = None` and gets the platform-native backends.
     #[must_use]
+    #[allow(clippy::needless_pass_by_value)]
     pub fn from_recording_backend_env_with_actor_backend(
         recording_backend: Option<&str>,
         shutdown_cancel: CancellationToken,
