@@ -1,0 +1,83 @@
+use synapse_core::error_codes;
+
+pub type ActionResult<T> = Result<T, ActionError>;
+
+#[derive(Clone, Debug, Eq, PartialEq, thiserror::Error)]
+pub enum ActionError {
+    #[error("action queue full: {detail}")]
+    QueueFull { detail: String },
+    #[error("action rate limited: {detail}")]
+    RateLimited { detail: String },
+    #[error("action backend unavailable: {detail}")]
+    BackendUnavailable { detail: String },
+    #[error("action target invalid: {detail}")]
+    TargetInvalid { detail: String },
+    #[error("action hold exceeds max: {detail}")]
+    HoldExceededMax { detail: String },
+    #[error("action HID port disconnected: {detail}")]
+    HidPortDisconnected { detail: String },
+    #[error("ViGEm is not installed: {detail}")]
+    VigemNotInstalled { detail: String },
+    #[error("ViGEm plug-in failed: {detail}")]
+    VigemPluginFailed { detail: String },
+    #[error("action element not resolved: {detail}")]
+    ElementNotResolved { detail: String },
+    #[error("action foreground lost: {detail}")]
+    ForegroundLost { detail: String },
+    #[error("action unsupported key: {detail}")]
+    UnsupportedKey { detail: String },
+    #[error("action drag distance exceeds limit: {detail}")]
+    DragDistanceExceedsLimit { detail: String },
+    #[error("stuck key auto-released: {detail}")]
+    StuckKeyAutoReleased { detail: String },
+    #[error("safety release-all fired: {detail}")]
+    SafetyReleaseAllFired { detail: String },
+    #[error("safety operator hotkey fired: {detail}")]
+    SafetyOperatorHotkeyFired { detail: String },
+}
+
+impl ActionError {
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::QueueFull { .. } => error_codes::ACTION_QUEUE_FULL,
+            Self::RateLimited { .. } => error_codes::ACTION_RATE_LIMITED,
+            Self::BackendUnavailable { .. } => error_codes::ACTION_BACKEND_UNAVAILABLE,
+            Self::TargetInvalid { .. } => error_codes::ACTION_TARGET_INVALID,
+            Self::HoldExceededMax { .. } => error_codes::ACTION_HOLD_EXCEEDED_MAX,
+            Self::HidPortDisconnected { .. } => error_codes::ACTION_HID_PORT_DISCONNECTED,
+            Self::VigemNotInstalled { .. } => error_codes::ACTION_VIGEM_NOT_INSTALLED,
+            Self::VigemPluginFailed { .. } => error_codes::ACTION_VIGEM_PLUGIN_FAILED,
+            Self::ElementNotResolved { .. } => error_codes::ACTION_ELEMENT_NOT_RESOLVED,
+            Self::ForegroundLost { .. } => error_codes::ACTION_FOREGROUND_LOST,
+            Self::UnsupportedKey { .. } => error_codes::ACTION_UNSUPPORTED_KEY,
+            Self::DragDistanceExceedsLimit { .. } => {
+                error_codes::ACTION_DRAG_DISTANCE_EXCEEDS_LIMIT
+            }
+            Self::StuckKeyAutoReleased { .. } => error_codes::STUCK_KEY_AUTO_RELEASED,
+            Self::SafetyReleaseAllFired { .. } => error_codes::SAFETY_RELEASE_ALL_FIRED,
+            Self::SafetyOperatorHotkeyFired { .. } => error_codes::SAFETY_OPERATOR_HOTKEY_FIRED,
+        }
+    }
+
+    #[must_use]
+    pub fn detail(&self) -> &str {
+        match self {
+            Self::QueueFull { detail }
+            | Self::RateLimited { detail }
+            | Self::BackendUnavailable { detail }
+            | Self::TargetInvalid { detail }
+            | Self::HoldExceededMax { detail }
+            | Self::HidPortDisconnected { detail }
+            | Self::VigemNotInstalled { detail }
+            | Self::VigemPluginFailed { detail }
+            | Self::ElementNotResolved { detail }
+            | Self::ForegroundLost { detail }
+            | Self::UnsupportedKey { detail }
+            | Self::DragDistanceExceedsLimit { detail }
+            | Self::StuckKeyAutoReleased { detail }
+            | Self::SafetyReleaseAllFired { detail }
+            | Self::SafetyOperatorHotkeyFired { detail } => detail,
+        }
+    }
+}
