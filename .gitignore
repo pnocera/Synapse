@@ -2,6 +2,9 @@
 docs2/
 
 /target/
+# Catch ad-hoc target dirs used for split-profile installs / FSV release builds
+# (see docs/dev-host-hygiene.md release-build recipe).
+/target-*/
 **/*.rs.bk
 
 .idea/
