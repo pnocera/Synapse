@@ -3520,6 +3520,7 @@ name = "synapse-storage"
 version = "0.1.0"
 dependencies = [
  "insta",
+ "metrics",
  "proptest",
  "rocksdb",
  "serde",
@@ -3527,6 +3528,7 @@ dependencies = [
  "sha2",
  "sled",
  "synapse-core",
+ "synapse-telemetry",
  "tempfile",
  "thiserror",
  "tokio",

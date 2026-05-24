@@ -17,12 +17,14 @@ serde_json.workspace = true
 sha2.workspace = true
 sled = { workspace = true, optional = true }
 synapse-core = { version = "0.1.0", path = "../synapse-core" }
+synapse-telemetry = { version = "0.1.0", path = "../synapse-telemetry" }
 thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+metrics.workspace = true
 proptest.workspace = true
 tempfile.workspace = true
 

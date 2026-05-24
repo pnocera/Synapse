@@ -3,6 +3,7 @@ pub mod cf;
 pub mod codecs;
 pub mod compaction;
 pub mod error;
+mod gc;
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -16,6 +17,7 @@ use synapse_core::error_codes;
 
 pub use codecs::{decode_json, encode_json};
 pub use error::{StorageError, StorageResult};
+pub use gc::{GcCfReport, GcReport, GcTask};
 
 const MIB: usize = 1024 * 1024;
 const DEFAULT_WRITE_BUFFER_BYTES: usize = 64 * MIB;
@@ -117,6 +119,30 @@ impl Db {
     #[tracing::instrument(skip_all)]
     pub fn flush(&self) -> StorageResult<()> {
         self.batcher.flush()
+    }
+
+    /// Runs one storage garbage-collection pass immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when `RocksDB` property reads, deletes, flushes,
+    /// or compactions fail.
+    #[tracing::instrument(skip_all)]
+    pub fn run_gc_once(&self) -> StorageResult<GcReport> {
+        gc::run_once(&self.inner, &gc::GcConfig::from_retention_defaults())
+    }
+
+    /// Spawns the periodic storage garbage-collection task.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StorageError::WriteFailed`] when no Tokio runtime is active.
+    #[tracing::instrument(skip_all)]
+    pub fn spawn_gc_task(&self) -> StorageResult<GcTask> {
+        gc::spawn(
+            Arc::clone(&self.inner),
+            gc::GcConfig::from_retention_defaults(),
+        )
     }
 
     /// Scans a column family into owned key/value bytes.
@@ -261,5 +287,7 @@ fn open_failed_detail(path: &Path, detail: String) -> StorageError {
 mod batch_tests;
 #[cfg(test)]
 mod compaction_tests;
+#[cfg(test)]
+mod gc_tests;
 #[cfg(test)]
 mod open_tests;
