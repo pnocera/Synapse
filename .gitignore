@@ -23,3 +23,10 @@ crashes/
 *.snap.new
 *.pending-snap
 tracing-*.log
+
+# Ephemeral FSV / operator-run output (see docs/dev-host-hygiene.md).
+# Canonical locations are `.runs/<id>/` and `%LOCALAPPDATA%\synapse\runs\`;
+# `fsv-<NNN>/` is a legacy pattern that should not accumulate at the repo root.
+/.runs/
+/fsv-*/
+

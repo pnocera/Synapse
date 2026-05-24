@@ -2,6 +2,11 @@ use std::{
     env,
     fs::{self, File},
     path::{Path, PathBuf},
+    sync::{
+        Arc, Once,
+        mpsc::{self, RecvTimeoutError, Sender},
+    },
+    thread::{self, JoinHandle},
     time::{Duration, SystemTime},
 };
 
@@ -18,6 +23,8 @@ pub mod metrics {
 
 const DEFAULT_MAX_DIR_BYTES: u64 = 500 * 1024 * 1024;
 const DEFAULT_KEEP_DAYS: u32 = 7;
+const DEFAULT_GC_INTERVAL: Duration = Duration::from_hours(6);
+const GC_INTERVAL_ENV: &str = "SYNAPSE_LOG_GC_INTERVAL_S";
 
 #[derive(Clone, Debug)]
 pub struct TelemetryConfig {
@@ -26,6 +33,11 @@ pub struct TelemetryConfig {
     pub console_level: LevelFilter,
     pub max_dir_bytes: u64,
     pub keep_days: u32,
+    /// How often to re-run log-dir GC while the daemon is alive. `None` skips the
+    /// background worker entirely (use for short-lived test inits). Defaults to 6 h
+    /// for `Default`/`default_with_log_dir`; overridable via `SYNAPSE_LOG_GC_INTERVAL_S`.
+    /// `Some(Duration::ZERO)` is treated as "disabled".
+    pub gc_interval: Option<Duration>,
 }
 
 impl Default for TelemetryConfig {
@@ -36,6 +48,7 @@ impl Default for TelemetryConfig {
             console_level: LevelFilter::INFO,
             max_dir_bytes: DEFAULT_MAX_DIR_BYTES,
             keep_days: DEFAULT_KEEP_DAYS,
+            gc_interval: Some(DEFAULT_GC_INTERVAL),
         }
     }
 }
@@ -74,6 +87,68 @@ impl TelemetryError {
 #[derive(Debug)]
 pub struct TelemetryGuard {
     _file_guard: WorkerGuard,
+    _gc_worker: Option<GcWorker>,
+}
+
+/// Background thread that re-runs `run_log_gc` on a fixed interval. Cleanly
+/// shuts down when the parent `TelemetryGuard` drops (channel disconnect →
+/// `recv_timeout` returns `Disconnected` and the loop breaks).
+#[derive(Debug)]
+struct GcWorker {
+    shutdown: Sender<()>,
+    handle: Option<JoinHandle<()>>,
+}
+
+impl GcWorker {
+    fn spawn(
+        log_dir: PathBuf,
+        keep_days: u32,
+        max_dir_bytes: u64,
+        interval: Duration,
+    ) -> Option<Self> {
+        let (tx, rx) = mpsc::channel();
+        let handle = thread::Builder::new()
+            .name("synapse-telemetry-gc".into())
+            .spawn(move || {
+                loop {
+                    match rx.recv_timeout(interval) {
+                        Ok(()) | Err(RecvTimeoutError::Disconnected) => break,
+                        Err(RecvTimeoutError::Timeout) => {
+                            if let Err(err) =
+                                run_log_gc(&log_dir, keep_days, max_dir_bytes)
+                            {
+                                tracing::warn!(
+                                    code = "TELEMETRY_GC_PERIODIC_FAILED",
+                                    log_dir = %log_dir.display(),
+                                    err = %err,
+                                    "periodic log GC failed"
+                                );
+                            } else {
+                                tracing::debug!(
+                                    code = "TELEMETRY_GC_PERIODIC_OK",
+                                    log_dir = %log_dir.display(),
+                                    "periodic log GC completed"
+                                );
+                            }
+                        }
+                    }
+                }
+            })
+            .ok()?;
+        Some(Self {
+            shutdown: tx,
+            handle: Some(handle),
+        })
+    }
+}
+
+impl Drop for GcWorker {
+    fn drop(&mut self) {
+        let _ = self.shutdown.send(());
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
 }
 
 #[must_use]
@@ -156,9 +231,69 @@ pub fn init_tracing(cfg: TelemetryConfig) -> Result<TelemetryGuard, TelemetryErr
         .try_init()
         .map_err(|err| TelemetryError::SubscriberInit(err.to_string()))?;
 
+    install_panic_hook();
+
+    let gc_interval = effective_gc_interval(cfg.gc_interval);
+    let gc_worker = gc_interval.and_then(|interval| {
+        GcWorker::spawn(
+            log_dir.clone(),
+            cfg.keep_days,
+            cfg.max_dir_bytes,
+            interval,
+        )
+    });
+
     Ok(TelemetryGuard {
         _file_guard: file_guard,
+        _gc_worker: gc_worker,
     })
+}
+
+/// Pick the effective GC interval: explicit `Some(non-zero)` wins, otherwise the
+/// `SYNAPSE_LOG_GC_INTERVAL_S` env var overrides at runtime. `Some(ZERO)` or env
+/// value `0` disables periodic GC entirely.
+fn effective_gc_interval(configured: Option<Duration>) -> Option<Duration> {
+    let env_override = env::var(GC_INTERVAL_ENV)
+        .ok()
+        .and_then(|raw| raw.trim().parse::<u64>().ok())
+        .map(Duration::from_secs);
+    let candidate = env_override.or(configured)?;
+    if candidate.is_zero() {
+        None
+    } else {
+        Some(candidate)
+    }
+}
+
+static PANIC_HOOK_INSTALLED: Once = Once::new();
+
+/// Install a panic hook that forwards panic payload + location to `tracing`
+/// (which lands in the rotated log file) before delegating to the existing hook.
+/// Idempotent — repeated calls are a no-op.
+pub fn install_panic_hook() {
+    PANIC_HOOK_INSTALLED.call_once(|| {
+        let previous = std::panic::take_hook();
+        let previous = Arc::new(previous);
+        std::panic::set_hook(Box::new(move |info| {
+            let payload = info
+                .payload()
+                .downcast_ref::<&str>()
+                .map(|s| (*s).to_owned())
+                .or_else(|| info.payload().downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "<non-string panic payload>".to_owned());
+            let location = info.location().map_or_else(
+                || "<unknown>".to_owned(),
+                |loc| format!("{}:{}:{}", loc.file(), loc.line(), loc.column()),
+            );
+            tracing::error!(
+                code = "TELEMETRY_PANIC_HOOK_FIRED",
+                panic_payload = %payload,
+                panic_location = %location,
+                "process panic captured by synapse-telemetry hook"
+            );
+            (previous)(info);
+        }));
+    });
 }
 
 #[must_use]

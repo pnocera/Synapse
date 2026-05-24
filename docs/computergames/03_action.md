@@ -401,6 +401,8 @@ Semantic invoke is faster and more reliable than coordinate click for productivi
 
 For games (no a11y), only coordinate clicks are possible.
 
+> **Coordinate space.** All `(x, y)` parameters across `act_aim`, `act_click`, `act_drag`, and `act_scroll` are interpreted as **physical (DPI-aware) pixels** — the units `GetCursorPos` returns from a per-monitor-DPI-aware process and the units UI Automation bboxes use. Source-of-truth readers that aren't DPI-aware (e.g. PowerShell 5.1 `[System.Windows.Forms.Cursor]::Position` by default) will report logical coords and disagree with synapse by the monitor scale factor. See `docs/dev-host-hygiene.md#coordinates` for the verifier recipe.
+
 ---
 
 ## 14. Drag, scroll, multi-click
