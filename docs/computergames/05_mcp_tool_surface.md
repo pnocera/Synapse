@@ -376,6 +376,8 @@ Reconfigures active capture target.
 }
 ```
 
+Coordinate targets (`x`, `y`) are physical pixels (DPI-aware), matching UI Automation bounding boxes and per-monitor-DPI-aware `GetCursorPos`; see [03_action.md §13](03_action.md#13-click-on-element-semantics).
+
 ### 3.12 `act_type`
 
 ```json
@@ -444,6 +446,7 @@ Key name vocabulary: standard symbolic names (`a`..`z`, `0`..`9`, `f1`..`f24`, `
 ```
 
 `style: "track"` registers an aim_track reflex and returns its `reflex_id` instead of completing immediately. Cancel via `reflex_cancel`.
+Screen-point targets (`x`, `y`) are physical pixels (DPI-aware), matching UI Automation bounding boxes and per-monitor-DPI-aware `GetCursorPos`; see [03_action.md §13](03_action.md#13-click-on-element-semantics).
 
 ### 3.15 `act_drag`
 
@@ -466,6 +469,8 @@ Key name vocabulary: standard symbolic names (`a`..`z`, `0`..`9`, `f1`..`f24`, `
 }
 ```
 
+Coordinate `from` / `to` endpoints are physical pixels (DPI-aware), matching UI Automation bounding boxes and per-monitor-DPI-aware `GetCursorPos`; see [03_action.md §13](03_action.md#13-click-on-element-semantics).
+
 ### 3.16 `act_scroll`
 
 ```json
@@ -483,6 +488,8 @@ Key name vocabulary: standard symbolic names (`a`..`z`, `0`..`9`, `f1`..`f24`, `
   }
 }
 ```
+
+The optional `at` cursor target is in physical pixels (DPI-aware), matching UI Automation bounding boxes and per-monitor-DPI-aware `GetCursorPos`; see [03_action.md §13](03_action.md#13-click-on-element-semantics).
 
 ### 3.17 `act_pad`
 
