@@ -41,6 +41,7 @@ anyhow = "1.0.102"
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-appender = "0.2.5"
+futures-util = "0.3.32"
 metrics = "0.24.6"
 metrics-exporter-prometheus = "0.18.3"
 opentelemetry = "0.32.0"

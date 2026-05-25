@@ -1,7 +1,14 @@
 use std::{io, net::SocketAddr, process::ExitCode, sync::Arc, time::Duration};
 
 use anyhow::Context;
-use axum::{Json, Router, extract::State, middleware, routing::get};
+use axum::{
+    Json, Router,
+    extract::{Query, State},
+    http::HeaderMap,
+    middleware,
+    response::Response,
+    routing::get,
+};
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -12,6 +19,7 @@ use tokio_util::sync::CancellationToken;
 use crate::{
     http::auth::{self, HttpAuth},
     http::session,
+    http::sse::{self, SseState},
     server::SynapseService,
 };
 
@@ -20,6 +28,7 @@ type McpHttpService = StreamableHttpService<SynapseService, LocalSessionManager>
 #[derive(Clone)]
 struct HttpState {
     health_service: Arc<SynapseService>,
+    sse_state: SseState,
 }
 
 pub(super) async fn serve(bind: &str, allow_non_loopback: bool) -> anyhow::Result<ExitCode> {
@@ -99,9 +108,14 @@ fn router(
     );
     let mcp_service = streamable_service(shutdown_cancel, connection_closed_cancel)
         .context("initialize HTTP MCP session state")?;
-    let state = HttpState { health_service };
+    let state = HttpState {
+        health_service,
+        sse_state: SseState::from_env(),
+    };
     Ok(Router::new()
         .route("/health", get(health))
+        .route("/events", get(events).post(publish_event))
+        .route("/events/stats", get(event_stats))
         .nest_service("/mcp", mcp_service)
         .layer(middleware::from_fn(session::require_mcp_session))
         .layer(middleware::from_fn_with_state(
@@ -141,6 +155,28 @@ async fn health(State(state): State<HttpState>) -> Json<Health> {
         "tool.invocation kind=health transport=http"
     );
     Json(state.health_service.health_payload())
+}
+
+async fn events(
+    State(state): State<HttpState>,
+    headers: HeaderMap,
+    Query(query): Query<sse::EventsQuery>,
+) -> Response {
+    state.sse_state.open(&headers, query)
+}
+
+async fn publish_event(
+    State(state): State<HttpState>,
+    Json(request): Json<sse::PublishRequest>,
+) -> Response {
+    state.sse_state.publish(request)
+}
+
+async fn event_stats(
+    State(state): State<HttpState>,
+    Query(query): Query<sse::StatsQuery>,
+) -> Response {
+    state.sse_state.stats(&query)
 }
 
 fn spawn_server(
