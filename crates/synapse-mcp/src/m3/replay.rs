@@ -1,6 +1,453 @@
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
+
+use rmcp::{ErrorData, schemars::JsonSchema};
+use schemars::{Schema, SchemaGenerator, json_schema};
+use serde::{Deserialize, Serialize};
+use synapse_core::{Event, EventFilter, Observation, error_codes, new_session_id};
+use synapse_perception::{ObservationAssembler, ObserveInclude};
+use tokio::{
+    fs::{self, File},
+    io::{AsyncWrite, AsyncWriteExt, BufWriter},
+    time::{Instant, sleep},
+};
+
+use crate::{
+    http::sse::SseState,
+    m1::{ObserveParams, SharedM1State, current_input, mcp_error, observe_include},
+};
+
 use super::M3ToolStub;
+
+const DEFAULT_TARGET: &str = "observations";
+const DEFAULT_FORMAT: &str = "jsonl";
+const OBSERVATION_SAMPLE_INTERVAL: Duration = Duration::from_millis(250);
+const EVENT_DRAIN_INTERVAL: Duration = Duration::from_millis(20);
+
+fn default_target() -> String {
+    DEFAULT_TARGET.to_owned()
+}
+
+fn default_format() -> String {
+    DEFAULT_FORMAT.to_owned()
+}
+
+fn replay_target_schema(_: &mut SchemaGenerator) -> Schema {
+    json_schema!({
+        "type": "string",
+        "enum": ["observations", "events", "both"],
+        "default": DEFAULT_TARGET
+    })
+}
+
+fn replay_format_schema(_: &mut SchemaGenerator) -> Schema {
+    json_schema!({
+        "type": "string",
+        "enum": [DEFAULT_FORMAT],
+        "default": DEFAULT_FORMAT
+    })
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReplayRecordParams {
+    #[serde(default = "default_target")]
+    #[schemars(schema_with = "replay_target_schema")]
+    pub target: String,
+    #[serde(default = "default_format")]
+    #[schemars(schema_with = "replay_format_schema")]
+    pub format: String,
+    #[schemars(range(min = 0))]
+    pub duration_ms: u32,
+    #[serde(default)]
+    pub path: Option<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReplayRecordResponse {
+    pub path: String,
+    pub records_written: u64,
+    pub bytes: u64,
+}
 
 #[must_use]
 pub const fn replay_record() -> M3ToolStub {
     M3ToolStub::new("replay_record")
+}
+
+pub async fn record_replay(
+    m1_state: SharedM1State,
+    sse_state: SseState,
+    params: &ReplayRecordParams,
+) -> Result<ReplayRecordResponse, ErrorData> {
+    let target = ReplayTarget::parse(&params.target)?;
+    let _format = ReplayFormat::parse(&params.format)?;
+    let path = replay_path(params.path.as_deref())?;
+    create_parent_dir(&path).await?;
+
+    let file = File::create(&path).await.map_err(|error| {
+        mcp_error(
+            error_codes::TOOL_INTERNAL_ERROR,
+            format!("replay_record could not create {}: {error}", path.display()),
+        )
+    })?;
+    let mut writer = BufWriter::new(file);
+
+    let records_written = if params.duration_ms > 0 {
+        record_window(&mut writer, &m1_state, &sse_state, target, params).await?
+    } else {
+        0
+    };
+
+    writer.flush().await.map_err(|error| {
+        mcp_error(
+            error_codes::TOOL_INTERNAL_ERROR,
+            format!("replay_record could not flush {}: {error}", path.display()),
+        )
+    })?;
+    drop(writer);
+
+    let bytes = fs::metadata(&path).await.map_err(|error| {
+        mcp_error(
+            error_codes::TOOL_INTERNAL_ERROR,
+            format!(
+                "replay_record could not read metadata for {}: {error}",
+                path.display()
+            ),
+        )
+    })?;
+
+    Ok(ReplayRecordResponse {
+        path: display_path(&path),
+        records_written,
+        bytes: bytes.len(),
+    })
+}
+
+async fn record_window<W>(
+    writer: &mut W,
+    m1_state: &SharedM1State,
+    sse_state: &SseState,
+    target: ReplayTarget,
+    params: &ReplayRecordParams,
+) -> Result<u64, ErrorData>
+where
+    W: AsyncWrite + Unpin + Send,
+{
+    let mut records_written = 0_u64;
+    let deadline = Instant::now() + Duration::from_millis(u64::from(params.duration_ms));
+    let mut event_subscription = if target.includes_events() {
+        Some(
+            sse_state
+                .event_bus()
+                .subscribe(EventFilter::All, Vec::new(), false)
+                .map_err(|error| mcp_error(error.code(), error.to_string()))?,
+        )
+    } else {
+        None
+    };
+    let event_bus = sse_state.event_bus();
+    let assembler = ObservationAssembler::new();
+    let include = observe_include(&ObserveParams::default());
+    let mut next_observation_sample = Instant::now();
+
+    let result = async {
+        if target.includes_observations() {
+            records_written = records_written.saturating_add(
+                write_observation(writer, m1_state, &assembler, include, target).await?,
+            );
+            next_observation_sample = Instant::now() + OBSERVATION_SAMPLE_INTERVAL;
+        }
+
+        while Instant::now() < deadline {
+            if let Some(subscription) = &event_subscription {
+                records_written = records_written
+                    .saturating_add(drain_events(writer, subscription.drain(), target).await?);
+            }
+
+            if target.includes_observations() && Instant::now() >= next_observation_sample {
+                records_written = records_written.saturating_add(
+                    write_observation(writer, m1_state, &assembler, include, target).await?,
+                );
+                next_observation_sample += OBSERVATION_SAMPLE_INTERVAL;
+            }
+
+            sleep(next_sleep(deadline, next_observation_sample, target)).await;
+        }
+
+        if let Some(subscription) = &event_subscription {
+            records_written = records_written
+                .saturating_add(drain_events(writer, subscription.drain(), target).await?);
+        }
+
+        Ok(records_written)
+    }
+    .await;
+
+    if let Some(subscription) = event_subscription.take() {
+        event_bus.unsubscribe(subscription.id());
+    }
+
+    result
+}
+
+async fn write_observation<W>(
+    writer: &mut W,
+    m1_state: &SharedM1State,
+    assembler: &ObservationAssembler,
+    include: ObserveInclude,
+    target: ReplayTarget,
+) -> Result<u64, ErrorData>
+where
+    W: AsyncWrite + Unpin + Send,
+{
+    let input = {
+        let state = m1_state.lock().map_err(|_err| {
+            mcp_error(
+                error_codes::OBSERVE_INTERNAL,
+                "M1 service state lock poisoned",
+            )
+        })?;
+        current_input(&state, include.max_subtree_depth)?
+    };
+    let observation = assembler
+        .assemble(include, input)
+        .map_err(|error| mcp_error(error.code(), error.to_string()))?;
+    match target {
+        ReplayTarget::Observations => write_json_line(writer, &observation).await?,
+        ReplayTarget::Both => {
+            write_json_line(
+                writer,
+                &ReplayRecordLine::Observation {
+                    record: &observation,
+                },
+            )
+            .await?;
+        }
+        ReplayTarget::Events => {}
+    }
+    Ok(1)
+}
+
+async fn drain_events<W>(
+    writer: &mut W,
+    events: Vec<Event>,
+    target: ReplayTarget,
+) -> Result<u64, ErrorData>
+where
+    W: AsyncWrite + Unpin + Send,
+{
+    let mut records_written = 0_u64;
+    for event in events {
+        match target {
+            ReplayTarget::Events => write_json_line(writer, &event).await?,
+            ReplayTarget::Both => {
+                write_json_line(writer, &ReplayRecordLine::Event { record: &event }).await?;
+            }
+            ReplayTarget::Observations => {}
+        }
+        records_written = records_written.saturating_add(1);
+    }
+    Ok(records_written)
+}
+
+async fn write_json_line<W, T>(writer: &mut W, value: &T) -> Result<(), ErrorData>
+where
+    W: AsyncWrite + Unpin + Send,
+    T: Serialize + Sync + ?Sized,
+{
+    let line = serde_json::to_vec(value).map_err(|error| {
+        mcp_error(
+            error_codes::TOOL_INTERNAL_ERROR,
+            format!("replay_record could not serialize record: {error}"),
+        )
+    })?;
+    writer
+        .write_all(&line)
+        .await
+        .map_err(|error| write_error(&error))?;
+    writer
+        .write_all(b"\n")
+        .await
+        .map_err(|error| write_error(&error))
+}
+
+fn write_error(error: &std::io::Error) -> ErrorData {
+    mcp_error(
+        error_codes::TOOL_INTERNAL_ERROR,
+        format!("replay_record could not write JSONL record: {error}"),
+    )
+}
+
+async fn create_parent_dir(path: &Path) -> Result<(), ErrorData> {
+    let parent = path.parent().filter(|value| !value.as_os_str().is_empty());
+    if let Some(parent) = parent {
+        fs::create_dir_all(parent).await.map_err(|error| {
+            mcp_error(
+                error_codes::TOOL_INTERNAL_ERROR,
+                format!(
+                    "replay_record could not create parent directory {}: {error}",
+                    parent.display()
+                ),
+            )
+        })?;
+    }
+    Ok(())
+}
+
+fn replay_path(path: Option<&str>) -> Result<PathBuf, ErrorData> {
+    match path.map(str::trim).filter(|value| !value.is_empty()) {
+        Some(path) => Ok(PathBuf::from(path)),
+        None if path.is_some() => Err(mcp_error(
+            error_codes::TOOL_PARAMS_INVALID,
+            "replay_record path must not be empty when provided",
+        )),
+        None => Ok(default_replay_path()),
+    }
+}
+
+fn default_replay_path() -> PathBuf {
+    std::env::var_os("LOCALAPPDATA")
+        .map_or_else(std::env::temp_dir, PathBuf::from)
+        .join("synapse")
+        .join("replays")
+        .join(format!("replay-{}.jsonl", new_session_id()))
+}
+
+fn display_path(path: &Path) -> String {
+    path.display().to_string()
+}
+
+fn next_sleep(
+    deadline: Instant,
+    next_observation_sample: Instant,
+    target: ReplayTarget,
+) -> Duration {
+    let now = Instant::now();
+    if now >= deadline {
+        return Duration::ZERO;
+    }
+    let until_deadline = deadline.saturating_duration_since(now);
+    let base = until_deadline.min(EVENT_DRAIN_INTERVAL);
+    if target.includes_observations() {
+        base.min(next_observation_sample.saturating_duration_since(now))
+    } else {
+        base
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ReplayTarget {
+    Observations,
+    Events,
+    Both,
+}
+
+impl ReplayTarget {
+    fn parse(value: &str) -> Result<Self, ErrorData> {
+        match value.trim() {
+            "observations" => Ok(Self::Observations),
+            "events" => Ok(Self::Events),
+            "both" => Ok(Self::Both),
+            other => Err(mcp_error(
+                error_codes::REPLAY_TARGET_INVALID,
+                format!(
+                    "replay_record target must be one of observations, events, or both; got {other:?}"
+                ),
+            )),
+        }
+    }
+
+    const fn includes_observations(self) -> bool {
+        matches!(self, Self::Observations | Self::Both)
+    }
+
+    const fn includes_events(self) -> bool {
+        matches!(self, Self::Events | Self::Both)
+    }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ReplayFormat {
+    Jsonl,
+}
+
+impl ReplayFormat {
+    fn parse(value: &str) -> Result<Self, ErrorData> {
+        match value.trim() {
+            DEFAULT_FORMAT => Ok(Self::Jsonl),
+            other => Err(mcp_error(
+                error_codes::REPLAY_FORMAT_INVALID,
+                format!("replay_record format must be jsonl; got {other:?}"),
+            )),
+        }
+    }
+}
+
+#[derive(Serialize)]
+#[serde(tag = "target", rename_all = "snake_case")]
+enum ReplayRecordLine<'a> {
+    Observation { record: &'a Observation },
+    Event { record: &'a Event },
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use chrono::Utc;
+    use serde_json::json;
+    use synapse_core::EventSource;
+    use tempfile::TempDir;
+
+    use crate::m1::M1State;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn events_target_records_published_bus_events() -> anyhow::Result<()> {
+        let dir = TempDir::new()?;
+        let path = dir.path().join("events.jsonl");
+        let sse_state = SseState::from_env();
+        let publisher = sse_state.event_bus();
+        let params = ReplayRecordParams {
+            target: "events".to_owned(),
+            format: "jsonl".to_owned(),
+            duration_ms: 250,
+            path: Some(path.display().to_string()),
+        };
+        let m1_state = Arc::new(Mutex::new(M1State::default()));
+        let event = Event {
+            seq: 324_001,
+            at: Utc::now(),
+            source: EventSource::System,
+            kind: "support.replay_record".to_owned(),
+            data: json!({"known": "event-target"}),
+            correlations: Vec::new(),
+        };
+
+        let (response, report) =
+            tokio::join!(record_replay(m1_state, sse_state, &params), async move {
+                sleep(Duration::from_millis(50)).await;
+                publisher.publish(event)
+            });
+        let response =
+            response.map_err(|error| anyhow::anyhow!("record_replay failed: {error:?}"))?;
+        assert_eq!(report.matched, 1);
+        assert_eq!(report.queued, 1);
+        assert_eq!(response.records_written, 1);
+
+        let replay_text = std::fs::read_to_string(&path)?;
+        let events = replay_text
+            .lines()
+            .map(serde_json::from_str::<Event>)
+            .collect::<Result<Vec<_>, _>>()?;
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].seq, 324_001);
+        assert_eq!(events[0].data["known"], "event-target");
+        Ok(())
+    }
 }

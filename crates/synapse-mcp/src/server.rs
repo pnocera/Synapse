@@ -47,6 +47,7 @@ use crate::{
             ReflexListParams, ReflexListResponse, ReflexRegisterParams, ReflexRegisterResponse,
             cancel_reflex, history_reflexes, list_reflexes, register_reflex,
         },
+        replay::{ReplayRecordParams, ReplayRecordResponse, record_replay},
         shared_m3_state_from_config_with_shutdown_reason_and_sse_state, shared_m3_state_from_env,
         subscribe::{
             SubscribeCancelParams, SubscribeCancelResponse, SubscribeParams, SubscribeResponse,
@@ -767,6 +768,25 @@ impl SynapseService {
             "tool.invocation kind=profile_activate"
         );
         self.activate_profile_locked(&params.0).map(Json)
+    }
+
+    #[tool(description = "Record observations and/or events to a replay JSONL file")]
+    pub async fn replay_record(
+        &self,
+        params: Parameters<ReplayRecordParams>,
+    ) -> Result<Json<ReplayRecordResponse>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "replay_record",
+            target = %params.0.target,
+            format = %params.0.format,
+            duration_ms = params.0.duration_ms,
+            "tool.invocation kind=replay_record"
+        );
+        let sse_state = self.sse_state()?;
+        record_replay(self.m1_state.clone(), sse_state, &params.0)
+            .await
+            .map(Json)
     }
 }
 

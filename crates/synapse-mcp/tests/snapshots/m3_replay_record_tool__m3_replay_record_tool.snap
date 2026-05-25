@@ -1,0 +1,72 @@
+---
+source: crates/synapse-mcp/tests/m3_replay_record_tool.rs
+expression: shape
+---
+{
+  "inputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "duration_ms": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "format": {
+        "default": "jsonl",
+        "enum": [
+          "jsonl"
+        ],
+        "type": "string"
+      },
+      "path": {
+        "default": null,
+        "type": [
+          "string",
+          "null"
+        ]
+      },
+      "target": {
+        "default": "observations",
+        "enum": [
+          "observations",
+          "events",
+          "both"
+        ],
+        "type": "string"
+      }
+    },
+    "required": [
+      "duration_ms"
+    ],
+    "title": "ReplayRecordParams",
+    "type": "object"
+  },
+  "name": "replay_record",
+  "outputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "bytes": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      },
+      "path": {
+        "type": "string"
+      },
+      "records_written": {
+        "format": "uint64",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "path",
+      "records_written",
+      "bytes"
+    ],
+    "title": "ReplayRecordResponse",
+    "type": "object"
+  }
+}
