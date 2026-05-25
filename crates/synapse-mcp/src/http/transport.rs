@@ -11,6 +11,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::{
     http::auth::{self, HttpAuth},
+    http::session,
     server::SynapseService,
 };
 
@@ -81,11 +82,13 @@ fn router(
         http_service(shutdown_cancel.clone(), connection_closed_cancel.clone())
             .context("initialize HTTP health service state")?,
     );
-    let mcp_service = streamable_service(shutdown_cancel, connection_closed_cancel);
+    let mcp_service = streamable_service(shutdown_cancel, connection_closed_cancel)
+        .context("initialize HTTP MCP session state")?;
     let state = HttpState { health_service };
     Ok(Router::new()
         .route("/health", get(health))
         .nest_service("/mcp", mcp_service)
+        .layer(middleware::from_fn(session::require_mcp_session))
         .layer(middleware::from_fn_with_state(
             auth,
             auth::require_http_security,
@@ -96,14 +99,17 @@ fn router(
 fn streamable_service(
     shutdown_cancel: CancellationToken,
     connection_closed_cancel: CancellationToken,
-) -> McpHttpService {
+) -> anyhow::Result<McpHttpService> {
     let config = StreamableHttpServerConfig::default()
         .with_cancellation_token(shutdown_cancel.child_token());
-    StreamableHttpService::new(
+    let mut session_manager = LocalSessionManager::default();
+    session_manager.session_config =
+        session::load_session_config().context("load HTTP session config")?;
+    Ok(StreamableHttpService::new(
         move || http_service(shutdown_cancel.clone(), connection_closed_cancel.clone()),
-        Arc::new(LocalSessionManager::default()),
+        Arc::new(session_manager),
         config,
-    )
+    ))
 }
 
 fn http_service(
