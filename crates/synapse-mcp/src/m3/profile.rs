@@ -1,7 +1,10 @@
-use super::M3ToolStub;
+use super::{
+    M3ToolStub,
+    permissions::{Permission, RequiredPermissions, profile_scope_error, required},
+};
 use rmcp::{ErrorData, schemars::JsonSchema};
 use serde::{Deserialize, Serialize};
-use synapse_core::{ProfileId, error_codes};
+use synapse_core::{ProfileId, ProfileUseScope, error_codes};
 use synapse_profiles::{ProfileError, ProfileRuntime};
 
 use crate::m1::mcp_error;
@@ -67,6 +70,16 @@ pub const fn profile_activate() -> M3ToolStub {
     M3ToolStub::new("profile_activate")
 }
 
+#[must_use]
+pub fn required_permissions_list(_params: &ProfileListParams) -> RequiredPermissions {
+    required([Permission::ReadProfile])
+}
+
+#[must_use]
+pub fn required_permissions_activate(_params: &ProfileActivateParams) -> RequiredPermissions {
+    required([Permission::WriteProfileActive])
+}
+
 pub fn list_profiles(
     runtime: &ProfileRuntime,
     params: &ProfileListParams,
@@ -87,16 +100,25 @@ pub fn list_profiles(
 pub fn activate_profile(
     runtime: &ProfileRuntime,
     params: &ProfileActivateParams,
+    allow_unknown_profile: bool,
 ) -> Result<ProfileActivateResponse, ErrorData> {
-    if runtime
+    let Some(profile) = runtime
         .profile(&params.profile_id)
         .map_err(|error| profile_error(&error))?
-        .is_none()
-    {
+    else {
         return Err(mcp_error(
             error_codes::PROFILE_NOT_FOUND,
             format!("profile {} was not found", params.profile_id),
         ));
+    };
+    if profile.use_scope == ProfileUseScope::Unknown && !allow_unknown_profile {
+        tracing::warn!(
+            code = error_codes::SAFETY_PROFILE_ACTION_DENIED,
+            profile_id = %params.profile_id,
+            "profile.action_denied profile_id={} use_scope=unknown",
+            params.profile_id
+        );
+        return Err(profile_scope_error(&params.profile_id));
     }
 
     let previous_active_profile_id = runtime

@@ -33,6 +33,10 @@ enum Mode {
 
 #[derive(Debug, Parser)]
 #[command(name = "synapse-mcp", version, about = "Synapse MCP daemon")]
+#[expect(
+    clippy::struct_excessive_bools,
+    reason = "CLI flags intentionally mirror independent operator startup gates"
+)]
 struct Cli {
     #[arg(long, value_enum, default_value_t = Mode::Stdio, env = "SYNAPSE_MODE")]
     mode: Mode,
@@ -48,6 +52,12 @@ struct Cli {
     log_level: String,
     #[arg(long, env = "SYNAPSE_REFLEX_DISABLED")]
     reflex_disabled: bool,
+    #[arg(long, env = "SYNAPSE_ENABLE_AUDIO")]
+    enable_audio: bool,
+    #[arg(long, env = "SYNAPSE_ALLOW_UNKNOWN_PROFILE")]
+    allow_unknown_profile: bool,
+    #[arg(long, env = "SYNAPSE_MCP_ALLOWED_PERMISSIONS", value_name = "LIST")]
+    allowed_permissions: Option<String>,
     #[arg(
         long,
         env = "SYNAPSE_MAX_SUBSCRIPTIONS",
@@ -65,6 +75,9 @@ impl Cli {
             self.reflex_disabled,
             self.bind.clone(),
             self.max_subscriptions,
+            self.enable_audio,
+            self.allow_unknown_profile,
+            self.allowed_permissions.clone(),
         )
     }
 }

@@ -14,7 +14,10 @@ use crate::{
     m2::{ActPressParams, ActTypeParams, action_from_press_params, action_from_type_params},
 };
 
-use super::M3ToolStub;
+use super::{
+    M3ToolStub,
+    permissions::{Permission, RequiredPermissions, add_action_permissions, required},
+};
 
 fn reflex_kind_schema(_: &mut SchemaGenerator) -> Schema {
     json_schema!({
@@ -179,6 +182,33 @@ pub const fn reflex_list() -> M3ToolStub {
 #[must_use]
 pub const fn reflex_history() -> M3ToolStub {
     M3ToolStub::new("reflex_history")
+}
+
+pub fn required_permissions_register(
+    params: &ReflexRegisterParams,
+) -> Result<RequiredPermissions, ErrorData> {
+    let mut permissions = required([Permission::WriteReflex]);
+    let actions = actions_from_then(params.then.clone(), params.backend)
+        .map_err(|error| mcp_error(error.code(), error.to_string()))?;
+    for action in &actions {
+        add_action_permissions(action, &mut permissions);
+    }
+    Ok(permissions)
+}
+
+#[must_use]
+pub fn required_permissions_cancel(_params: &ReflexCancelParams) -> RequiredPermissions {
+    required([Permission::ReadReflex])
+}
+
+#[must_use]
+pub fn required_permissions_list(_params: &ReflexListParams) -> RequiredPermissions {
+    required([Permission::ReadReflex])
+}
+
+#[must_use]
+pub fn required_permissions_history(_params: &ReflexHistoryParams) -> RequiredPermissions {
+    required([Permission::ReadReflex])
 }
 
 pub fn register_reflex(
@@ -483,7 +513,10 @@ mod tests {
     };
     use synapse_reflex::SchedulerTrigger;
 
-    use super::{ReflexRegisterParams, scheduled_reflex_from_params};
+    use super::{
+        ReflexRegisterParams, required_permissions_register, scheduled_reflex_from_params,
+    };
+    use crate::m3::permissions::Permission;
 
     #[test]
     fn demo_gate_shape_maps_to_event_filter_and_actions() {
@@ -588,6 +621,32 @@ mod tests {
             }
             other => panic!("default act_type step should map to TypeText, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn register_permissions_bubble_then_step_backend_requirements() {
+        let params: ReflexRegisterParams = serde_json::from_value(json!({
+            "kind": "on_event",
+            "when": { "op": "kind", "kind": "support-permissions" },
+            "then": {
+                "steps": [
+                    {
+                        "action": "act_type",
+                        "params": { "text": "abc" }
+                    }
+                ]
+            },
+            "backend": "hardware"
+        }))
+        .expect("permission reflex shape should deserialize");
+
+        let permissions =
+            required_permissions_register(&params).expect("permission calculation should pass");
+        assert!(permissions.contains(&Permission::WriteReflex));
+        assert!(permissions.contains(&Permission::InputKeyboard));
+        assert!(permissions.contains(&Permission::InputHardwareHid));
+        assert!(!permissions.contains(&Permission::InputMouse));
+        assert!(!permissions.contains(&Permission::InputPad));
     }
 
     #[test]

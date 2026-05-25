@@ -7,10 +7,20 @@ use tempfile::TempDir;
 #[tokio::test]
 async fn replay_record_schema_defaults_file_output_and_edges() -> anyhow::Result<()> {
     let logs = TempDir::new()?;
-    let replays = TempDir::new()?;
+    let local_app_data = TempDir::new()?;
+    let replays = local_app_data.path().join("synapse").join("replays");
     let mut client = StdioMcpClient::launch_and_init_with_env(
         Some(logs.path()),
-        &[("SYNAPSE_MCP_SYNTHETIC_FIXTURE", "notepad")],
+        &[
+            ("SYNAPSE_MCP_SYNTHETIC_FIXTURE", "notepad"),
+            (
+                "LOCALAPPDATA",
+                local_app_data
+                    .path()
+                    .to_str()
+                    .context("LOCALAPPDATA path utf8")?,
+            ),
+        ],
     )
     .await?;
 
@@ -25,7 +35,7 @@ async fn replay_record_schema_defaults_file_output_and_edges() -> anyhow::Result
         .context("replay_record tool missing")?;
     assert_replay_record_schema(replay_record_tool);
 
-    let observation_path = replays.path().join("observations.jsonl");
+    let observation_path = replays.join("observations.jsonl");
     let response = client
         .tools_call(
             "replay_record",
@@ -48,7 +58,7 @@ async fn replay_record_schema_defaults_file_output_and_edges() -> anyhow::Result
             .all(|observation| observation.foreground.process_name == "notepad.exe")
     );
 
-    let empty_path = replays.path().join("empty.jsonl");
+    let empty_path = replays.join("empty.jsonl");
     let empty = client
         .tools_call(
             "replay_record",
@@ -63,7 +73,7 @@ async fn replay_record_schema_defaults_file_output_and_edges() -> anyhow::Result
     let bad_target = client
         .tools_call_error(
             "replay_record",
-            json!({"target": "bogus", "duration_ms": 1, "path": replays.path().join("bad-target.jsonl")}),
+            json!({"target": "bogus", "duration_ms": 1, "path": replays.join("bad-target.jsonl")}),
         )
         .await?;
     assert_eq!(bad_target["data"]["code"], "REPLAY_TARGET_INVALID");
@@ -71,7 +81,7 @@ async fn replay_record_schema_defaults_file_output_and_edges() -> anyhow::Result
     let bad_format = client
         .tools_call_error(
             "replay_record",
-            json!({"format": "csv", "duration_ms": 1, "path": replays.path().join("bad-format.jsonl")}),
+            json!({"format": "csv", "duration_ms": 1, "path": replays.join("bad-format.jsonl")}),
         )
         .await?;
     assert_eq!(bad_format["data"]["code"], "REPLAY_FORMAT_INVALID");

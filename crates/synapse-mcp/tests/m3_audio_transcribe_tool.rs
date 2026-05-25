@@ -8,7 +8,10 @@ async fn audio_transcribe_schema_defaults_silence_and_edges() -> anyhow::Result<
     let logs = TempDir::new()?;
     let mut client = StdioMcpClient::launch_and_init_with_env(
         Some(logs.path()),
-        &[("SYNAPSE_AUDIO_LOOPBACK", "0")],
+        &[
+            ("SYNAPSE_ENABLE_AUDIO", "true"),
+            ("SYNAPSE_AUDIO_LOOPBACK", "0"),
+        ],
     )
     .await?;
 

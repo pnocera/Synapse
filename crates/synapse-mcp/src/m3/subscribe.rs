@@ -5,7 +5,10 @@ use synapse_core::{EventFilter, error_codes};
 
 use crate::{http::sse::SseState, m1::mcp_error};
 
-use super::M3ToolStub;
+use super::{
+    M3ToolStub,
+    permissions::{Permission, RequiredPermissions, required},
+};
 
 const DEFAULT_BUFFER_SIZE: u32 = 4096;
 
@@ -81,6 +84,16 @@ pub const fn subscribe() -> M3ToolStub {
 #[must_use]
 pub const fn subscribe_cancel() -> M3ToolStub {
     M3ToolStub::new("subscribe_cancel")
+}
+
+#[must_use]
+pub fn required_permissions(_params: &SubscribeParams) -> RequiredPermissions {
+    required([Permission::ReadEvents])
+}
+
+#[must_use]
+pub fn required_permissions_cancel(_params: &SubscribeCancelParams) -> RequiredPermissions {
+    required([Permission::ReadEvents])
 }
 
 pub fn subscribe_to_events(

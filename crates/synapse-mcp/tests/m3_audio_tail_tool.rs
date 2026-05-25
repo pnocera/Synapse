@@ -10,7 +10,10 @@ async fn audio_tail_schema_defaults_cap_and_byte_counts() -> anyhow::Result<()> 
     let logs = TempDir::new()?;
     let mut client = StdioMcpClient::launch_and_init_with_env(
         Some(logs.path()),
-        &[("SYNAPSE_AUDIO_LOOPBACK", "0")],
+        &[
+            ("SYNAPSE_ENABLE_AUDIO", "true"),
+            ("SYNAPSE_AUDIO_LOOPBACK", "0"),
+        ],
     )
     .await?;
 

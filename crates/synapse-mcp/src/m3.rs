@@ -1,5 +1,6 @@
 mod a11y_events;
 pub mod audio;
+pub mod permissions;
 pub mod profile;
 pub mod reflex;
 pub mod replay;
@@ -21,11 +22,15 @@ use synapse_storage::Db;
 use tokio_util::sync::CancellationToken;
 
 use self::a11y_events::A11yEventBridge;
+use self::permissions::{PermissionGrants, configured_grants_from_parts};
 use crate::http::sse::SseState;
 
 const DB_ENV: &str = "SYNAPSE_DB";
 const PROFILE_DIR_ENV: &str = "SYNAPSE_PROFILE_DIR";
 const REFLEX_DISABLED_ENV: &str = "SYNAPSE_REFLEX_DISABLED";
+const ENABLE_AUDIO_ENV: &str = "SYNAPSE_ENABLE_AUDIO";
+const ALLOW_UNKNOWN_PROFILE_ENV: &str = "SYNAPSE_ALLOW_UNKNOWN_PROFILE";
+const ALLOWED_PERMISSIONS_ENV: &str = "SYNAPSE_MCP_ALLOWED_PERMISSIONS";
 const BIND_ENV: &str = "SYNAPSE_BIND";
 const BEARER_TOKEN_ENV: &str = "SYNAPSE_BEARER_TOKEN";
 const AUDIO_LOOPBACK_ENV: &str = "SYNAPSE_AUDIO_LOOPBACK";
@@ -41,16 +46,26 @@ pub struct M3ServiceConfig {
     pub bind: String,
     pub bearer_token: Option<String>,
     pub max_subscriptions: NonZeroUsize,
+    pub enable_audio: bool,
+    pub allow_unknown_profile: bool,
+    pub allowed_permissions: Option<String>,
 }
 
 impl M3ServiceConfig {
     #[must_use]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "constructor mirrors parsed CLI/config fields without hiding startup gates"
+    )]
     pub fn from_cli_parts(
         db_path: Option<PathBuf>,
         profile_dir: Option<PathBuf>,
         reflex_disabled: bool,
         bind: String,
         max_subscriptions: NonZeroUsize,
+        enable_audio: bool,
+        allow_unknown_profile: bool,
+        allowed_permissions: Option<String>,
     ) -> Self {
         Self {
             db_path,
@@ -59,19 +74,30 @@ impl M3ServiceConfig {
             bind,
             bearer_token: std::env::var(BEARER_TOKEN_ENV).ok(),
             max_subscriptions,
+            enable_audio,
+            allow_unknown_profile,
+            allowed_permissions,
         }
     }
 
     pub fn from_env() -> Result<Self> {
         let reflex_disabled_raw = std::env::var(REFLEX_DISABLED_ENV).ok();
+        let enable_audio_raw = std::env::var(ENABLE_AUDIO_ENV).ok();
+        let allow_unknown_profile_raw = std::env::var(ALLOW_UNKNOWN_PROFILE_ENV).ok();
         let max_subscriptions_raw = std::env::var(MAX_SUBSCRIPTIONS_ENV).ok();
         Ok(Self {
             db_path: std::env::var_os(DB_ENV).map(PathBuf::from),
             profile_dir: std::env::var_os(PROFILE_DIR_ENV).map(PathBuf::from),
             reflex_disabled: parse_bool_env(REFLEX_DISABLED_ENV, reflex_disabled_raw.as_deref())?,
+            enable_audio: parse_bool_env(ENABLE_AUDIO_ENV, enable_audio_raw.as_deref())?,
+            allow_unknown_profile: parse_bool_env(
+                ALLOW_UNKNOWN_PROFILE_ENV,
+                allow_unknown_profile_raw.as_deref(),
+            )?,
             bind: std::env::var(BIND_ENV).unwrap_or_else(|_| DEFAULT_BIND.to_owned()),
             bearer_token: std::env::var(BEARER_TOKEN_ENV).ok(),
             max_subscriptions: parse_max_subscriptions_env(max_subscriptions_raw.as_deref())?,
+            allowed_permissions: std::env::var(ALLOWED_PERMISSIONS_ENV).ok(),
         })
     }
 }
@@ -86,6 +112,9 @@ pub struct M3State {
     pub shutdown_cancel: CancellationToken,
     pub shutdown_reason: &'static str,
     pub connection_closed_cancel: Option<CancellationToken>,
+    pub permission_grants: PermissionGrants,
+    pub enable_audio: bool,
+    pub allow_unknown_profile: bool,
     pub profile_runtime: Option<Arc<ProfileRuntime>>,
     pub sse_state: SseState,
     pub reflex_runtime: Option<Arc<Mutex<ReflexRuntime>>>,
@@ -142,6 +171,9 @@ impl M3State {
             Some(bool_env_value(config.reflex_disabled)),
             config.bearer_token,
             Some(config.bind),
+            Some(bool_env_value(config.enable_audio)),
+            Some(bool_env_value(config.allow_unknown_profile)),
+            config.allowed_permissions.as_deref(),
             shutdown_cancel,
             shutdown_reason,
             connection_closed_cancel,
@@ -156,11 +188,18 @@ impl M3State {
         reflex_disabled: Option<&str>,
         bearer_token: Option<String>,
         bind: Option<String>,
+        enable_audio: Option<&str>,
+        allow_unknown_profile: Option<&str>,
+        allowed_permissions: Option<&str>,
         shutdown_cancel: CancellationToken,
         shutdown_reason: &'static str,
         connection_closed_cancel: Option<CancellationToken>,
         sse_state: SseState,
     ) -> Result<Self> {
+        let enable_audio = parse_bool_env(ENABLE_AUDIO_ENV, enable_audio)?;
+        let allow_unknown_profile =
+            parse_bool_env(ALLOW_UNKNOWN_PROFILE_ENV, allow_unknown_profile)?;
+        let permission_grants = configured_grants_from_parts(allowed_permissions, enable_audio)?;
         Ok(Self {
             db_path,
             profile_dir,
@@ -172,6 +211,9 @@ impl M3State {
             shutdown_cancel,
             shutdown_reason,
             connection_closed_cancel,
+            permission_grants,
+            enable_audio,
+            allow_unknown_profile,
             profile_runtime: None,
             sse_state,
             reflex_runtime: None,

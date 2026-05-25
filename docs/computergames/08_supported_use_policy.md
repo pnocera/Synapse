@@ -96,6 +96,7 @@ When an action is about to fire, the MCP layer checks session permissions, profi
 |---|---|---|
 | `use_scope = "unknown"` and a write/action tool is requested | Refuse with `SAFETY_PROFILE_ACTION_DENIED`, log event | Activate a reviewed profile or pass an explicit profile override |
 | Hardware HID requested without hardware enabled | Refuse with `ACTION_BACKEND_UNAVAILABLE` | Start with `--hardware-hid <port|auto>` |
+| Audio tool requested without audio enabled | Refuse with `SAFETY_PERMISSION_DENIED` | Start with `--enable-audio` or set `SYNAPSE_ENABLE_AUDIO=true` |
 | Launch process requested outside allowlist | Refuse with `SAFETY_LAUNCH_DENIED_BY_POLICY` | Add `--allow-launch <regex>` or config entry |
 | Shell command requested outside allowlist | Refuse with `SAFETY_SHELL_DENIED_BY_POLICY` | Add `--allow-shell <regex>` or config entry |
 | Redaction disabled | Requires startup flag and first-use confirmation | `--no-redaction` |

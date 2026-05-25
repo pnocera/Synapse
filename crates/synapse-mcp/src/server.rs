@@ -42,6 +42,7 @@ use crate::{
             AudioTailParams, AudioTailResponse, AudioTranscribeParams, AudioTranscribeResponse,
             tail_audio, transcribe_audio,
         },
+        permissions::{RequiredPermissions, authorization_error},
         profile::{
             ProfileActivateParams, ProfileActivateResponse, ProfileListParams, ProfileListResponse,
             activate_profile, list_profiles,
@@ -221,6 +222,9 @@ impl SynapseService {
                 state.profile_dir.as_ref(),
                 state.reflex_disabled,
                 state.bearer_token.as_ref(),
+                state.permission_grants.names(),
+                state.enable_audio,
+                state.allow_unknown_profile,
                 state.shutdown_cancel.is_cancelled(),
                 state.shutdown_reason,
                 state
@@ -242,6 +246,48 @@ impl SynapseService {
             }
             (false, false) => "Synapse M1 perception MCP server with M2 action scaffold",
         }
+    }
+
+    fn require_m3_permissions(
+        &self,
+        tool: &'static str,
+        required: &RequiredPermissions,
+    ) -> Result<(), ErrorData> {
+        let missing = self
+            .m3_state
+            .lock()
+            .map_err(|_err| {
+                mcp_error(
+                    synapse_core::error_codes::TOOL_INTERNAL_ERROR,
+                    "M3 service state lock poisoned",
+                )
+            })?
+            .permission_grants
+            .first_missing(required);
+        if let Some(missing) = missing {
+            tracing::warn!(
+                code = synapse_core::error_codes::SAFETY_PERMISSION_DENIED,
+                tool,
+                missing_permission = missing.as_str(),
+                "tool.permission_denied tool={} missing_permission={}",
+                tool,
+                missing.as_str()
+            );
+            return Err(authorization_error(tool, missing));
+        }
+        Ok(())
+    }
+
+    fn allow_unknown_profile(&self) -> Result<bool, ErrorData> {
+        self.m3_state
+            .lock()
+            .map(|state| state.allow_unknown_profile)
+            .map_err(|_err| {
+                mcp_error(
+                    synapse_core::error_codes::TOOL_INTERNAL_ERROR,
+                    "M3 service state lock poisoned",
+                )
+            })
     }
 
     fn m2_action_context(&self) -> Result<M2ActionContext, ErrorData> {
@@ -333,6 +379,7 @@ impl SynapseService {
     fn activate_profile_locked(
         &self,
         params: &ProfileActivateParams,
+        allow_unknown_profile: bool,
     ) -> Result<ProfileActivateResponse, ErrorData> {
         // Keep the M3 mutex held so concurrent activations preserve changed=false idempotency.
         let mut state = self.m3_state.lock().map_err(|_err| {
@@ -344,7 +391,7 @@ impl SynapseService {
         let runtime = state
             .ensure_profile_runtime()
             .map_err(|error| mcp_error(error.code(), error.to_string()))?;
-        activate_profile(&runtime, params)
+        activate_profile(&runtime, params, allow_unknown_profile)
     }
 
     fn last_observed_foreground(&self) -> Result<Option<ForegroundContext>, ErrorData> {
@@ -677,6 +724,10 @@ impl SynapseService {
             buffer_size = params.0.buffer_size,
             "tool.invocation kind=subscribe"
         );
+        self.require_m3_permissions(
+            "subscribe",
+            &crate::m3::subscribe::required_permissions(&params.0),
+        )?;
         let sse_state = self.sse_state()?;
         subscribe_to_events(&sse_state, &params.0).map(Json)
     }
@@ -692,6 +743,10 @@ impl SynapseService {
             subscription_id = %params.0.subscription_id,
             "tool.invocation kind=subscribe_cancel"
         );
+        self.require_m3_permissions(
+            "subscribe_cancel",
+            &crate::m3::subscribe::required_permissions_cancel(&params.0),
+        )?;
         let sse_state = self.sse_state()?;
         cancel_subscription(&sse_state, &params.0).map(Json)
     }
@@ -708,6 +763,8 @@ impl SynapseService {
             priority = params.0.priority,
             "tool.invocation kind=reflex_register"
         );
+        let required = crate::m3::reflex::required_permissions_register(&params.0)?;
+        self.require_m3_permissions("reflex_register", &required)?;
         let runtime = self.reflex_runtime()?;
         register_reflex(&runtime, params.0).map(Json)
     }
@@ -723,6 +780,10 @@ impl SynapseService {
             reflex_id = %params.0.reflex_id,
             "tool.invocation kind=reflex_cancel"
         );
+        self.require_m3_permissions(
+            "reflex_cancel",
+            &crate::m3::reflex::required_permissions_cancel(&params.0),
+        )?;
         let runtime = self.reflex_runtime()?;
         cancel_reflex(&runtime, &params.0).map(Json)
     }
@@ -738,6 +799,10 @@ impl SynapseService {
             include_expired = params.0.include_expired,
             "tool.invocation kind=reflex_list"
         );
+        self.require_m3_permissions(
+            "reflex_list",
+            &crate::m3::reflex::required_permissions_list(&params.0),
+        )?;
         let runtime = self.reflex_runtime()?;
         list_reflexes(&runtime, &params.0).map(Json)
     }
@@ -754,6 +819,10 @@ impl SynapseService {
             limit = params.0.limit,
             "tool.invocation kind=reflex_history"
         );
+        self.require_m3_permissions(
+            "reflex_history",
+            &crate::m3::reflex::required_permissions_history(&params.0),
+        )?;
         let runtime = self.reflex_runtime()?;
         history_reflexes(&runtime, &params.0).map(Json)
     }
@@ -768,6 +837,10 @@ impl SynapseService {
             kind = "profile_list",
             "tool.invocation kind=profile_list"
         );
+        self.require_m3_permissions(
+            "profile_list",
+            &crate::m3::profile::required_permissions_list(&params.0),
+        )?;
         let runtime = self.profile_runtime()?;
         list_profiles(&runtime, &params.0).map(Json)
     }
@@ -783,7 +856,12 @@ impl SynapseService {
             profile_id = %params.0.profile_id,
             "tool.invocation kind=profile_activate"
         );
-        self.activate_profile_locked(&params.0).map(Json)
+        self.require_m3_permissions(
+            "profile_activate",
+            &crate::m3::profile::required_permissions_activate(&params.0),
+        )?;
+        self.activate_profile_locked(&params.0, self.allow_unknown_profile()?)
+            .map(Json)
     }
 
     #[tool(description = "Record observations and/or events to a replay JSONL file")]
@@ -799,6 +877,10 @@ impl SynapseService {
             duration_ms = params.0.duration_ms,
             "tool.invocation kind=replay_record"
         );
+        self.require_m3_permissions(
+            "replay_record",
+            &crate::m3::replay::required_permissions(&params.0),
+        )?;
         let sse_state = self.sse_state()?;
         record_replay(self.m1_state.clone(), sse_state, &params.0)
             .await
@@ -816,6 +898,10 @@ impl SynapseService {
             seconds = params.0.seconds,
             "tool.invocation kind=audio_tail"
         );
+        self.require_m3_permissions(
+            "audio_tail",
+            &crate::m3::audio::required_permissions_tail(&params.0),
+        )?;
         tail_audio(&self.m3_state, &params.0).map(Json)
     }
 
@@ -831,6 +917,10 @@ impl SynapseService {
             language = %params.0.language,
             "tool.invocation kind=audio_transcribe"
         );
+        self.require_m3_permissions(
+            "audio_transcribe",
+            &crate::m3::audio::required_permissions_transcribe(&params.0),
+        )?;
         transcribe_audio(&self.m3_state, &params.0).map(Json)
     }
 }

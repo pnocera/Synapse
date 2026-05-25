@@ -370,6 +370,9 @@ HTTP_SESSION_INVALID             (Mcp-Session-Id lifecycle)
 STORAGE_DISK_PRESSURE_LEVEL_1..4 (4 codes — already declared in 06 §8 but not yet const; declare and emit per pressure-level transition)
 REPLAY_TARGET_INVALID            (replay_record param check)
 REPLAY_FORMAT_INVALID            (replay_record param check)
+SAFETY_PERMISSION_DENIED         (per-tool M3 permission refusal)
+SAFETY_PROFILE_ACTION_DENIED     (unknown-scope profile activation refusal)
+REFLEX_ACTION_PERMISSION_DENIED  (reflex firing permission suppression)
 ```
 
 Throw helper stays `mcp_error(code, msg)` from `crates/synapse-mcp/src/m1.rs:369`.

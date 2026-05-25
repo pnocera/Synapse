@@ -57,6 +57,7 @@ fn error_codes_match_literal_names() {
     assert_literal!(REFLEX_DISABLED_BY_OPERATOR);
     assert_literal!(REFLEX_LIFETIME_EXPIRED);
     assert_literal!(REFLEX_RECURSION_LIMIT);
+    assert_literal!(REFLEX_ACTION_PERMISSION_DENIED);
 
     assert_literal!(PROFILE_NOT_FOUND);
     assert_literal!(PROFILE_PARSE_ERROR);
@@ -108,6 +109,8 @@ fn error_codes_match_literal_names() {
     assert_literal!(SAFETY_SHELL_DENIED_BY_POLICY);
     assert_literal!(SAFETY_LAUNCH_DENIED_BY_POLICY);
     assert_literal!(SAFETY_SECRET_REDACTED);
+    assert_literal!(SAFETY_PERMISSION_DENIED);
+    assert_literal!(SAFETY_PROFILE_ACTION_DENIED);
 }
 
 #[test]
@@ -116,6 +119,10 @@ fn m3_error_codes_snapshot_with_readback() {
         (
             "REFLEX_RECURSION_LIMIT",
             synapse_core::error_codes::REFLEX_RECURSION_LIMIT,
+        ),
+        (
+            "REFLEX_ACTION_PERMISSION_DENIED",
+            synapse_core::error_codes::REFLEX_ACTION_PERMISSION_DENIED,
         ),
         (
             "HTTP_BIND_NON_LOOPBACK_REFUSED",
@@ -160,6 +167,14 @@ fn m3_error_codes_snapshot_with_readback() {
         (
             "REPLAY_FORMAT_INVALID",
             synapse_core::error_codes::REPLAY_FORMAT_INVALID,
+        ),
+        (
+            "SAFETY_PERMISSION_DENIED",
+            synapse_core::error_codes::SAFETY_PERMISSION_DENIED,
+        ),
+        (
+            "SAFETY_PROFILE_ACTION_DENIED",
+            synapse_core::error_codes::SAFETY_PROFILE_ACTION_DENIED,
         ),
     ];
     let expected = codes.iter().map(|(name, _value)| *name).collect::<Vec<_>>();

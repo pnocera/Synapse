@@ -1672,6 +1672,52 @@ expression: shape
           }
         ]
       },
+      "ReflexThenParam": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/ReflexThen"
+          },
+          {
+            "properties": {
+              "steps": {
+                "items": {
+                  "$ref": "#/$defs/ReflexThenStep"
+                },
+                "type": "array"
+              }
+            },
+            "required": [
+              "steps"
+            ],
+            "type": "object"
+          }
+        ]
+      },
+      "ReflexThenStep": {
+        "additionalProperties": false,
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "params": {
+            "default": {}
+          }
+        },
+        "required": [
+          "action"
+        ],
+        "type": "object"
+      },
+      "ReflexWhenParam": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/EventFilter"
+          },
+          {
+            "$ref": "#/$defs/WindowEventWhen"
+          }
+        ]
+      },
       "Stick": {
         "enum": [
           "left",
@@ -1685,6 +1731,34 @@ expression: shape
           "right"
         ],
         "type": "string"
+      },
+      "WindowEventMatch": {
+        "additionalProperties": false,
+        "properties": {
+          "window_title_regex": {
+            "default": null,
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "WindowEventWhen": {
+        "additionalProperties": false,
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "match": {
+            "$ref": "#/$defs/WindowEventMatch"
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
       }
     },
     "$schema": "https://json-schema.org/draft/2020-12/schema",
@@ -1722,18 +1796,17 @@ expression: shape
         "type": "integer"
       },
       "then": {
-        "$ref": "#/$defs/ReflexThen"
+        "$ref": "#/$defs/ReflexThenParam"
       },
       "when": {
         "anyOf": [
           {
-            "$ref": "#/$defs/EventFilter"
+            "$ref": "#/$defs/ReflexWhenParam"
           },
           {
             "type": "null"
           }
-        ],
-        "default": null
+        ]
       }
     },
     "required": [

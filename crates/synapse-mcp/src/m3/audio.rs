@@ -9,7 +9,10 @@ use synapse_core::error_codes;
 
 use crate::{
     m1::mcp_error,
-    m3::{M3ToolStub, SharedM3State},
+    m3::{
+        M3ToolStub, SharedM3State,
+        permissions::{Permission, RequiredPermissions, required},
+    },
 };
 
 const DEFAULT_SECONDS: u32 = 5;
@@ -88,6 +91,16 @@ pub const fn audio_tail() -> M3ToolStub {
 #[must_use]
 pub const fn audio_transcribe() -> M3ToolStub {
     M3ToolStub::new("audio_transcribe")
+}
+
+#[must_use]
+pub fn required_permissions_tail(_params: &AudioTailParams) -> RequiredPermissions {
+    required([Permission::ReadAudio])
+}
+
+#[must_use]
+pub fn required_permissions_transcribe(_params: &AudioTranscribeParams) -> RequiredPermissions {
+    required([Permission::ReadAudio])
 }
 
 pub fn tail_audio(

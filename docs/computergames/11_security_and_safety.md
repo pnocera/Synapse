@@ -85,7 +85,7 @@ Per session on connect:
 | `Launch { ... }` | denied | `--allow-launch <pattern>` (e.g., `notepad.exe`) |
 | `Shell { ... }` | denied | `--allow-shell <argv_regex>` |
 | `CaptureScreen` | granted | `--disable-capture` to deny |
-| `CaptureAudio` | granted | `--disable-audio` to deny |
+| `CaptureAudio` | denied in M3 | `--enable-audio` / `SYNAPSE_ENABLE_AUDIO=true` |
 | `FsRead` (file watcher) | granted, profile-configured watch paths only | — |
 | `Reflex` | granted | `--reflex-disabled` to deny |
 | `ProfileChange` | granted | `--profile-fixed <id>` to pin |
@@ -99,6 +99,12 @@ fn required_permissions(&self, params: &Value) -> Vec<Permission> { ... }
 ```
 
 MCP checks against the session's grant set; missing permission returns `SAFETY_PERMISSION_DENIED` with the missing class named.
+
+M3 implements this with a per-session grant set. If `SYNAPSE_MCP_ALLOWED_PERMISSIONS`
+is set, only the named permissions are granted. If unset, the local stdio/loopback
+default grant set covers current read/config/reflex/replay permissions, keyboard,
+mouse, and pad; `READ_AUDIO` is still granted only when audio is explicitly
+enabled. Unknown permission names fail startup rather than being ignored.
 
 ### 4.4 Allow-list patterns
 

@@ -6,7 +6,7 @@ use std::{
 use rmcp::{ErrorData, schemars::JsonSchema};
 use schemars::{Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
-use synapse_core::{Event, EventFilter, Observation, error_codes, new_session_id};
+use synapse_core::{Event, EventFilter, Observation, error_codes};
 use synapse_perception::{ObservationAssembler, ObserveInclude};
 use tokio::{
     fs::{self, File},
@@ -19,7 +19,10 @@ use crate::{
     m1::{ObserveParams, SharedM1State, current_input, mcp_error, observe_include},
 };
 
-use super::M3ToolStub;
+use super::{
+    M3ToolStub,
+    permissions::{Permission, RequiredPermissions, normalize_replay_path, replay_root, required},
+};
 
 const DEFAULT_TARGET: &str = "observations";
 const DEFAULT_FORMAT: &str = "jsonl";
@@ -76,6 +79,11 @@ pub struct ReplayRecordResponse {
 #[must_use]
 pub const fn replay_record() -> M3ToolStub {
     M3ToolStub::new("replay_record")
+}
+
+#[must_use]
+pub fn required_permissions(_params: &ReplayRecordParams) -> RequiredPermissions {
+    required([Permission::WriteReplay])
 }
 
 pub async fn record_replay(
@@ -299,22 +307,7 @@ async fn create_parent_dir(path: &Path) -> Result<(), ErrorData> {
 }
 
 fn replay_path(path: Option<&str>) -> Result<PathBuf, ErrorData> {
-    match path.map(str::trim).filter(|value| !value.is_empty()) {
-        Some(path) => Ok(PathBuf::from(path)),
-        None if path.is_some() => Err(mcp_error(
-            error_codes::TOOL_PARAMS_INVALID,
-            "replay_record path must not be empty when provided",
-        )),
-        None => Ok(default_replay_path()),
-    }
-}
-
-fn default_replay_path() -> PathBuf {
-    std::env::var_os("LOCALAPPDATA")
-        .map_or_else(std::env::temp_dir, PathBuf::from)
-        .join("synapse")
-        .join("replays")
-        .join(format!("replay-{}.jsonl", new_session_id()))
+    normalize_replay_path(&replay_root(), path)
 }
 
 fn display_path(path: &Path) -> String {
