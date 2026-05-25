@@ -1,7 +1,7 @@
 use std::{io, net::SocketAddr, process::ExitCode, sync::Arc, time::Duration};
 
 use anyhow::Context;
-use axum::{Json, Router, extract::State, routing::get};
+use axum::{Json, Router, extract::State, middleware, routing::get};
 use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService, session::local::LocalSessionManager,
 };
@@ -9,9 +9,17 @@ use synapse_core::Health;
 use tokio::{net::TcpListener, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
-use crate::server::SynapseService;
+use crate::{
+    http::auth::{self, HttpAuth},
+    server::SynapseService,
+};
 
 type McpHttpService = StreamableHttpService<SynapseService, LocalSessionManager>;
+
+#[derive(Clone)]
+struct HttpState {
+    health_service: Arc<SynapseService>,
+}
 
 pub(super) async fn serve(bind: &str) -> anyhow::Result<ExitCode> {
     synapse_action::install_panic_hook();
@@ -58,15 +66,23 @@ fn router(
     shutdown_cancel: CancellationToken,
     connection_closed_cancel: CancellationToken,
 ) -> anyhow::Result<Router> {
+    let auth = Arc::new(HttpAuth::load().context("load HTTP bearer token")?);
+    tracing::info!(
+        code = "MCP_HTTP_AUTH_CONFIGURED",
+        source = auth.source_label(),
+        "HTTP bearer token configured"
+    );
     let health_service = Arc::new(
         http_service(shutdown_cancel.clone(), connection_closed_cancel.clone())
             .context("initialize HTTP health service state")?,
     );
     let mcp_service = streamable_service(shutdown_cancel, connection_closed_cancel);
+    let state = HttpState { health_service };
     Ok(Router::new()
         .route("/health", get(health))
         .nest_service("/mcp", mcp_service)
-        .with_state(health_service))
+        .layer(middleware::from_fn_with_state(auth, auth::require_bearer))
+        .with_state(state))
 }
 
 fn streamable_service(
@@ -90,12 +106,12 @@ fn http_service(
         .map_err(|error| io::Error::other(format!("{error:#}")))
 }
 
-async fn health(State(service): State<Arc<SynapseService>>) -> Json<Health> {
+async fn health(State(state): State<HttpState>) -> Json<Health> {
     tracing::info!(
         code = "MCP_HTTP_HEALTH",
         "tool.invocation kind=health transport=http"
     );
-    Json(service.health_payload())
+    Json(state.health_service.health_payload())
 }
 
 fn spawn_server(

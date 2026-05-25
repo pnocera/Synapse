@@ -3267,6 +3267,8 @@ dependencies = [
  "schemars",
  "serde",
  "serde_json",
+ "sha2",
+ "subtle",
  "synapse-a11y",
  "synapse-action",
  "synapse-capture",

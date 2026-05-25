@@ -12,19 +12,30 @@ use tokio::{
 async fn http_mode_serves_health_until_shutdown() -> anyhow::Result<()> {
     let dir = TempDir::new()?;
     let bind = free_loopback_bind()?;
+    let token = "cli-mode-token";
     let mut child = Command::new(env!("CARGO_BIN_EXE_synapse-mcp"))
         .args(["--mode", "http", "--bind", &bind])
         .env("SYNAPSE_LOG_DIR", dir.path())
+        .env("SYNAPSE_BEARER_TOKEN", token)
         .stderr(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;
 
-    let response = wait_for_health(&bind).await;
+    let response = wait_for_health(&bind, Some(token)).await;
+    let missing = read_health_once(&bind, None).await;
+    let wrong = read_health_once(&bind, Some("wrong-token")).await;
     stop_child(&mut child).await?;
 
     let response = response?;
+    let missing = missing?;
+    let wrong = wrong?;
     assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
     assert!(response.contains(r#""ok":true"#), "{response}");
+    assert!(
+        missing.starts_with("HTTP/1.1 401 Unauthorized"),
+        "{missing}"
+    );
+    assert!(wrong.starts_with("HTTP/1.1 401 Unauthorized"), "{wrong}");
     Ok(())
 }
 
@@ -77,10 +88,10 @@ fn free_loopback_bind() -> anyhow::Result<String> {
     Ok(addr.to_string())
 }
 
-async fn wait_for_health(bind: &str) -> anyhow::Result<String> {
+async fn wait_for_health(bind: &str, token: Option<&str>) -> anyhow::Result<String> {
     let deadline = tokio::time::Instant::now() + Duration::from_secs(10);
     loop {
-        match read_health_once(bind).await {
+        match read_health_once(bind, token).await {
             Ok(response) => return Ok(response),
             Err(error) if tokio::time::Instant::now() < deadline => {
                 let _last_error = error;
@@ -91,9 +102,13 @@ async fn wait_for_health(bind: &str) -> anyhow::Result<String> {
     }
 }
 
-async fn read_health_once(bind: &str) -> anyhow::Result<String> {
+async fn read_health_once(bind: &str, token: Option<&str>) -> anyhow::Result<String> {
     let mut stream = TcpStream::connect(bind).await?;
-    let request = format!("GET /health HTTP/1.1\r\nHost: {bind}\r\nConnection: close\r\n\r\n");
+    let auth = token.map_or(String::new(), |token| {
+        format!("Authorization: Bearer {token}\r\n")
+    });
+    let request =
+        format!("GET /health HTTP/1.1\r\nHost: {bind}\r\n{auth}Connection: close\r\n\r\n");
     stream.write_all(request.as_bytes()).await?;
     let mut response = Vec::new();
     stream.read_to_end(&mut response).await?;

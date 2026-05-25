@@ -20,6 +20,8 @@ rmcp = { workspace = true, features = ["transport-streamable-http-server"] }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sha2.workspace = true
+subtle.workspace = true
 synapse-action = { version = "0.1.0", path = "../synapse-action" }
 synapse-a11y = { version = "0.1.0", path = "../synapse-a11y" }
 synapse-core = { version = "0.1.0", path = "../synapse-core" }
