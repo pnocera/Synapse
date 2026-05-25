@@ -1,0 +1,59 @@
+---
+source: crates/synapse-mcp/tests/m3_audio_tail_tool.rs
+expression: shape
+---
+{
+  "inputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "seconds": {
+        "default": 5,
+        "format": "uint32",
+        "maximum": 5,
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "title": "AudioTailParams",
+    "type": "object"
+  },
+  "name": "audio_tail",
+  "outputSchema": {
+    "$schema": "https://json-schema.org/draft/2020-12/schema",
+    "additionalProperties": false,
+    "properties": {
+      "channels": {
+        "format": "uint16",
+        "maximum": 65535,
+        "minimum": 0,
+        "type": "integer"
+      },
+      "format": {
+        "type": "string"
+      },
+      "pcm": {
+        "items": {
+          "format": "uint8",
+          "maximum": 255,
+          "minimum": 0,
+          "type": "integer"
+        },
+        "type": "array"
+      },
+      "sample_rate": {
+        "format": "uint32",
+        "minimum": 0,
+        "type": "integer"
+      }
+    },
+    "required": [
+      "pcm",
+      "sample_rate",
+      "channels",
+      "format"
+    ],
+    "title": "AudioTailResponse",
+    "type": "object"
+  }
+}

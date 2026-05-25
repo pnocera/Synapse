@@ -47,6 +47,7 @@ impl Default for AudioConfig {
     }
 }
 
+#[derive(Debug)]
 pub struct AudioRuntime {
     config: AudioConfig,
     ring: Arc<AudioRing>,

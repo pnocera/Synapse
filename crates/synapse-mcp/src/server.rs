@@ -38,6 +38,7 @@ use crate::{
     },
     m3::{
         M3ServiceConfig, SharedM3State,
+        audio::{AudioTailParams, AudioTailResponse, tail_audio},
         profile::{
             ProfileActivateParams, ProfileActivateResponse, ProfileListParams, ProfileListResponse,
             activate_profile, list_profiles,
@@ -787,6 +788,20 @@ impl SynapseService {
         record_replay(self.m1_state.clone(), sse_state, &params.0)
             .await
             .map(Json)
+    }
+
+    #[tool(description = "Return the latest loopback audio tail as PCM s16le bytes")]
+    pub async fn audio_tail(
+        &self,
+        params: Parameters<AudioTailParams>,
+    ) -> Result<Json<AudioTailResponse>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "audio_tail",
+            seconds = params.0.seconds,
+            "tool.invocation kind=audio_tail"
+        );
+        tail_audio(&self.m3_state, &params.0).map(Json)
     }
 }
 

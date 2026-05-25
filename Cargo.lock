@@ -3272,6 +3272,7 @@ dependencies = [
  "subtle",
  "synapse-a11y",
  "synapse-action",
+ "synapse-audio",
  "synapse-capture",
  "synapse-core",
  "synapse-perception",

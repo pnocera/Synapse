@@ -11,6 +11,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 use synapse_action::ActionHandle;
+use synapse_audio::{AudioConfig, AudioError, AudioRuntime, DEFAULT_RING_SECONDS};
 use synapse_core::SCHEMA_VERSION;
 use synapse_profiles::{ProfileError, ProfileRuntime, bundled_profiles_dir};
 use synapse_reflex::{EventBus, ReflexError, ReflexRuntime};
@@ -24,6 +25,7 @@ const PROFILE_DIR_ENV: &str = "SYNAPSE_PROFILE_DIR";
 const REFLEX_DISABLED_ENV: &str = "SYNAPSE_REFLEX_DISABLED";
 const BIND_ENV: &str = "SYNAPSE_BIND";
 const BEARER_TOKEN_ENV: &str = "SYNAPSE_BEARER_TOKEN";
+const AUDIO_LOOPBACK_ENV: &str = "SYNAPSE_AUDIO_LOOPBACK";
 const DEFAULT_BIND: &str = "127.0.0.1:7700";
 pub type SharedM3State = Arc<Mutex<M3State>>;
 
@@ -78,6 +80,7 @@ pub struct M3State {
     pub profile_runtime: Option<Arc<ProfileRuntime>>,
     pub sse_state: SseState,
     pub reflex_runtime: Option<Arc<Mutex<ReflexRuntime>>>,
+    pub audio_runtime: Option<Arc<AudioRuntime>>,
 }
 
 pub fn shared_m3_state_from_env() -> Result<SharedM3State> {
@@ -161,6 +164,7 @@ impl M3State {
             profile_runtime: None,
             sse_state,
             reflex_runtime: None,
+            audio_runtime: None,
         })
     }
 
@@ -207,6 +211,22 @@ impl M3State {
             event_bus,
         )?));
         self.reflex_runtime = Some(Arc::clone(&runtime));
+        Ok(runtime)
+    }
+
+    pub fn ensure_audio_runtime(&mut self) -> std::result::Result<Arc<AudioRuntime>, AudioError> {
+        if let Some(runtime) = &self.audio_runtime {
+            return Ok(Arc::clone(runtime));
+        }
+
+        let config = AudioConfig {
+            ring_seconds: DEFAULT_RING_SECONDS,
+            start_loopback: audio_loopback_enabled()?,
+            detectors_enabled: false,
+            stt_model_path: None,
+        };
+        let runtime = Arc::new(AudioRuntime::spawn(config)?);
+        self.audio_runtime = Some(Arc::clone(&runtime));
         Ok(runtime)
     }
 }
@@ -258,4 +278,18 @@ fn parse_bool_env(name: &str, value: Option<&str>) -> Result<bool> {
 
 const fn bool_env_value(value: bool) -> &'static str {
     if value { "1" } else { "0" }
+}
+
+fn audio_loopback_enabled() -> std::result::Result<bool, AudioError> {
+    match std::env::var(AUDIO_LOOPBACK_ENV).ok().as_deref() {
+        None | Some("1") => Ok(true),
+        Some("0") => Ok(false),
+        Some(value) if value.eq_ignore_ascii_case("true") => Ok(true),
+        Some(value) if value.eq_ignore_ascii_case("false") => Ok(false),
+        Some(value) => Err(AudioError::LoopbackInitFailed {
+            detail: format!(
+                "{AUDIO_LOOPBACK_ENV} must be one of 1, 0, true, or false; got {value:?}"
+            ),
+        }),
+    }
 }
