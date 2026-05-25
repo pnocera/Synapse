@@ -435,7 +435,7 @@ Throw helper stays `mcp_error(code, msg)` from `crates/synapse-mcp/src/m1.rs:369
 | # | Title | Throws | Acceptance (manual SoT evidence required) |
 |---|---|---|---|
 | 14 | `feat(profiles): TOML loader -> Profile + version compat` | `PROFILE_PARSE_ERROR`, `PROFILE_VERSION_INCOMPATIBLE` | supporting unit checks parse every bundled profile + 3 synthetic invalid TOMLs (missing required field / bad regex / future schema_version); manual evidence records exact error code per invalid case; boundary: empty profile dir -> `profile_list` returns `[]` |
-| 15 | `feat(profiles): notify watcher + match resolver (debounced 200ms)` | `PROFILE_HUD_REGION_INVALID`, `PROFILE_KEYMAP_INVALID` | E2E: write `profiles/scratch.toml`; manual SoT readback shows `profile_list` contains it within 1 tick; edit readback shows in-memory profile replaced; delete readback shows removal from list |
+| 15 | `feat(profiles): notify watcher + match resolver (debounced 200ms)` | `PROFILE_HUD_REGION_INVALID`, `PROFILE_KEYMAP_INVALID` | E2E: write `profiles/scratch.toml`; manual SoT readback shows `profile_list` contains it within 1 tick; edit readback shows in-memory profile replaced; delete readback shows removal from list; profile resolution follows the one-active-capture-target rule in ADR-0005 |
 | 16 | `feat(profiles): bundled notepad / vscode / chrome / terminal w/ Natural defaults` | — | smoke test asserts every bundled `mouse_curve_default == "natural"` AND `keyboard_dynamics_default == "natural"`; E2E launches each app, `profile_list` shows the active match |
 | 17 | `feat(mcp): profile_list + profile_activate tools` | `PROFILE_NOT_FOUND` | snapshot at `tests/snapshots/m3_profile_tools.snap`; manual SoT readback after `profile_activate({id: "vscode"})` confirms next `health.subsystems.profiles.active_profile_id` equals `vscode` |
 
@@ -443,7 +443,7 @@ Throw helper stays `mcp_error(code, msg)` from `crates/synapse-mcp/src/m1.rs:369
 
 | # | Title | Throws | Acceptance (manual SoT evidence required) |
 |---|---|---|---|
-| 18 | `feat(audio): WASAPI loopback ring 5s + detectors` | `AUDIO_DEVICE_LOST`, `AUDIO_LOOPBACK_INIT_FAILED` | playback known test asset; manual SoT readback confirms events emitted (`loud_transient`, `speech_started/ended`), RMS metric flows, and `audio_tail(seconds=2)` returns the last 2 s of PCM |
+| 18 | `feat(audio): WASAPI loopback ring 5s + detectors` | `AUDIO_DEVICE_LOST`, `AUDIO_LOOPBACK_INIT_FAILED` | playback known test asset; manual SoT readback confirms events emitted (`loud_transient`, `speech_started/ended`), RMS metric flows, and `audio_tail(seconds=2)` returns the last 2 s of PCM; loopback target remains independent of visual capture target per ADR-0005 |
 | 19 | `feat(audio): Whisper-tiny-int8 STT (lazy load + sha256 verify)` | `AUDIO_STT_MODEL_NOT_LOADED`, `MODEL_HASH_MISMATCH` | known 5 s clip with ground-truth transcript; bench p99 <= 200 ms; manual SoT readback confirms `audio_transcribe` returns the ground-truth string +/-10% Levenshtein; missing model -> `AUDIO_STT_MODEL_NOT_LOADED` |
 | 20 | `feat(audio): direction estimate (L/R energy + GCC-PHAT)` | — | 3 stereo test clips at -60deg/0deg/+60deg azimuth; manual SoT readback confirms estimate within +/-15deg per clip |
 
@@ -628,7 +628,7 @@ Pick inputs whose expected outputs are unambiguous; tests assert on them exactly
 | Hot-reload vs. active reflexes | Reflex params snapshot at registration; profile alias resolution happens at register-time; subsequent profile changes don't retroactively break running reflexes; missing alias on fire ⇒ `REFLEX_PARAMS_INVALID` |
 | HTTP/SSE reconnect semantics | `Last-Event-ID` header on reconnect; buffer 4096/sub; deeper outage ⇒ subscription marked `lossy=true` in next push |
 | Whisper-tiny accuracy weaker than expected (`OQ-014`) | Operator opt-in upgrade to `whisper-base` via separate `models import` flow; bundled-default decision deferred to M5 |
-| Multi-monitor profile match (`OQ-012`) | one capture target at a time; agent picks via `set_capture_target` |
+| Multi-monitor profile match (`OQ-012`, ADR-0005) | one active capture target per session; agent picks via `set_capture_target`; monitor changes do not implicitly switch active profile |
 | EventFilter eval blow-up on large filters | filter depth limited to 8 (configurable); deeper trees rejected at registration with `REFLEX_FILTER_INVALID` |
 | Reflex starvation under conflicting priorities | logged via `REFLEX_STARVED` after 2 s of contended ticks; status reflected in `reflex_list` |
 | M2 carry-over (#244, #234, #233, #231) | Block A.0 fixes them **first**; M3 work does not build on the buggy paths |

@@ -145,15 +145,14 @@ interval.
 
 ---
 
-## OQ-012 — Multi-monitor capture
+## OQ-012 — Multi-monitor capture — DECIDED 2026-05-25
 
-**Q.** Separate targets per monitor or stitched virtual desktop?
+→ decided in ADR-0005.
 
-**Trade-off.** Separate: cleaner CNN inputs. Stitched: coherent view for windows spanning monitors.
-
-**Default.** Separate; capture target is one monitor at a time. Agent picks via `set_capture_target(monitor_index=...)`.
-
-**Target.** M3 multi-monitor user feedback.
+**Decision.** Synapse has one active capture target per session. The default is
+the primary monitor. Agents switch targets explicitly through
+`set_capture_target`; Synapse does not stitch the virtual desktop and does not
+run concurrent per-monitor captures in M3.
 
 ---
 

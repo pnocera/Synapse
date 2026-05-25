@@ -321,6 +321,10 @@ To cancel: `mcp/cancelled` JSON-RPC notification with original request id. Also 
 
 Reconfigures active capture target.
 
+Per ADR-0005, there is one active capture target per session. Monitor targets
+are selected explicitly by index; Synapse does not stitch the virtual desktop or
+capture multiple monitors concurrently in M3.
+
 ```json
 {
   "name": "set_capture_target",

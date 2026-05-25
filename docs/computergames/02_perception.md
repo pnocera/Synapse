@@ -27,6 +27,11 @@ Both expose captured frames as `ID3D11Texture2D` in GPU memory. **NEVER copy the
 
 ### Capture targets
 
+Per ADR-0005, each session has exactly one active capture target at a time.
+The default is the primary monitor. Agents explicitly switch to another monitor
+or window with `set_capture_target`; Synapse does not stitch the virtual desktop
+or run concurrent per-monitor captures in M3.
+
 | Target | Use |
 |---|---|
 | Primary monitor | Default; whole-desktop capture |
@@ -58,7 +63,9 @@ Frames flow through bounded channel (capacity 2). If consumer can't keep up, old
 
 ### Capture thread
 
-One OS thread per active capture target. Runs at `THREAD_PRIORITY_TIME_CRITICAL`. Communicates with tokio via `crossbeam::channel::bounded(2)`.
+One OS thread for the active capture target. Runs at
+`THREAD_PRIORITY_TIME_CRITICAL`. Communicates with tokio via
+`crossbeam::channel::bounded(2)`.
 
 ```rust
 loop {
