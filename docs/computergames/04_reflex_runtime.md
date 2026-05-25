@@ -188,8 +188,8 @@ On each event matching `when`:
 
 Two reflexes contending for the same device (e.g., two `aim_track` reflexes moving the mouse) resolve by:
 
-1. **Priority.** Higher priority wins this tick.
-2. **Newer over older,** ties broken by `reflex_id` ordinal.
+1. **Priority.** Lower numeric `u32` priority wins this tick. Default priority is `100`.
+2. **Newer over older,** ties broken by registration order.
 
 A reflex consistently losing for >2 seconds logs a `reflex_starved` event so the agent can fix the conflict.
 

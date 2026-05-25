@@ -60,15 +60,16 @@ configured Windows host.
 
 ---
 
-## OQ-005 — Reflex priority arithmetic
+## OQ-005 — Reflex priority arithmetic — DECIDED 2026-05-25
 
-**Q.** Strict priority hierarchy or probabilistic mix when reflexes contend for same device?
+→ decided in ADR-0004.
 
-**Trade-off.** Strict: predictable, can starve. Probabilistic: fair, harder to debug.
-
-**Default.** Strict priority; `reflex_starved` event after 2 s of losing.
-
-**Target.** M4+ feedback. Keep strict unless starvation events common complaint.
+**Decision.** Reflex priority is a `u32` where lower numbers win. The default
+priority is `100`. Ties are broken by registration order, with newer
+registrations winning. A loser contending for the same cursor, key, mouse
+button, or gamepad resource for 2 seconds becomes `Starved`; Synapse emits one
+`reflex_starved` event and writes one `REFLEX_STARVED` audit row per starvation
+interval.
 
 ---
 

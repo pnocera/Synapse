@@ -1,5 +1,6 @@
 pub mod audit;
 pub mod bus;
+pub mod conflict;
 pub mod error;
 pub mod kinds;
 pub mod scheduler;
@@ -14,6 +15,7 @@ pub use bus::{
     DEFAULT_MAX_SUBSCRIPTIONS, EVENTS_DROPPED_METRIC, EventBus, EventBusError, EventBusResult,
     PublishReport, SUBSCRIBER_QUEUE_CAPACITY, SubscriberHandle,
 };
+pub use conflict::{REFLEX_STARVED_KIND, STARVATION_AFTER};
 pub use error::{ReflexError, ReflexResult};
 pub use kinds::aim_track::{
     AimTrackContext, AimTrackController, AimTrackOutput, AimTrackParams, AimTrackTarget,
@@ -35,8 +37,8 @@ pub use kinds::on_event::{
     MAX_ON_EVENT_FIRINGS_PER_TICK, REFLEX_FIRED_KIND, REFLEX_RECURSION_LIMIT_KIND,
 };
 pub use scheduler::{
-    MAX_SCHEDULED_REFLEXES, REFLEX_TICK_LATE_KIND, ReflexScheduler, ScheduledReflex,
-    SchedulerConfig, SchedulerHandle, SchedulerTrigger, TickSample, p99_jitter_us,
+    DEFAULT_REFLEX_PRIORITY, MAX_SCHEDULED_REFLEXES, REFLEX_TICK_LATE_KIND, ReflexScheduler,
+    ScheduledReflex, SchedulerConfig, SchedulerHandle, SchedulerTrigger, TickSample, p99_jitter_us,
 };
 
 /// Runtime handle for the M3 reflex subsystem.

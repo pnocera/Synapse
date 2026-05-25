@@ -411,7 +411,7 @@ Throw helper stays `mcp_error(code, msg)` from `crates/synapse-mcp/src/m1.rs:369
 | 10 | `feat(reflex): hold_move + hold_button (KeyDown register / KeyUp lifetime end)` | `REFLEX_LIFETIME_EXPIRED` | E2E: hold `w` for 2 s via `UntilEvent` synthetic; lifetime fires; manual SoT readback of `RecordingBackend::events()` shows `KeyUp(w)` exactly once; `held_keys` BitSet empty after |
 | 11 | `feat(reflex): combo (timed step sequence; consumes ComboStep)` | — | bench `reflex_combo_step_interval` step intervals within 500 us of scheduled; manual SoT readback confirms dispatched action sequence matches the `ComboStep` payload byte-for-byte |
 | 12 | `feat(reflex): on_event w/ EventFilter eval + debounce + recursion guard (OQ-022)` | `REFLEX_RECURSION_LIMIT`, `REFLEX_FILTER_INVALID` | proptest filter eval: `Not(Not(x)) == x` for total filters; manual SoT readback for synthetic event stream firing 5x in one tick shows audit has 4 firings + 1 `REFLEX_RECURSION_LIMIT` row |
-| 13 | `feat(reflex): conflict resolution (priority + newer-wins + starvation log)` | `REFLEX_STARVED` | two contending aim_tracks: higher priority wins; manual SoT readback of loser's `reflex_list` row shows `status: "starved"` after 2 s; audit log shows `REFLEX_STARVED` |
+| 13 | `feat(reflex): conflict resolution (priority + newer-wins + starvation log)` | `REFLEX_STARVED` | two contending aim_tracks: lower numeric priority wins; manual SoT readback of loser's `reflex_list` row shows `status: "starved"` after 2 s; audit log shows `REFLEX_STARVED` |
 
 ### Block C — profiles (work-items 14-17)
 

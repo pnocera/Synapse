@@ -8,8 +8,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::Utc;
 use synapse_action::ActionHandle;
-use synapse_core::{Action, EventFilter, ReflexId};
+use synapse_core::{Action, EventFilter, ReflexId, ReflexLifetime, ReflexState, ReflexStatus};
 use synapse_storage::Db;
 
 use crate::{
@@ -22,6 +23,7 @@ use scheduler_tick::tick;
 pub const MAX_SCHEDULED_REFLEXES: usize = 32;
 pub const REFLEX_TICK_LATE_KIND: &str = "reflex_tick_late";
 pub const DEFAULT_SAMPLE_LIMIT: usize = 4096;
+pub const DEFAULT_REFLEX_PRIORITY: u32 = 100;
 
 #[derive(Clone, Debug)]
 pub struct SchedulerConfig {
@@ -90,7 +92,7 @@ impl ScheduledReflex {
             reflex_id: reflex_id.into(),
             trigger: SchedulerTrigger::EveryTick,
             then,
-            priority: 0,
+            priority: DEFAULT_REFLEX_PRIORITY,
             debounce: Duration::ZERO,
         }
     }
@@ -105,7 +107,7 @@ impl ScheduledReflex {
             reflex_id: reflex_id.into(),
             trigger: SchedulerTrigger::OnEvent(filter),
             then,
-            priority: 0,
+            priority: DEFAULT_REFLEX_PRIORITY,
             debounce: Duration::ZERO,
         }
     }
@@ -121,7 +123,7 @@ impl ScheduledReflex {
             reflex_id: reflex_id.into(),
             trigger: SchedulerTrigger::OnEvent(filter),
             then,
-            priority: 0,
+            priority: DEFAULT_REFLEX_PRIORITY,
             debounce,
         }
     }
@@ -164,6 +166,8 @@ pub struct SchedulerHandle {
     stop: Arc<AtomicBool>,
     join: Option<thread::JoinHandle<()>>,
     samples: Arc<Mutex<VecDeque<TickSample>>>,
+    controls: Arc<Mutex<Vec<ReflexControl>>>,
+    statuses: Arc<Mutex<Vec<ReflexStatus>>>,
 }
 
 impl SchedulerHandle {
@@ -182,6 +186,39 @@ impl SchedulerHandle {
             }
             thread::sleep(Duration::from_millis(1));
         }
+    }
+
+    #[must_use]
+    pub fn statuses(&self) -> Vec<ReflexStatus> {
+        lock_statuses(&self.statuses).clone()
+    }
+
+    #[must_use]
+    pub fn set_priority(&self, reflex_id: &str, priority: u32) -> bool {
+        let Some(index) = status_index(&self.statuses, reflex_id) else {
+            return false;
+        };
+        if let Some(control) = lock_controls(&self.controls).get_mut(index) {
+            control.priority = priority;
+        }
+        if let Some(status) = lock_statuses(&self.statuses).get_mut(index) {
+            status.priority = priority;
+        }
+        true
+    }
+
+    #[must_use]
+    pub fn cancel_reflex(&self, reflex_id: &str) -> bool {
+        let Some(index) = status_index(&self.statuses, reflex_id) else {
+            return false;
+        };
+        if let Some(control) = lock_controls(&self.controls).get_mut(index) {
+            control.active = false;
+        }
+        if let Some(status) = lock_statuses(&self.statuses).get_mut(index) {
+            status.state = ReflexState::Cancelled;
+        }
+        true
     }
 
     /// Stops the scheduler thread.
@@ -255,11 +292,37 @@ impl ReflexScheduler {
             })?;
         let stop = Arc::new(AtomicBool::new(false));
         let samples = Arc::new(Mutex::new(VecDeque::with_capacity(config.sample_limit)));
-        let mut reflexes = reflexes;
-        reflexes.sort_by_key(|reflex| std::cmp::Reverse(reflex.priority));
+        let registered_at = Utc::now();
+        let statuses = Arc::new(Mutex::new(
+            reflexes
+                .iter()
+                .map(|reflex| status_for_reflex(reflex, registered_at))
+                .collect::<Vec<_>>(),
+        ));
+        let controls = Arc::new(Mutex::new(
+            reflexes
+                .iter()
+                .map(|reflex| ReflexControl {
+                    priority: reflex.priority,
+                    active: true,
+                })
+                .collect::<Vec<_>>(),
+        ));
+        let reflexes = reflexes
+            .into_iter()
+            .enumerate()
+            .map(|(registration_order, reflex)| RuntimeReflex {
+                registration_order,
+                reflex,
+            })
+            .collect::<Vec<_>>();
         let on_event_states = reflexes
             .iter()
             .map(|_| OnEventState::default())
+            .collect::<Vec<_>>();
+        let starvation_states = reflexes
+            .iter()
+            .map(|_| crate::conflict::StarvationState::default())
             .collect::<Vec<_>>();
 
         let runtime = RuntimeState {
@@ -268,9 +331,12 @@ impl ReflexScheduler {
             reflexes,
             active_combos: Vec::new(),
             on_event_states,
+            starvation_states,
             subscription,
             stop: Arc::clone(&stop),
             samples: Arc::clone(&samples),
+            controls: Arc::clone(&controls),
+            statuses: Arc::clone(&statuses),
             config,
             audit_db,
             tick_index: 0,
@@ -287,19 +353,36 @@ impl ReflexScheduler {
             stop,
             join: Some(join),
             samples,
+            controls,
+            statuses,
         })
     }
+}
+
+#[derive(Clone, Debug)]
+struct RuntimeReflex {
+    registration_order: usize,
+    reflex: ScheduledReflex,
+}
+
+#[derive(Clone, Debug)]
+struct ReflexControl {
+    priority: u32,
+    active: bool,
 }
 
 struct RuntimeState {
     event_bus: EventBus,
     action_handle: ActionHandle,
-    reflexes: Vec<ScheduledReflex>,
+    reflexes: Vec<RuntimeReflex>,
     active_combos: Vec<ComboController>,
     on_event_states: Vec<OnEventState>,
+    starvation_states: Vec<crate::conflict::StarvationState>,
     subscription: SubscriberHandle,
     stop: Arc<AtomicBool>,
     samples: Arc<Mutex<VecDeque<TickSample>>>,
+    controls: Arc<Mutex<Vec<ReflexControl>>>,
+    statuses: Arc<Mutex<Vec<ReflexStatus>>>,
     config: SchedulerConfig,
     audit_db: Option<Arc<Db>>,
     tick_index: u64,
@@ -402,6 +485,80 @@ fn lock_samples(
     match samples.lock() {
         Ok(guard) => guard,
         Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_controls(
+    controls: &Arc<Mutex<Vec<ReflexControl>>>,
+) -> std::sync::MutexGuard<'_, Vec<ReflexControl>> {
+    match controls.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn lock_statuses(
+    statuses: &Arc<Mutex<Vec<ReflexStatus>>>,
+) -> std::sync::MutexGuard<'_, Vec<ReflexStatus>> {
+    match statuses.lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
+    }
+}
+
+fn status_index(statuses: &Arc<Mutex<Vec<ReflexStatus>>>, reflex_id: &str) -> Option<usize> {
+    lock_statuses(statuses)
+        .iter()
+        .position(|status| status.id == reflex_id)
+}
+
+fn status_for_reflex(
+    reflex: &ScheduledReflex,
+    registered_at: chrono::DateTime<Utc>,
+) -> ReflexStatus {
+    ReflexStatus {
+        id: reflex.reflex_id.clone(),
+        kind_summary: kind_summary(reflex),
+        state: ReflexState::Active,
+        registered_at,
+        last_fired_at: None,
+        fire_count: 0,
+        priority: reflex.priority,
+        lifetime: ReflexLifetime::UntilCancelled,
+        exclusive: false,
+        last_error_code: None,
+    }
+}
+
+fn kind_summary(reflex: &ScheduledReflex) -> String {
+    match &reflex.trigger {
+        SchedulerTrigger::EveryTick => format!("every_tick:{} actions", reflex.then.len()),
+        SchedulerTrigger::OnEvent(_filter) => format!("on_event:{} actions", reflex.then.len()),
+    }
+}
+
+fn mark_reflex_fired(runtime: &RuntimeState, index: usize) {
+    if let Some(status) = lock_statuses(&runtime.statuses).get_mut(index) {
+        status.state = ReflexState::Active;
+        status.last_fired_at = Some(Utc::now());
+        status.fire_count = status.fire_count.saturating_add(1);
+        status.last_error_code = None;
+    }
+}
+
+fn mark_reflex_starved(runtime: &RuntimeState, index: usize) {
+    if let Some(status) = lock_statuses(&runtime.statuses).get_mut(index) {
+        status.state = ReflexState::Starved;
+        status.last_error_code = Some(synapse_core::error_codes::REFLEX_STARVED.to_owned());
+    }
+}
+
+fn mark_reflex_active_if_starved(runtime: &RuntimeState, index: usize) {
+    if let Some(status) = lock_statuses(&runtime.statuses).get_mut(index)
+        && matches!(status.state, ReflexState::Starved)
+    {
+        status.state = ReflexState::Active;
+        status.last_error_code = None;
     }
 }
 
