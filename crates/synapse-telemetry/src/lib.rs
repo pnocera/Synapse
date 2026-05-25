@@ -17,9 +17,7 @@ use tracing_subscriber::{
     registry::LookupSpan, util::SubscriberInitExt,
 };
 
-pub mod metrics {
-    pub use metrics::{counter, describe_counter};
-}
+pub mod metrics;
 
 const DEFAULT_MAX_DIR_BYTES: u64 = 500 * 1024 * 1024;
 const DEFAULT_KEEP_DAYS: u32 = 7;
@@ -230,6 +228,7 @@ pub fn init_tracing(cfg: TelemetryConfig) -> Result<TelemetryGuard, TelemetryErr
         .map_err(|err| TelemetryError::SubscriberInit(err.to_string()))?;
 
     install_panic_hook();
+    metrics::register_m3_metrics();
 
     let gc_interval = effective_gc_interval(cfg.gc_interval);
     let gc_worker = gc_interval.and_then(|interval| {

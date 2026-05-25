@@ -20,21 +20,39 @@ fn synthetic_emit_lands_in_jsonl_file() -> Result<(), Box<dyn std::error::Error>
     drop(guard);
 
     let logs = read_log_dir(dir.path())?;
-    let lines: Vec<&str> = logs.lines().filter(|line| !line.is_empty()).collect();
-    assert_eq!(lines.len(), 3, "expected 3 events, got {}", lines.len());
+    let values = logs
+        .lines()
+        .filter(|line| !line.is_empty())
+        .map(serde_json::from_str::<serde_json::Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+    let lines = values
+        .iter()
+        .filter(|value| {
+            matches!(
+                value["fields"]["message"].as_str(),
+                Some("happy_path_event" | "edge_case_event" | "plain_message_event")
+            )
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(
+        lines.len(),
+        3,
+        "expected 3 synthetic events, got {}",
+        lines.len()
+    );
 
-    let first: serde_json::Value = serde_json::from_str(lines[0])?;
+    let first = lines[0];
     assert_eq!(first["fields"]["field_a"], "v_a");
     assert_eq!(first["fields"]["field_b"], 42);
     assert_eq!(first["fields"]["message"], "happy_path_event");
     assert_eq!(first["level"], "INFO");
 
-    let second: serde_json::Value = serde_json::from_str(lines[1])?;
+    let second = lines[1];
     assert_eq!(second["fields"]["field_c"], "oops");
     assert_eq!(second["fields"]["error.kind"], "TELEMETRY_GC_FAILED");
     assert_eq!(second["level"], "ERROR");
 
-    let third: serde_json::Value = serde_json::from_str(lines[2])?;
+    let third = lines[2];
     assert_eq!(third["fields"]["message"], "plain_message_event");
     Ok(())
 }
