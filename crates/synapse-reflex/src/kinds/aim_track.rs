@@ -30,7 +30,7 @@ pub struct AimTrackParams {
 
 impl AimTrackParams {
     #[must_use]
-    pub fn new(target: AimTrackTarget) -> Self {
+    pub const fn new(target: AimTrackTarget) -> Self {
         Self {
             target,
             axis: ReflexAimAxis::Xy,
@@ -111,6 +111,12 @@ pub struct AimTrackController {
 }
 
 impl AimTrackController {
+    /// Creates an aim-track controller after validating its parameters.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ReflexError::ParamsInvalid` when a numeric parameter is outside
+    /// its accepted finite range.
     pub fn new(reflex_id: impl Into<ReflexId>, params: AimTrackParams) -> ReflexResult<Self> {
         params.validate()?;
         Ok(Self {
@@ -122,7 +128,7 @@ impl AimTrackController {
     }
 
     #[must_use]
-    pub fn params(&self) -> &AimTrackParams {
+    pub const fn params(&self) -> &AimTrackParams {
         &self.params
     }
 
@@ -131,6 +137,12 @@ impl AimTrackController {
         self.lost_for
     }
 
+    /// Computes and dispatches one aim-track tick.
+    ///
+    /// # Errors
+    ///
+    /// Returns a reflex error when target tracking is lost, action dispatch
+    /// fails, or the generated action shape is invalid.
     pub fn step_dispatch(
         &mut self,
         context: &AimTrackContext<'_>,
@@ -176,6 +188,12 @@ impl AimTrackController {
         })
     }
 
+    /// Computes the action for one aim-track tick without dispatching it.
+    ///
+    /// # Errors
+    ///
+    /// Returns `ReflexError::TrackLost` once the target has been absent beyond
+    /// `TRACK_LOST_AFTER`.
     pub fn step_action(&mut self, context: &AimTrackContext<'_>) -> ReflexResult<Option<Action>> {
         let Some(target) = self.resolve_target(context) else {
             self.lost_for = self.lost_for.saturating_add(context.tick_elapsed);

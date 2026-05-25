@@ -416,8 +416,10 @@ pub enum ExpandState {
 }
 
 /// Reads `ExpandCollapsePattern::CurrentExpandCollapseState` from the given
-/// element. Used by `act_click(use_invoke_pattern=true)` manual verification tests to assert
-/// menu/expander state flipped after an invoke.
+/// element.
+///
+/// Used by `act_click(use_invoke_pattern=true)` manual verification tests to
+/// assert menu/expander state flipped after an invoke.
 ///
 /// # Errors
 ///

@@ -1,0 +1,124 @@
+---
+source: crates/synapse-mcp/tests/m3_tools_list.rs
+expression: snapshot
+---
+{
+  "count": 26,
+  "m3_defaults": [
+    {
+      "actual": [],
+      "path": "inputSchema.properties.kinds.default",
+      "tool": "subscribe"
+    },
+    {
+      "actual": false,
+      "path": "inputSchema.properties.snapshot_first.default",
+      "tool": "subscribe"
+    },
+    {
+      "actual": 4096,
+      "path": "inputSchema.properties.buffer_size.default",
+      "tool": "subscribe"
+    },
+    {
+      "actual": 100,
+      "path": "inputSchema.properties.priority.default",
+      "tool": "reflex_register"
+    },
+    {
+      "actual": {
+        "kind": "until_cancelled"
+      },
+      "path": "inputSchema.properties.lifetime.default",
+      "tool": "reflex_register"
+    },
+    {
+      "actual": "auto",
+      "path": "inputSchema.properties.backend.default",
+      "tool": "reflex_register"
+    },
+    {
+      "actual": false,
+      "path": "inputSchema.properties.include_expired.default",
+      "tool": "reflex_list"
+    },
+    {
+      "actual": 50,
+      "path": "inputSchema.properties.limit.default",
+      "tool": "reflex_history"
+    },
+    {
+      "actual": true,
+      "path": "inputSchema.properties.include_inactive.default",
+      "tool": "profile_list"
+    },
+    {
+      "actual": "jsonl",
+      "path": "inputSchema.properties.format.default",
+      "tool": "replay_record"
+    },
+    {
+      "actual": "observations",
+      "path": "inputSchema.properties.target.default",
+      "tool": "replay_record"
+    },
+    {
+      "actual": 5,
+      "path": "inputSchema.properties.seconds.default",
+      "tool": "audio_tail"
+    },
+    {
+      "actual": 5,
+      "path": "inputSchema.properties.seconds.default",
+      "tool": "audio_transcribe"
+    },
+    {
+      "actual": "en",
+      "path": "inputSchema.properties.language.default",
+      "tool": "audio_transcribe"
+    },
+    {
+      "actual_contains": "subscription_id",
+      "path": "inputSchema.required",
+      "tool": "subscribe_cancel"
+    },
+    {
+      "actual_contains": "reflex_id",
+      "path": "inputSchema.required",
+      "tool": "reflex_cancel"
+    },
+    {
+      "actual_contains": "profile_id",
+      "path": "inputSchema.required",
+      "tool": "profile_activate"
+    }
+  ],
+  "tools": [
+    "act_aim",
+    "act_click",
+    "act_clipboard",
+    "act_drag",
+    "act_pad",
+    "act_press",
+    "act_scroll",
+    "act_type",
+    "audio_tail",
+    "audio_transcribe",
+    "find",
+    "health",
+    "observe",
+    "profile_activate",
+    "profile_list",
+    "read_text",
+    "reflex_cancel",
+    "reflex_history",
+    "reflex_list",
+    "reflex_register",
+    "release_all",
+    "replay_record",
+    "set_capture_target",
+    "set_perception_mode",
+    "subscribe",
+    "subscribe_cancel"
+  ]
+}

@@ -1,0 +1,285 @@
+use std::collections::BTreeSet;
+
+use anyhow::{Context, ensure};
+use serde_json::{Value, json};
+use synapse_test_utils::stdio_mcp_client::StdioMcpClient;
+
+const EXPECTED_TOOLS: [&str; 26] = [
+    "act_aim",
+    "act_click",
+    "act_clipboard",
+    "act_drag",
+    "act_pad",
+    "act_press",
+    "act_scroll",
+    "act_type",
+    "audio_tail",
+    "audio_transcribe",
+    "find",
+    "health",
+    "observe",
+    "profile_activate",
+    "profile_list",
+    "read_text",
+    "reflex_cancel",
+    "reflex_history",
+    "reflex_list",
+    "reflex_register",
+    "release_all",
+    "replay_record",
+    "set_capture_target",
+    "set_perception_mode",
+    "subscribe",
+    "subscribe_cancel",
+];
+
+#[tokio::test]
+async fn m3_tools_list_snapshot_defaults_and_closed_schemas() -> anyhow::Result<()> {
+    let mut client = StdioMcpClient::launch_and_init().await?;
+    let response = client.tools_list().await?;
+    let tools = response
+        .get("tools")
+        .and_then(Value::as_array)
+        .context("tools array missing")?;
+
+    let names = sorted_tool_names(tools)?;
+    let expected = EXPECTED_TOOLS
+        .iter()
+        .copied()
+        .map(str::to_owned)
+        .collect::<Vec<_>>();
+    assert_eq!(names, expected);
+    assert_eq!(names.len(), 26);
+    assert_no_duplicate_names(&names)?;
+
+    assert_schema_roots_closed(tools)?;
+    let defaults = m3_default_readbacks(tools)?;
+
+    let snapshot = json!({
+        "count": names.len(),
+        "tools": names,
+        "m3_defaults": defaults,
+    });
+    insta::assert_json_snapshot!("m3_tools_list", snapshot);
+
+    let status = client.shutdown().await?;
+    assert!(status.success());
+    Ok(())
+}
+
+fn sorted_tool_names(tools: &[Value]) -> anyhow::Result<Vec<String>> {
+    let mut names = tools
+        .iter()
+        .map(|tool| {
+            tool.get("name")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                .context("tool name missing")
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?;
+    names.sort();
+    Ok(names)
+}
+
+fn assert_no_duplicate_names(names: &[String]) -> anyhow::Result<()> {
+    let mut seen = BTreeSet::new();
+    for name in names {
+        ensure!(seen.insert(name), "duplicate tool name: {name}");
+    }
+    Ok(())
+}
+
+fn assert_schema_roots_closed(tools: &[Value]) -> anyhow::Result<()> {
+    for tool in tools {
+        let name = tool
+            .get("name")
+            .and_then(Value::as_str)
+            .context("tool name missing")?;
+        for schema_key in ["inputSchema", "outputSchema"] {
+            let Some(schema) = tool.get(schema_key) else {
+                continue;
+            };
+            ensure!(
+                schema.get("type") == Some(&json!("object")),
+                "{name}.{schema_key}.type must be object"
+            );
+            ensure!(
+                schema.get("additionalProperties") == Some(&json!(false)),
+                "{name}.{schema_key}.additionalProperties must be false"
+            );
+        }
+    }
+    Ok(())
+}
+
+fn m3_default_readbacks(tools: &[Value]) -> anyhow::Result<Vec<Value>> {
+    let mut readbacks = Vec::new();
+    read_schema_defaults(&mut readbacks, tools)?;
+    read_required_fields(&mut readbacks, tools)?;
+    Ok(readbacks)
+}
+
+fn read_schema_defaults(readbacks: &mut Vec<Value>, tools: &[Value]) -> anyhow::Result<()> {
+    read_default(
+        readbacks,
+        tools,
+        "subscribe",
+        "inputSchema.properties.kinds.default",
+        &json!([]),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "subscribe",
+        "inputSchema.properties.snapshot_first.default",
+        &json!(false),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "subscribe",
+        "inputSchema.properties.buffer_size.default",
+        &json!(4096),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "reflex_register",
+        "inputSchema.properties.priority.default",
+        &json!(100),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "reflex_register",
+        "inputSchema.properties.lifetime.default",
+        &json!({"kind": "until_cancelled"}),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "reflex_register",
+        "inputSchema.properties.backend.default",
+        &json!("auto"),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "reflex_list",
+        "inputSchema.properties.include_expired.default",
+        &json!(false),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "reflex_history",
+        "inputSchema.properties.limit.default",
+        &json!(50),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "profile_list",
+        "inputSchema.properties.include_inactive.default",
+        &json!(true),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "replay_record",
+        "inputSchema.properties.format.default",
+        &json!("jsonl"),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "replay_record",
+        "inputSchema.properties.target.default",
+        &json!("observations"),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "audio_tail",
+        "inputSchema.properties.seconds.default",
+        &json!(5),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "audio_transcribe",
+        "inputSchema.properties.seconds.default",
+        &json!(5),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "audio_transcribe",
+        "inputSchema.properties.language.default",
+        &json!("en"),
+    )?;
+    Ok(())
+}
+
+fn read_required_fields(readbacks: &mut Vec<Value>, tools: &[Value]) -> anyhow::Result<()> {
+    read_required(readbacks, tools, "subscribe_cancel", "subscription_id")?;
+    read_required(readbacks, tools, "reflex_cancel", "reflex_id")?;
+    read_required(readbacks, tools, "profile_activate", "profile_id")?;
+    Ok(())
+}
+
+fn read_default(
+    readbacks: &mut Vec<Value>,
+    tools: &[Value],
+    tool_name: &str,
+    path: &str,
+    expected: &Value,
+) -> anyhow::Result<()> {
+    let actual = value_at(tool_by_name(tools, tool_name)?, path)?.clone();
+    assert_eq!(&actual, expected, "{tool_name}.{path}");
+    readbacks.push(json!({
+        "tool": tool_name,
+        "path": path,
+        "actual": actual,
+    }));
+    Ok(())
+}
+
+fn read_required(
+    readbacks: &mut Vec<Value>,
+    tools: &[Value],
+    tool_name: &str,
+    field: &str,
+) -> anyhow::Result<()> {
+    let required = value_at(tool_by_name(tools, tool_name)?, "inputSchema.required")?;
+    let required = required
+        .as_array()
+        .with_context(|| format!("{tool_name}.inputSchema.required must be an array"))?;
+    ensure!(
+        required.iter().any(|value| value.as_str() == Some(field)),
+        "{tool_name}.inputSchema.required must contain {field}"
+    );
+    readbacks.push(json!({
+        "tool": tool_name,
+        "path": "inputSchema.required",
+        "actual_contains": field,
+    }));
+    Ok(())
+}
+
+fn tool_by_name<'a>(tools: &'a [Value], name: &str) -> anyhow::Result<&'a Value> {
+    tools
+        .iter()
+        .find(|tool| tool.get("name").and_then(Value::as_str) == Some(name))
+        .with_context(|| format!("tool missing from tools/list: {name}"))
+}
+
+fn value_at<'a>(value: &'a Value, path: &str) -> anyhow::Result<&'a Value> {
+    let mut current = value;
+    for segment in path.split('.') {
+        current = current
+            .get(segment)
+            .with_context(|| format!("missing path {path}"))?;
+    }
+    Ok(current)
+}
