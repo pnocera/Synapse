@@ -6,6 +6,7 @@ use tracing::debug;
 
 use crate::error::{HidError, HidResult};
 use crate::handshake::{FirmwareIdentity, IDENTIFY_TIMEOUT_MS, perform_identify_handshake};
+use crate::pipeline::{HidPipeline, HostCommandRequest};
 
 pub const DEFAULT_BAUD_RATE: u32 = 1_000_000;
 pub const DEFAULT_READ_TIMEOUT_MS: u64 = 5;
@@ -15,6 +16,7 @@ pub struct HidGateway {
     baud_rate: u32,
     read_timeout: Duration,
     identity: FirmwareIdentity,
+    pipeline: HidPipeline,
     port: Box<dyn SerialPort>,
 }
 
@@ -57,6 +59,7 @@ impl HidGateway {
             baud_rate: DEFAULT_BAUD_RATE,
             read_timeout,
             identity,
+            pipeline: HidPipeline::default(),
             port,
         })
     }
@@ -83,6 +86,29 @@ impl HidGateway {
 
     pub fn serial_port_mut(&mut self) -> &mut dyn SerialPort {
         self.port.as_mut()
+    }
+
+    /// Sends one ACK/NAK command through the HID serial pipeline.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HidError::LinkTimeout`] when the command exhausts the ACK
+    /// retry budget, or [`HidError::CommandRejected`] when the firmware returns
+    /// a malformed/rejected response.
+    pub fn send_command(&mut self, command: u8, payload: &[u8]) -> HidResult<u32> {
+        self.pipeline
+            .send_command(self.port.as_mut(), command, payload)
+    }
+
+    /// Sends a batch of ACK/NAK commands with the M4 sliding window.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`HidError::LinkTimeout`] when any command exhausts the ACK
+    /// retry budget, or [`HidError::CommandRejected`] when the firmware returns
+    /// a malformed/rejected response.
+    pub fn send_commands(&mut self, commands: &[HostCommandRequest<'_>]) -> HidResult<Vec<u32>> {
+        self.pipeline.send_commands(self.port.as_mut(), commands)
     }
 }
 

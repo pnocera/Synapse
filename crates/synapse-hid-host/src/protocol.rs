@@ -11,8 +11,25 @@ pub const FRAME_OVERHEAD: usize = 1 + LEN_FIELD_SIZE + MIN_LEN_FIELD as usize;
 pub const MAX_PAYLOAD_LEN: usize = 1024;
 pub const MAX_FRAME_LEN: usize = FRAME_OVERHEAD + MAX_PAYLOAD_LEN;
 
+pub const HOST_COMMAND_PING: u8 = 0x01;
 pub const HOST_COMMAND_IDENTIFY: u8 = 0x02;
+pub const HOST_COMMAND_MOUSE_MOVE_REL: u8 = 0x10;
+pub const HOST_COMMAND_MOUSE_BUTTON: u8 = 0x11;
+pub const HOST_COMMAND_MOUSE_WHEEL: u8 = 0x12;
+pub const HOST_COMMAND_KEY_DOWN: u8 = 0x20;
+pub const HOST_COMMAND_KEY_UP: u8 = 0x21;
+pub const HOST_COMMAND_KEY_MODS: u8 = 0x22;
+pub const HOST_COMMAND_PAD_REPORT: u8 = 0x30;
+pub const HOST_COMMAND_RELEASE_ALL: u8 = 0x40;
+pub const HOST_COMMAND_WATCHDOG_KICK: u8 = 0x50;
+pub const HOST_COMMAND_GET_TELEMETRY: u8 = 0x60;
+pub const HOST_COMMAND_RESET_TO_BOOTLOADER: u8 = 0xF0;
+
+pub const DEVICE_COMMAND_ACK: u8 = 0x80;
+pub const DEVICE_COMMAND_NAK: u8 = 0x81;
+pub const DEVICE_COMMAND_PONG: u8 = 0x82;
 pub const DEVICE_COMMAND_IDENTIFY_RESP: u8 = 0x83;
+pub const DEVICE_COMMAND_TELEMETRY_RESP: u8 = 0x84;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct DeviceFrame<'a> {
@@ -84,6 +101,16 @@ pub fn encode_device_frame(
 /// Returns [`ParseError::NeedMore`] when the input prefix is incomplete, or a
 /// concrete parse error for invalid magic, length, or CRC.
 pub fn parse_device_frame(input: &[u8]) -> Result<DeviceFrame<'_>, ParseError> {
+    parse_device_frame_prefix(input).map(|(frame, _consumed)| frame)
+}
+
+/// Parses one complete device frame prefix and returns the consumed byte count.
+///
+/// # Errors
+///
+/// Returns [`ParseError::NeedMore`] when the input prefix is incomplete, or a
+/// concrete parse error for invalid magic, length, or CRC.
+pub fn parse_device_frame_prefix(input: &[u8]) -> Result<(DeviceFrame<'_>, usize), ParseError> {
     parse_frame(input, DEVICE_MAGIC)
 }
 
@@ -118,7 +145,7 @@ fn encode_frame(
     Ok(frame_len)
 }
 
-fn parse_frame(input: &[u8], expected_magic: u8) -> Result<DeviceFrame<'_>, ParseError> {
+fn parse_frame(input: &[u8], expected_magic: u8) -> Result<(DeviceFrame<'_>, usize), ParseError> {
     if input.is_empty() {
         return Err(ParseError::NeedMore { needed: 1 });
     }
@@ -159,16 +186,19 @@ fn parse_frame(input: &[u8], expected_magic: u8) -> Result<DeviceFrame<'_>, Pars
         });
     }
 
-    Ok(DeviceFrame {
-        seq: u32::from_le_bytes([
-            input[seq_start],
-            input[seq_start + 1],
-            input[seq_start + 2],
-            input[seq_start + 3],
-        ]),
-        command: input[command_index],
-        payload: &input[payload_start..crc_start],
-    })
+    Ok((
+        DeviceFrame {
+            seq: u32::from_le_bytes([
+                input[seq_start],
+                input[seq_start + 1],
+                input[seq_start + 2],
+                input[seq_start + 3],
+            ]),
+            command: input[command_index],
+            payload: &input[payload_start..crc_start],
+        },
+        frame_len,
+    ))
 }
 
 #[must_use]
