@@ -54,6 +54,8 @@ while reversible local acquisition/setup remains possible.
 Do not stop at "missing." If the operator could do it from this computer, the
 agent must use Synapse and host workflows to make it happen, then inspect the
 physical source of truth.
+Missing local state creates the next action for the agent, not a blocker while
+reversible host work remains.
 Browser downloads, GUI installers, Device Manager checks, package-manager
 installs, model/file generation, firmware flashing, app launching, USB/COM
 inspection, and UI inspection are agent-owned work when reversible on this host.

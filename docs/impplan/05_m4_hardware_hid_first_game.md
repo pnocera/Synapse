@@ -28,6 +28,10 @@ package-manager installs, model/file generation, firmware flashing, launching
 apps, USB/COM inspection, and Synapse-driven UI inspection are agent-owned work
 when reversible on this host; they are not reasons to stop and are not operator
 errands while the agent can do them locally.
+Missing local state creates the next action for the agent, not a blocker while
+reversible host work remains. Use Synapse's local computer-control surface to
+keep moving until the remaining step is a specific operator-only external
+decision.
 
 **No GitHub Actions or CI gate.** Agent commits pushed during M4 include
 `[skip ci]`. Local checks may support regression confidence, but the shipping

@@ -30,6 +30,8 @@ Comprehensive technical reference for the Synapse MCP server, produced by readin
   prerequisites real, then read the physical source of truth.
   Do not stop at "missing"; if the operator could do it from this computer,
   the agent must do it through Synapse/local host workflows and inspect the SoT.
+  Missing local state creates the next action for the agent, not a blocker
+  while reversible host work remains.
   Browser downloads, GUI installers, Device Manager checks, package-manager
   installs, model/file generation, firmware flashing, app launching, USB/COM
   inspection, and UI inspection are agent-owned work when reversible on this

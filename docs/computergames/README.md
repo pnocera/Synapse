@@ -20,6 +20,8 @@ ask only before hard-to-reverse external actions.
 Do not stop at "missing": if the operator could do it from this computer, the
 agent must use Synapse/local host control to make it happen, then inspect the
 resulting source of truth.
+Missing local state creates the next action for the agent, not a blocker while
+reversible host work remains.
 Browser downloads, GUI installers, Device Manager checks, package-manager
 installs, model/file generation, firmware flashing, app launching, USB/COM
 inspection, and UI inspection are agent-owned work when they are reversible on

@@ -20,6 +20,8 @@ Do not stop at "missing." If the operator could make it happen from this
 computer, the agent must use Synapse and local host workflows to do the
 reversible work, then inspect the resulting source of truth. Missing
 configured-host state is never a blocker by itself.
+Missing local state creates the next action for the agent, not a blocker while
+reversible host work remains.
 That includes browser downloads, GUI installers, Device Manager checks,
 package-manager installs, model/file generation, firmware flashing, app
 launching, USB/COM inspection, and UI inspection through Synapse. Treat those

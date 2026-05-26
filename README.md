@@ -21,6 +21,8 @@ truth directly. Ask only before hard-to-reverse external actions.
 Do not stop at "missing": if the operator could do it from this computer,
 the agent must use Synapse and local host workflows to make it happen, then
 inspect the source of truth.
+Missing local state creates the next action for the agent; it is not a blocker
+while reversible host work remains.
 Synapse gives the agent full local computer-control responsibility for this
 host. Browser downloads, GUI installers, Device Manager checks, package-manager
 installs, model/file generation, firmware flashing, app launching, USB/COM

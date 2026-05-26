@@ -9,6 +9,8 @@ Synapse gives the agent full local computer-control responsibility on this
 host, so browser sourcing, installer downloads, tool installs, BOOTSEL/USB/COM
 inspection, firmware flashing, and UI inspection are agent-owned while they are
 locally reversible.
+Missing local state creates the next action for the agent, not a blocker while
+reversible host work remains.
 
 ## Recommended board
 

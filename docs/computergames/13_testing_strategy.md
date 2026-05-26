@@ -19,6 +19,10 @@ benchmarks, scripts, harnesses, GitHub Actions, and CI are supporting evidence
 only.
 
 "Hard to test" is never an excuse for not testing.
+Likewise, a missing local prerequisite is not an excuse to stop. If the
+operator could acquire, install, connect, configure, generate, launch, flash, or
+inspect it from this computer, the agent must use Synapse/local host control to
+make it real, then verify the physical source of truth.
 
 ---
 
@@ -373,6 +377,8 @@ possible. Read the authoritative SoT directly before shipping.
 Do not stop at "missing." If the operator could make the prerequisite real from
 this computer, the agent must do the reversible local work through Synapse and
 host workflows, then inspect the physical SoT.
+Missing local state creates the next action for the agent, not a blocker while
+reversible host work remains.
 Browser downloads, GUI installers, Device Manager checks, package-manager
 installs, model/file generation, firmware flashing, app launching, USB/COM
 inspection, and UI inspection count as that reversible local work. They are
