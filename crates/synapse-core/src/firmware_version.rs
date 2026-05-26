@@ -1,0 +1,5 @@
+pub const EXPECTED_FW_MAJOR: u8 = 0;
+pub const SYNAPSE_PICO_HID_FW_MAJOR: u8 = EXPECTED_FW_MAJOR;
+pub const SYNAPSE_PICO_HID_FW_MINOR: u8 = 1;
+pub const SYNAPSE_PICO_HID_FW_PATCH: u8 = 0;
+pub const SYNAPSE_PICO_HID_BUILD_HASH_LEN: usize = 8;

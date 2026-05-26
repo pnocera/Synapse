@@ -2,10 +2,15 @@ use crate::protocol::{DeviceCommand, Frame, HostCommand, NakReason};
 use crate::reports::{BootKeyboardReport, BootMouseReport, GAMEPAD_REPORT_LEN, GamepadReport};
 use crate::safety::DEFAULT_WATCHDOG_TIMEOUT_MS;
 
+#[path = "../../../crates/synapse-core/src/firmware_version.rs"]
+mod firmware_version;
+
 pub const MAX_RESPONSE_PAYLOAD_LEN: usize = 32;
-pub const FW_VERSION_MAJOR: u8 = 0;
-pub const FW_VERSION_MINOR: u8 = 1;
-pub const FW_VERSION_PATCH: u8 = 0;
+pub use firmware_version::{
+    SYNAPSE_PICO_HID_BUILD_HASH_LEN as BUILD_HASH_LEN,
+    SYNAPSE_PICO_HID_FW_MAJOR as FW_VERSION_MAJOR, SYNAPSE_PICO_HID_FW_MINOR as FW_VERSION_MINOR,
+    SYNAPSE_PICO_HID_FW_PATCH as FW_VERSION_PATCH,
+};
 pub const CAPABILITY_MOUSE: u32 = 1 << 0;
 pub const CAPABILITY_KEYBOARD: u32 = 1 << 1;
 pub const CAPABILITY_GAMEPAD: u32 = 1 << 2;
@@ -22,14 +27,14 @@ pub struct IdentifyInfo {
     pub fw_major: u8,
     pub fw_minor: u8,
     pub fw_patch: u8,
-    pub build_hash: [u8; 8],
+    pub build_hash: [u8; BUILD_HASH_LEN],
     pub vid: u16,
     pub pid: u16,
     pub capabilities: u32,
 }
 
 impl IdentifyInfo {
-    pub const fn new(build_hash: [u8; 8], vid: u16, pid: u16) -> Self {
+    pub const fn new(build_hash: [u8; BUILD_HASH_LEN], vid: u16, pid: u16) -> Self {
         Self {
             fw_major: FW_VERSION_MAJOR,
             fw_minor: FW_VERSION_MINOR,

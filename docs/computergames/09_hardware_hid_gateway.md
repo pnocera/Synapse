@@ -182,7 +182,7 @@ Binary, framed, with explicit acks. Parseable with no allocations on firmware si
 | `CMD` | Name | Payload | Effect |
 |---|---|---|---|
 | 0x01 | `PING` | `[u32 nonce]` | firmware echoes `PONG` with same nonce |
-| 0x02 | `IDENTIFY` | empty | firmware replies with `IDENTIFY_RESP { fw_ver, build_hash, vid, pid, capabilities_mask }` |
+| 0x02 | `IDENTIFY` | empty | firmware replies with `IDENTIFY_RESP { fw_major, fw_minor, fw_patch, build_hash, vid, pid, capabilities_mask }` |
 | 0x10 | `MOUSE_MOVE_REL` | `[i16 dx][i16 dy]` | mouse delta |
 | 0x11 | `MOUSE_BUTTON` | `[u8 button][u8 down_flag]` | button state |
 | 0x12 | `MOUSE_WHEEL` | `[i8 dy][i8 dx]` | wheel ticks |
@@ -297,7 +297,7 @@ On serial error (port closed, USB unplugged), driver retries every 500 ms. While
 
 ### 7.3 Firmware version handshake
 
-`IDENTIFY_RESP` includes `fw_ver` (semver) and `build_hash` (8 bytes). Host compares `fw_ver.major` against compiled-in `EXPECTED_FW_MAJOR`. Mismatch returns `HID_FIRMWARE_VERSION_MISMATCH` and aborts. Operator runs `synapse-mcp hid flash` to update.
+`IDENTIFY_RESP` is 20 bytes: `[fw_major u8][fw_minor u8][fw_patch u8][reserved u8][build_hash 8 bytes][vid u16le][pid u16le][capabilities u32le]`. Host compares `fw_major` against compiled-in `EXPECTED_FW_MAJOR`. Mismatch returns `HID_FIRMWARE_VERSION_MISMATCH` and aborts. Operator runs `synapse-mcp hid flash` to update.
 
 ---
 

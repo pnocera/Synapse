@@ -1,11 +1,16 @@
 pub mod defaults;
 pub mod error_codes;
 pub mod filter;
+pub mod firmware_version;
 pub mod retention;
 pub mod types;
 pub mod usb_identity;
 
 pub use defaults::SCHEMA_VERSION;
+pub use firmware_version::{
+    EXPECTED_FW_MAJOR, SYNAPSE_PICO_HID_BUILD_HASH_LEN, SYNAPSE_PICO_HID_FW_MAJOR,
+    SYNAPSE_PICO_HID_FW_MINOR, SYNAPSE_PICO_HID_FW_PATCH,
+};
 pub use types::{
     AccessibleNode, AccessibleQuery, AccessibleQueryScope, AccessibleSubtree, Action, AimCurve,
     AimNaturalParams, AimStyle, AimTarget, AudioContext, AudioCue, AudioEvent, Backend,
