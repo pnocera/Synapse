@@ -5,7 +5,12 @@ edition = "2024"
 license = "MIT OR Apache-2.0"
 publish = false
 
-[dependencies]
+[[bin]]
+name = "pico-hid"
+path = "src/main.rs"
+required-features = ["firmware-bin"]
+
+[target.'cfg(all(target_arch = "arm", target_os = "none"))'.dependencies]
 cortex-m-rt = "0.7.5"
 embassy-executor = { version = "0.10.0", features = ["executor-thread", "platform-cortex-m"] }
 embassy-rp = { version = "0.10.0", features = ["critical-section-impl", "rp2040", "time-driver"] }
@@ -20,7 +25,8 @@ defmt-rtt = { version = "1.0.0", optional = true }
 panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
 
 [features]
-default = []
+default = ["firmware-bin"]
+firmware-bin = []
 defmt = [
     "dep:defmt",
     "dep:defmt-rtt",
