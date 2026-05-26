@@ -451,7 +451,9 @@ fn runtime() -> Result<Runtime, Box<dyn Error>> {
 }
 
 fn duration_from_nanos_saturating(nanos: u128) -> Duration {
-    Duration::from_nanos(nanos.min(u128::from(u64::MAX)) as u64)
+    let capped = nanos.min(u128::from(u64::MAX));
+    let nanos = u64::try_from(capped).unwrap_or(u64::MAX);
+    Duration::from_nanos(nanos)
 }
 
 fn percentile(values: &[u128], percentile: usize) -> u128 {
