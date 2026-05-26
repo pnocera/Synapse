@@ -13,9 +13,9 @@ use embassy_usb::driver::EndpointError;
 use embassy_usb::{Builder, Config, UsbDevice};
 use static_cell::StaticCell;
 
-use crate::hid_descriptors;
-use crate::reports::{self, BootKeyboardReport, BootMouseReport, GamepadReport};
 use crate::usb;
+use pico_hid::hid_descriptors;
+use pico_hid::reports::{self, BootKeyboardReport, BootMouseReport, GamepadReport};
 
 const CDC_MAX_PACKET_SIZE: u16 = 64;
 const HID_POLL_MS: u8 = 1;

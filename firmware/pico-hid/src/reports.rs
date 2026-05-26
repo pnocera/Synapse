@@ -106,4 +106,17 @@ impl GamepadReport {
             reserved[1],
         ]
     }
+
+    pub fn from_bytes(bytes: [u8; GAMEPAD_REPORT_LEN]) -> Self {
+        Self {
+            buttons: u16::from_le_bytes([bytes[0], bytes[1]]),
+            left_trigger: bytes[2],
+            right_trigger: bytes[3],
+            thumb_lx: i16::from_le_bytes([bytes[4], bytes[5]]),
+            thumb_ly: i16::from_le_bytes([bytes[6], bytes[7]]),
+            thumb_rx: i16::from_le_bytes([bytes[8], bytes[9]]),
+            thumb_ry: i16::from_le_bytes([bytes[10], bytes[11]]),
+            reserved: u16::from_le_bytes([bytes[12], bytes[13]]),
+        }
+    }
 }

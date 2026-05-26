@@ -1,7 +1,12 @@
-use pico_hid::protocol::{
-    DropReason, EncodeError, HOST_MAGIC, HostCommand, MAX_FRAME_LEN, MAX_PAYLOAD_LEN, NakReason,
-    ParseResult, crc16_ccitt_false, encode_host_frame, next_sequence, parse_host_frame,
+use pico_hid::dispatch::{
+    DispatchOutcome, DispatchState, IdentifyInfo, MAX_RESPONSE_PAYLOAD_LEN, dispatch_frame,
 };
+use pico_hid::protocol::{
+    DeviceCommand, DropReason, EncodeError, HOST_MAGIC, HostCommand, MAX_FRAME_LEN,
+    MAX_PAYLOAD_LEN, NakReason, ParseResult, crc16_ccitt_false, encode_host_frame, next_sequence,
+    parse_host_frame,
+};
+use pico_hid::reports::{GAMEPAD_REPORT_LEN, GamepadReport};
 
 #[test]
 fn crc16_ccitt_false_known_check_value() {
@@ -108,6 +113,170 @@ fn protocol_roundtrips_1000_deterministic_frames() {
     }
 }
 
+#[test]
+fn dispatcher_applies_mouse_keyboard_pad_and_release_all() {
+    let identify = IdentifyInfo::new(*b"TESTHASH", 0x2E8A, 0x1F50);
+    let mut state = DispatchState::new();
+
+    let mouse_move = frame(1, HostCommand::MouseMoveRel, &[5, 0, 0xFD, 0xFF]);
+    assert_eq!(dispatch_frame(&mut state, mouse_move, identify), ack(1));
+    assert_eq!(state.mouse.to_bytes(), [0, 5, 0xFD, 0]);
+
+    let mouse_button_down = frame(2, HostCommand::MouseButton, &[1, 1]);
+    assert_eq!(
+        dispatch_frame(&mut state, mouse_button_down, identify),
+        ack(2)
+    );
+    assert_eq!(state.mouse.buttons, 1);
+
+    let key_down = frame(3, HostCommand::KeyDown, &[0x04]);
+    assert_eq!(dispatch_frame(&mut state, key_down, identify), ack(3));
+    assert_eq!(state.keyboard.to_bytes(), [0, 0, 0x04, 0, 0, 0, 0, 0]);
+
+    let key_mods = frame(4, HostCommand::KeyMods, &[0x03]);
+    assert_eq!(dispatch_frame(&mut state, key_mods, identify), ack(4));
+    assert_eq!(state.keyboard.modifiers, 0x03);
+
+    let gamepad = GamepadReport {
+        buttons: 0x0003,
+        left_trigger: 7,
+        right_trigger: 9,
+        thumb_lx: -10,
+        thumb_ly: 11,
+        thumb_rx: -12,
+        thumb_ry: 13,
+        reserved: 0,
+    };
+    let gamepad_bytes = gamepad.to_bytes();
+    let pad_report = frame(5, HostCommand::PadReport, &gamepad_bytes);
+    assert_eq!(dispatch_frame(&mut state, pad_report, identify), ack(5));
+    assert_eq!(state.gamepad, gamepad);
+
+    let release_all = frame(6, HostCommand::ReleaseAll, &[]);
+    assert_eq!(dispatch_frame(&mut state, release_all, identify), ack(6));
+    assert_eq!(state.mouse.to_bytes(), [0; 4]);
+    assert_eq!(state.keyboard.to_bytes(), [0; 8]);
+    assert_eq!(state.gamepad, GamepadReport::neutral());
+}
+
+#[test]
+fn dispatcher_returns_query_responses_and_updates_telemetry() {
+    let identify = IdentifyInfo::new(*b"TESTHASH", 0x2E8A, 0x1F50);
+    let mut state = DispatchState::new();
+
+    let ping = frame(10, HostCommand::Ping, &[1, 2, 3, 4]);
+    let ping_outcome = dispatch_frame(&mut state, ping, identify);
+    assert_eq!(ping_outcome.command, DeviceCommand::Pong);
+    assert_eq!(
+        &ping_outcome.payload[..ping_outcome.payload_len],
+        &[1, 2, 3, 4]
+    );
+
+    let identify_frame = frame(11, HostCommand::Identify, &[]);
+    let identify_outcome = dispatch_frame(&mut state, identify_frame, identify);
+    assert_eq!(identify_outcome.command, DeviceCommand::IdentifyResp);
+    assert_eq!(identify_outcome.payload_len, 20);
+    assert_eq!(&identify_outcome.payload[4..12], b"TESTHASH");
+    assert_eq!(
+        u16::from_le_bytes([identify_outcome.payload[12], identify_outcome.payload[13]]),
+        0x2E8A
+    );
+    assert_eq!(
+        u16::from_le_bytes([identify_outcome.payload[14], identify_outcome.payload[15]]),
+        0x1F50
+    );
+
+    let watchdog_timeout = 2500u32.to_le_bytes();
+    let watchdog = frame(12, HostCommand::WatchdogKick, &watchdog_timeout);
+    assert_eq!(dispatch_frame(&mut state, watchdog, identify), ack(12));
+    assert_eq!(state.watchdog_timeout_ms, 2500);
+
+    state.telemetry.uptime_ms = 1234;
+    let telemetry = frame(13, HostCommand::GetTelemetry, &[]);
+    let telemetry_outcome = dispatch_frame(&mut state, telemetry, identify);
+    assert_eq!(telemetry_outcome.command, DeviceCommand::TelemetryResp);
+    assert_eq!(telemetry_outcome.payload_len, 20);
+    assert_eq!(
+        u32::from_le_bytes([
+            telemetry_outcome.payload[0],
+            telemetry_outcome.payload[1],
+            telemetry_outcome.payload[2],
+            telemetry_outcome.payload[3],
+        ]),
+        1234
+    );
+}
+
+#[test]
+fn dispatcher_rejects_invalid_payload_boundaries() {
+    let identify = IdentifyInfo::new(*b"TESTHASH", 0x2E8A, 0x1F50);
+    let mut state = DispatchState::new();
+
+    let mut invalid_mouse_payload = [0u8; 4];
+    invalid_mouse_payload[..2].copy_from_slice(&200i16.to_le_bytes());
+    let invalid_mouse = frame(20, HostCommand::MouseMoveRel, &invalid_mouse_payload);
+    assert_eq!(
+        dispatch_frame(&mut state, invalid_mouse, identify),
+        nak(20, NakReason::PayloadInvalid)
+    );
+
+    for seq in 21..=26 {
+        let key = [seq as u8];
+        assert_eq!(
+            dispatch_frame(&mut state, frame(seq, HostCommand::KeyDown, &key), identify),
+            ack(seq)
+        );
+    }
+    assert_eq!(
+        dispatch_frame(
+            &mut state,
+            frame(27, HostCommand::KeyDown, &[0x30]),
+            identify
+        ),
+        nak(27, NakReason::BufferFull)
+    );
+
+    let mut bad_pad = [0u8; GAMEPAD_REPORT_LEN];
+    bad_pad[GAMEPAD_REPORT_LEN - 1] = 1;
+    assert_eq!(
+        dispatch_frame(
+            &mut state,
+            frame(28, HostCommand::PadReport, &bad_pad),
+            identify
+        ),
+        nak(28, NakReason::PayloadInvalid)
+    );
+}
+
 fn lcg(seed: u32) -> u32 {
     seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223)
+}
+
+fn frame<'a>(seq: u32, command: HostCommand, payload: &'a [u8]) -> pico_hid::protocol::Frame<'a> {
+    pico_hid::protocol::Frame {
+        seq,
+        command: command as u8,
+        payload,
+    }
+}
+
+fn ack(seq: u32) -> DispatchOutcome {
+    let mut payload = [0u8; MAX_RESPONSE_PAYLOAD_LEN];
+    payload[..4].copy_from_slice(&seq.to_le_bytes());
+    DispatchOutcome {
+        command: DeviceCommand::Ack,
+        payload,
+        payload_len: 4,
+    }
+}
+
+fn nak(seq: u32, reason: NakReason) -> DispatchOutcome {
+    let mut payload = [0u8; MAX_RESPONSE_PAYLOAD_LEN];
+    payload[..4].copy_from_slice(&seq.to_le_bytes());
+    payload[4] = reason as u8;
+    DispatchOutcome {
+        command: DeviceCommand::Nak,
+        payload,
+        payload_len: 5,
+    }
 }

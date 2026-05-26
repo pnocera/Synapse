@@ -5,8 +5,6 @@ use embassy_executor::Spawner;
 use embassy_rp::gpio::{Level, Output};
 use embassy_time::Timer;
 
-mod hid_descriptors;
-mod reports;
 mod serial;
 mod usb;
 
