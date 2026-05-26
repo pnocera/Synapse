@@ -27,6 +27,7 @@ panic-probe = { version = "1.0.0", features = ["print-defmt"], optional = true }
 [features]
 default = ["firmware-bin"]
 firmware-bin = []
+loopback = []
 defmt = [
     "dep:defmt",
     "dep:defmt-rtt",

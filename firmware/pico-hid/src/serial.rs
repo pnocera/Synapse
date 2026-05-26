@@ -15,6 +15,11 @@ use static_cell::StaticCell;
 
 use crate::usb;
 use pico_hid::hid_descriptors;
+#[cfg(feature = "loopback")]
+use pico_hid::protocol::{
+    DeviceCommand, MAX_FRAME_LEN, ParseResult, encode_device_frame, encode_nak,
+    parse_host_frame_any_command,
+};
 use pico_hid::reports::{self, BootKeyboardReport, BootMouseReport, GamepadReport};
 
 const CDC_MAX_PACKET_SIZE: u16 = 64;
@@ -50,7 +55,7 @@ pub fn spawn_usb(usb_peripheral: embassy_rp::Peri<'static, USB>, spawner: &Spawn
         }
         Err(_) => false,
     };
-    let echo_spawned = match cdc_echo_task(serial_class) {
+    let serial_spawned = match cdc_serial_task(serial_class) {
         Ok(token) => {
             spawner.spawn(token);
             true
@@ -79,7 +84,7 @@ pub fn spawn_usb(usb_peripheral: embassy_rp::Peri<'static, USB>, spawner: &Spawn
         Err(_) => false,
     };
 
-    device_spawned && echo_spawned && mouse_spawned && keyboard_spawned && gamepad_spawned
+    device_spawned && serial_spawned && mouse_spawned && keyboard_spawned && gamepad_spawned
 }
 
 fn build_usb_serial(
@@ -187,10 +192,10 @@ async fn usb_task(mut usb: PicoUsbDevice) -> ! {
 }
 
 #[embassy_executor::task]
-async fn cdc_echo_task(mut serial_class: PicoCdcAcmClass) -> ! {
+async fn cdc_serial_task(mut serial_class: PicoCdcAcmClass) -> ! {
     loop {
         serial_class.wait_connection().await;
-        let _disconnected = echo_until_disconnect(&mut serial_class).await;
+        let _disconnected = serial_until_disconnect(&mut serial_class).await;
     }
 }
 
@@ -227,18 +232,86 @@ async fn gamepad_hid_task(mut writer: GamepadWriter) -> ! {
     }
 }
 
-async fn echo_until_disconnect(serial_class: &mut PicoCdcAcmClass) -> Result<(), Disconnected> {
+#[cfg(not(feature = "loopback"))]
+async fn serial_until_disconnect(serial_class: &mut PicoCdcAcmClass) -> Result<(), Disconnected> {
     let mut packet = [0u8; CDC_MAX_PACKET_SIZE as usize];
 
     loop {
         let count = serial_class.read_packet(&mut packet).await?;
-        let data = &packet[..count];
+        write_serial_bytes(serial_class, &packet[..count]).await?;
+    }
+}
 
-        serial_class.write_packet(data).await?;
-        if count == serial_class.max_packet_size() as usize {
-            serial_class.write_packet(&[]).await?;
+#[cfg(feature = "loopback")]
+async fn serial_until_disconnect(serial_class: &mut PicoCdcAcmClass) -> Result<(), Disconnected> {
+    let mut packet = [0u8; CDC_MAX_PACKET_SIZE as usize];
+    let mut rx = [0u8; MAX_FRAME_LEN];
+    let mut rx_len = 0usize;
+    let mut tx = [0u8; MAX_FRAME_LEN];
+
+    loop {
+        let count = serial_class.read_packet(&mut packet).await?;
+        if rx_len + count > rx.len() {
+            rx_len = 0;
+            continue;
+        }
+
+        rx[rx_len..rx_len + count].copy_from_slice(&packet[..count]);
+        rx_len += count;
+
+        loop {
+            let consumed = match parse_host_frame_any_command(&rx[..rx_len]) {
+                ParseResult::Frame { frame, consumed } => {
+                    let tx_len =
+                        encode_device_frame(frame.seq, DeviceCommand::Pong, frame.payload, &mut tx)
+                            .expect("PONG payload came from a parsed max-size host frame");
+                    write_serial_bytes(serial_class, &tx[..tx_len]).await?;
+                    consumed
+                }
+                ParseResult::Nak { nak, consumed } => {
+                    let tx_len = encode_nak(nak.seq, nak.reason, &mut tx)
+                        .expect("NAK payload always fits in a device frame");
+                    write_serial_bytes(serial_class, &tx[..tx_len]).await?;
+                    consumed
+                }
+                ParseResult::Drop { consumed, .. } => consumed,
+                ParseResult::NeedMore { .. } => break,
+            };
+
+            consume_rx(&mut rx, &mut rx_len, consumed);
         }
     }
+}
+
+async fn write_serial_bytes(
+    serial_class: &mut PicoCdcAcmClass,
+    data: &[u8],
+) -> Result<(), Disconnected> {
+    let max_packet_size = serial_class.max_packet_size() as usize;
+    let mut offset = 0usize;
+
+    while offset < data.len() {
+        let end = core::cmp::min(offset + max_packet_size, data.len());
+        serial_class.write_packet(&data[offset..end]).await?;
+        offset = end;
+    }
+
+    if data.len().is_multiple_of(max_packet_size) {
+        serial_class.write_packet(&[]).await?;
+    }
+
+    Ok(())
+}
+
+#[cfg(feature = "loopback")]
+fn consume_rx(rx: &mut [u8; MAX_FRAME_LEN], rx_len: &mut usize, consumed: usize) {
+    if consumed >= *rx_len {
+        *rx_len = 0;
+        return;
+    }
+
+    rx.copy_within(consumed..*rx_len, 0);
+    *rx_len -= consumed;
 }
 
 struct HidRequestState {

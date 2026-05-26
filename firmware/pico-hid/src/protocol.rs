@@ -108,14 +108,22 @@ pub enum EncodeError {
 }
 
 pub fn parse_host_frame(input: &[u8]) -> ParseResult<'_> {
-    parse_frame(input, HOST_MAGIC)
+    parse_frame(input, HOST_MAGIC, true)
+}
+
+pub fn parse_host_frame_any_command(input: &[u8]) -> ParseResult<'_> {
+    parse_frame(input, HOST_MAGIC, false)
 }
 
 pub fn parse_device_frame(input: &[u8]) -> ParseResult<'_> {
-    parse_frame(input, DEVICE_MAGIC)
+    parse_frame(input, DEVICE_MAGIC, false)
 }
 
-pub fn parse_frame(input: &[u8], expected_magic: u8) -> ParseResult<'_> {
+pub fn parse_frame(
+    input: &[u8],
+    expected_magic: u8,
+    reject_unknown_host_command: bool,
+) -> ParseResult<'_> {
     if input.is_empty() {
         return ParseResult::NeedMore { needed: 1 };
     }
@@ -177,7 +185,10 @@ pub fn parse_frame(input: &[u8], expected_magic: u8) -> ParseResult<'_> {
         };
     }
 
-    if expected_magic == HOST_MAGIC && HostCommand::from_u8(command).is_none() {
+    if reject_unknown_host_command
+        && expected_magic == HOST_MAGIC
+        && HostCommand::from_u8(command).is_none()
+    {
         return ParseResult::Nak {
             nak: Nak {
                 seq,

@@ -1,10 +1,17 @@
-use crate::protocol::{DeviceCommand, Frame, HostCommand, NakReason};
-use crate::reports::{BootKeyboardReport, BootMouseReport, GAMEPAD_REPORT_LEN, GamepadReport};
+use crate::protocol::{DeviceCommand, Frame};
+#[cfg(not(feature = "loopback"))]
+use crate::protocol::{HostCommand, NakReason};
+#[cfg(not(feature = "loopback"))]
+use crate::reports::GAMEPAD_REPORT_LEN;
+use crate::reports::{BootKeyboardReport, BootMouseReport, GamepadReport};
 use crate::safety::DEFAULT_WATCHDOG_TIMEOUT_MS;
 
 #[path = "../../../crates/synapse-core/src/firmware_version.rs"]
 mod firmware_version;
 
+#[cfg(feature = "loopback")]
+pub const MAX_RESPONSE_PAYLOAD_LEN: usize = crate::protocol::MAX_PAYLOAD_LEN;
+#[cfg(not(feature = "loopback"))]
 pub const MAX_RESPONSE_PAYLOAD_LEN: usize = 32;
 pub use firmware_version::{
     SYNAPSE_PICO_HID_BUILD_HASH_LEN as BUILD_HASH_LEN,
@@ -46,6 +53,7 @@ impl IdentifyInfo {
         }
     }
 
+    #[cfg(not(feature = "loopback"))]
     fn write_payload(self, out: &mut [u8; MAX_RESPONSE_PAYLOAD_LEN]) -> usize {
         out[0] = self.fw_major;
         out[1] = self.fw_minor;
@@ -116,6 +124,7 @@ impl Telemetry {
         }
     }
 
+    #[cfg(not(feature = "loopback"))]
     fn write_payload(self, out: &mut [u8; MAX_RESPONSE_PAYLOAD_LEN]) -> usize {
         out[0..4].copy_from_slice(&self.uptime_ms.to_le_bytes());
         out[4..8].copy_from_slice(&self.frames_received.to_le_bytes());
@@ -167,6 +176,7 @@ pub struct DispatchOutcome {
 }
 
 impl DispatchOutcome {
+    #[cfg(not(feature = "loopback"))]
     fn ack(seq: u32) -> Self {
         let mut payload = [0u8; MAX_RESPONSE_PAYLOAD_LEN];
         payload[..4].copy_from_slice(&seq.to_le_bytes());
@@ -177,6 +187,7 @@ impl DispatchOutcome {
         }
     }
 
+    #[cfg(not(feature = "loopback"))]
     fn nak(seq: u32, reason: NakReason) -> Self {
         let mut payload = [0u8; MAX_RESPONSE_PAYLOAD_LEN];
         payload[..4].copy_from_slice(&seq.to_le_bytes());
@@ -199,6 +210,18 @@ impl DispatchOutcome {
     }
 }
 
+#[cfg(feature = "loopback")]
+pub fn dispatch_frame(
+    state: &mut DispatchState,
+    frame: Frame<'_>,
+    _identify: IdentifyInfo,
+) -> DispatchOutcome {
+    state.telemetry.record_frame_received();
+    state.telemetry.record_command_executed();
+    DispatchOutcome::response(DeviceCommand::Pong, frame.payload)
+}
+
+#[cfg(not(feature = "loopback"))]
 pub fn dispatch_frame(
     state: &mut DispatchState,
     frame: Frame<'_>,
@@ -236,6 +259,7 @@ pub fn dispatch_frame(
     outcome
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_ping(frame: Frame<'_>) -> DispatchOutcome {
     if frame.payload.len() != 4 {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -244,6 +268,7 @@ fn dispatch_ping(frame: Frame<'_>) -> DispatchOutcome {
     DispatchOutcome::response(DeviceCommand::Pong, frame.payload)
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_identify(frame: Frame<'_>, identify: IdentifyInfo) -> DispatchOutcome {
     if !frame.payload.is_empty() {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -258,6 +283,7 @@ fn dispatch_identify(frame: Frame<'_>, identify: IdentifyInfo) -> DispatchOutcom
     }
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_mouse_move_rel(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOutcome {
     if frame.payload.len() != 4 {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -274,6 +300,7 @@ fn dispatch_mouse_move_rel(state: &mut DispatchState, frame: Frame<'_>) -> Dispa
     DispatchOutcome::ack(frame.seq)
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_mouse_button(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOutcome {
     if frame.payload.len() != 2 {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -295,6 +322,7 @@ fn dispatch_mouse_button(state: &mut DispatchState, frame: Frame<'_>) -> Dispatc
     DispatchOutcome::ack(frame.seq)
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_mouse_wheel(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOutcome {
     if frame.payload.len() != 2 {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -310,6 +338,7 @@ fn dispatch_mouse_wheel(state: &mut DispatchState, frame: Frame<'_>) -> Dispatch
     DispatchOutcome::ack(frame.seq)
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_key_down(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOutcome {
     if frame.payload.len() != 1 || frame.payload[0] == 0 {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -330,6 +359,7 @@ fn dispatch_key_down(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOut
     DispatchOutcome::nak(frame.seq, NakReason::BufferFull)
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_key_up(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOutcome {
     if frame.payload.len() != 1 || frame.payload[0] == 0 {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -345,6 +375,7 @@ fn dispatch_key_up(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOutco
     DispatchOutcome::ack(frame.seq)
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_key_mods(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOutcome {
     if frame.payload.len() != 1 {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -354,6 +385,7 @@ fn dispatch_key_mods(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOut
     DispatchOutcome::ack(frame.seq)
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_pad_report(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOutcome {
     if frame.payload.len() != GAMEPAD_REPORT_LEN {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -370,6 +402,7 @@ fn dispatch_pad_report(state: &mut DispatchState, frame: Frame<'_>) -> DispatchO
     DispatchOutcome::ack(frame.seq)
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_release_all(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOutcome {
     if !frame.payload.is_empty() {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -379,6 +412,7 @@ fn dispatch_release_all(state: &mut DispatchState, frame: Frame<'_>) -> Dispatch
     DispatchOutcome::ack(frame.seq)
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_watchdog_kick(state: &mut DispatchState, frame: Frame<'_>) -> DispatchOutcome {
     if frame.payload.len() != 4 {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -393,6 +427,7 @@ fn dispatch_watchdog_kick(state: &mut DispatchState, frame: Frame<'_>) -> Dispat
     DispatchOutcome::ack(frame.seq)
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_get_telemetry(state: &DispatchState, frame: Frame<'_>) -> DispatchOutcome {
     if !frame.payload.is_empty() {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
@@ -407,6 +442,7 @@ fn dispatch_get_telemetry(state: &DispatchState, frame: Frame<'_>) -> DispatchOu
     }
 }
 
+#[cfg(not(feature = "loopback"))]
 fn dispatch_empty_ack(frame: Frame<'_>) -> DispatchOutcome {
     if !frame.payload.is_empty() {
         return DispatchOutcome::nak(frame.seq, NakReason::PayloadInvalid);
