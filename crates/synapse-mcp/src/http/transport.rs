@@ -22,6 +22,7 @@ use crate::{
     http::sse::{self, SseState},
     m2::M2ServiceConfig,
     m3::M3ServiceConfig,
+    m4::M4ServiceConfig,
     server::SynapseService,
 };
 
@@ -39,6 +40,7 @@ pub(super) async fn serve(
     allow_non_loopback: bool,
     m2_config: &M2ServiceConfig,
     m3_config: M3ServiceConfig,
+    m4_config: M4ServiceConfig,
 ) -> anyhow::Result<ExitCode> {
     synapse_action::install_panic_hook();
     let addr = bind
@@ -74,6 +76,7 @@ pub(super) async fn serve(
         sse_state.clone(),
         m2_config,
         m3_config,
+        m4_config,
     )
     .context("initialize shared HTTP service state")?;
     let _operator_hotkey_guard = crate::safety::install_operator_hotkey(service.m3_state_handle())
@@ -163,6 +166,7 @@ fn http_service(
     sse_state: SseState,
     m2_config: &M2ServiceConfig,
     m3_config: M3ServiceConfig,
+    m4_config: M4ServiceConfig,
 ) -> io::Result<SynapseService> {
     SynapseService::try_with_m2_shutdown_reason_and_sse_state_and_m3_config(
         shutdown_cancel,
@@ -171,6 +175,7 @@ fn http_service(
         sse_state,
         m2_config,
         m3_config,
+        m4_config,
     )
     .map_err(|error| io::Error::other(format!("{error:#}")))
 }

@@ -135,6 +135,99 @@ async fn hardware_hid_missing_literal_fails_startup_with_hid_code() -> anyhow::R
 }
 
 #[tokio::test]
+async fn help_lists_m4_policy_flags_and_envs() -> anyhow::Result<()> {
+    let _guard = cli_mode_test_lock().lock().await;
+    let output = Command::new(env!("CARGO_BIN_EXE_synapse-mcp"))
+        .arg("--help")
+        .env_remove("SYNAPSE_ALLOW_SHELL")
+        .env_remove("SYNAPSE_ALLOW_LAUNCH")
+        .env_remove("SYNAPSE_HARDWARE_HID")
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .output()
+        .await?;
+
+    assert!(output.status.success());
+    let stdout = String::from_utf8(output.stdout)?;
+    assert!(stdout.contains("--allow-shell <REGEX>"), "{stdout}");
+    assert!(stdout.contains("SYNAPSE_ALLOW_SHELL"), "{stdout}");
+    assert!(stdout.contains("--allow-launch <REGEX>"), "{stdout}");
+    assert!(stdout.contains("SYNAPSE_ALLOW_LAUNCH"), "{stdout}");
+    assert!(stdout.contains("--hardware-hid <PORT_OR_AUTO>"), "{stdout}");
+    assert!(stdout.contains("SYNAPSE_HARDWARE_HID"), "{stdout}");
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_health_reads_m4_policy_counts_from_repeated_cli_flags() -> anyhow::Result<()> {
+    let _guard = cli_mode_test_lock().lock().await;
+    let dir = TempDir::new()?;
+    let bind = free_loopback_bind()?;
+    let token = "cli-mode-m4-policy-cli-token";
+    let mut child = Command::new(env!("CARGO_BIN_EXE_synapse-mcp"))
+        .args([
+            "--mode",
+            "http",
+            "--bind",
+            &bind,
+            "--allow-shell",
+            "^echo$",
+            "--allow-shell",
+            "^cargo$",
+            "--allow-launch",
+            "^notepad\\.exe$",
+            "--allow-launch",
+            "^calc\\.exe$",
+        ])
+        .env("SYNAPSE_LOG_DIR", dir.path())
+        .env("SYNAPSE_BEARER_TOKEN", token)
+        .env_remove("SYNAPSE_HARDWARE_HID")
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    let response = wait_for_health(&bind, Some(token)).await;
+    stop_child(&mut child).await?;
+
+    let response = response?;
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(
+        response.contains("allow_shell_patterns=2 allow_launch_patterns=2"),
+        "{response}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn http_health_reads_m4_policy_counts_from_comma_env() -> anyhow::Result<()> {
+    let _guard = cli_mode_test_lock().lock().await;
+    let dir = TempDir::new()?;
+    let bind = free_loopback_bind()?;
+    let token = "cli-mode-m4-policy-env-token";
+    let mut child = Command::new(env!("CARGO_BIN_EXE_synapse-mcp"))
+        .args(["--mode", "http", "--bind", &bind])
+        .env("SYNAPSE_LOG_DIR", dir.path())
+        .env("SYNAPSE_BEARER_TOKEN", token)
+        .env("SYNAPSE_ALLOW_SHELL", "^echo$,^cargo$")
+        .env("SYNAPSE_ALLOW_LAUNCH", "^notepad\\.exe$,^calc\\.exe$")
+        .env_remove("SYNAPSE_HARDWARE_HID")
+        .stderr(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()?;
+
+    let response = wait_for_health(&bind, Some(token)).await;
+    stop_child(&mut child).await?;
+
+    let response = response?;
+    assert!(response.starts_with("HTTP/1.1 200 OK"), "{response}");
+    assert!(
+        response.contains("allow_shell_patterns=2 allow_launch_patterns=2"),
+        "{response}"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn invalid_env_mode_exits_with_clap_error() -> anyhow::Result<()> {
     let _guard = cli_mode_test_lock().lock().await;
     let output = Command::new(env!("CARGO_BIN_EXE_synapse-mcp"))

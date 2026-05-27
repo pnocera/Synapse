@@ -19,6 +19,42 @@ use crate::{
 const MAX_COMBO_STEPS: usize = 256;
 const DEFAULT_SHELL_TIMEOUT_MS: u32 = 30_000;
 const DEFAULT_LAUNCH_TIMEOUT_MS: u32 = 10_000;
+const ALLOW_SHELL_ENV: &str = "SYNAPSE_ALLOW_SHELL";
+const ALLOW_LAUNCH_ENV: &str = "SYNAPSE_ALLOW_LAUNCH";
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct M4ServiceConfig {
+    allow_shell: Vec<String>,
+    allow_launch: Vec<String>,
+}
+
+impl M4ServiceConfig {
+    #[must_use]
+    pub const fn from_cli_parts(allow_shell: Vec<String>, allow_launch: Vec<String>) -> Self {
+        Self {
+            allow_shell,
+            allow_launch,
+        }
+    }
+
+    #[must_use]
+    pub fn from_env() -> Self {
+        Self::from_cli_parts(
+            parse_env_list(ALLOW_SHELL_ENV),
+            parse_env_list(ALLOW_LAUNCH_ENV),
+        )
+    }
+
+    #[must_use]
+    pub const fn allow_shell_count(&self) -> usize {
+        self.allow_shell.len()
+    }
+
+    #[must_use]
+    pub const fn allow_launch_count(&self) -> usize {
+        self.allow_launch.len()
+    }
+}
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -397,6 +433,12 @@ const fn default_shell_timeout_ms() -> u32 {
 
 const fn default_launch_timeout_ms() -> u32 {
     DEFAULT_LAUNCH_TIMEOUT_MS
+}
+
+fn parse_env_list(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .map(|raw| raw.split(',').map(ToOwned::to_owned).collect())
+        .unwrap_or_default()
 }
 
 #[cfg(test)]

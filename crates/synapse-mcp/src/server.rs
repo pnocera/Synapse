@@ -67,7 +67,8 @@ use crate::{
     },
     m4::{
         ActComboParams, ActComboResponse, ActLaunchParams, ActLaunchResponse, ActRunShellParams,
-        ActRunShellResponse, execute_combo, launch, required_combo_permissions, run_shell,
+        ActRunShellResponse, M4ServiceConfig, execute_combo, launch, required_combo_permissions,
+        run_shell,
     },
 };
 
@@ -88,6 +89,7 @@ pub struct SynapseService {
     m1_state: SharedM1State,
     m2_state: SharedM2State,
     m3_state: SharedM3State,
+    m4_config: M4ServiceConfig,
 }
 
 impl SynapseService {
@@ -106,6 +108,7 @@ impl SynapseService {
             m1_state: SharedM1State::default(),
             m2_state: shared_m2_state_from_env()?,
             m3_state: shared_m3_state_from_env()?,
+            m4_config: M4ServiceConfig::from_env(),
         })
     }
 
@@ -115,6 +118,7 @@ impl SynapseService {
         connection_closed_cancel: CancellationToken,
         m2_config: &M2ServiceConfig,
         m3_config: M3ServiceConfig,
+        m4_config: M4ServiceConfig,
     ) -> anyhow::Result<Self> {
         let sse_state = SseState::with_max_subscriptions(m3_config.max_subscriptions);
         Ok(Self {
@@ -134,6 +138,7 @@ impl SynapseService {
                 Some(connection_closed_cancel),
                 sse_state,
             )?,
+            m4_config,
         })
     }
 
@@ -144,6 +149,7 @@ impl SynapseService {
         sse_state: SseState,
         m2_config: &M2ServiceConfig,
         m3_config: M3ServiceConfig,
+        m4_config: M4ServiceConfig,
     ) -> anyhow::Result<Self> {
         Ok(Self {
             started_at: Instant::now(),
@@ -162,6 +168,7 @@ impl SynapseService {
                 Some(connection_closed_cancel),
                 sse_state,
             )?,
+            m4_config,
         })
     }
 

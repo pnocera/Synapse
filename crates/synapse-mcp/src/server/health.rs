@@ -227,10 +227,12 @@ impl SynapseService {
                     SubsystemHealth {
                         status: if emitter_available { "ok" } else { "error" }.to_owned(),
                         detail: Some(format!(
-                            "emitter_available={} recording_enabled={} hardware_hid={}",
+                            "emitter_available={} recording_enabled={} hardware_hid={} allow_shell_patterns={} allow_launch_patterns={}",
                             emitter_available,
                             state.recording_enabled(),
-                            state.hardware_hid().unwrap_or("disabled")
+                            state.hardware_hid().unwrap_or("disabled"),
+                            self.m4_config.allow_shell_count(),
+                            self.m4_config.allow_launch_count()
                         )),
                         device_name: state.hardware_hid().map(str::to_owned),
                         backend_resolution: Some(backend_resolution_health(source, policy)),
