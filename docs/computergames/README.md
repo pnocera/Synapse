@@ -102,6 +102,7 @@ Two separate products would duplicate ~90% of engineering. **Synapse ships them 
 | 15 | [`15_roadmap_and_milestones.md`](15_roadmap_and_milestones.md) | M0-M5 phases, scope per milestone, demo criteria. |
 | 16 | [`16_open_questions.md`](16_open_questions.md) | Unresolved decisions, ADRs needed. |
 | 17 | [`17_research_appendix.md`](17_research_appendix.md) | Web research, comparable projects, references. |
+| 18 | [`18_luanti_benchmark.md`](18_luanti_benchmark.md) | Local Luanti / Minetest Game benchmark install, world fixture, and provenance. |
 
 ---
 
