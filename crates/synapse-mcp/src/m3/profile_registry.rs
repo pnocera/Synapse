@@ -10,6 +10,7 @@ use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rmcp::{ErrorData, model::ErrorCode, schemars::JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use synapse_core::{ProfileId, SCHEMA_VERSION, error_codes};
 use synapse_profiles::{
     PackageSignature, ProfileError, ProfilePackageManifest, package_manifest_digest,
@@ -36,11 +37,17 @@ const QUALITY_LINK_PREFIX: &str = "profile_registry/v1/quality_link/";
 const TRUST_ROOT_PREFIX: &str = "profile_registry/v1/trust_root/";
 const QUARANTINE_PREFIX: &str = "profile_registry/v1/quarantine/";
 const ROLLBACK_PREFIX: &str = "profile_registry/v1/rollback/";
+const CONTRIBUTION_PREFIX: &str = "profile_registry/v1/contribution/";
 const HEAD_PREFIX: &str = "profile_registry/v1/head/";
 const DEFAULT_SOURCE_ID: &str = "registry.local";
 const DEFAULT_INSTALL_TRUST_POLICY: &str = "local_first";
+const DEFAULT_BUNDLE_KIND: &str = "registry";
+const REGISTRY_BUNDLE_KIND: &str = "registry";
+const CONTRIBUTION_BUNDLE_KIND: &str = "contribution";
 const DEFAULT_SEARCH_LIMIT: u32 = 100;
 const MAX_SEARCH_LIMIT: u32 = 1000;
+const DEFAULT_CONTRIBUTION_AUDIT_ROWS: u32 = 100;
+const MAX_CONTRIBUTION_AUDIT_ROWS: u32 = 1000;
 const VALUE_PREFIX_CHARS: usize = 1024;
 const SYNTHETIC_FIXTURE_SIGNER_ID: &str = "synapse.fixture.signer";
 const SYNTHETIC_FIXTURE_PUBLIC_KEY_HEX: &str =
@@ -50,6 +57,13 @@ const SYNTHETIC_FIXTURE_KEY_ID: &str =
 
 type EncodedRow = (Vec<u8>, Vec<u8>);
 type EncodedRows = Vec<EncodedRow>;
+
+struct RegistryExportInputs {
+    profile_rows: EncodedRows,
+    kv_rows: EncodedRows,
+    audit_rows: EncodedRows,
+    quality_row: Option<EncodedRow>,
+}
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -113,12 +127,29 @@ pub struct ProfileRegistryDisableParams {
 #[serde(deny_unknown_fields)]
 pub struct ProfileRegistryExportParams {
     pub output_path: String,
+    #[serde(default = "default_bundle_kind")]
+    #[schemars(default = "default_bundle_kind")]
+    pub bundle_kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profile_id: Option<ProfileId>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub query: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub row_kind: Option<String>,
     #[serde(default)]
     pub include_disabled: bool,
+    #[serde(default = "default_include_audit_evidence")]
+    #[schemars(default = "default_include_audit_evidence")]
+    pub include_audit_evidence: bool,
+    #[serde(default = "default_include_quality_summary")]
+    #[schemars(default = "default_include_quality_summary")]
+    pub include_quality_summary: bool,
+    #[serde(default = "default_contribution_audit_rows")]
+    #[schemars(
+        default = "default_contribution_audit_rows",
+        range(min = 1, max = 1000)
+    )]
+    pub max_audit_rows: u32,
     #[serde(default = "default_search_limit")]
     #[schemars(default = "default_search_limit", range(min = 1, max = 1000))]
     pub limit: u32,
@@ -238,8 +269,15 @@ pub struct ProfileRegistryDisableResponse {
 #[serde(deny_unknown_fields)]
 pub struct ProfileRegistryExportResponse {
     pub output_path: String,
+    pub bundle_kind: String,
     pub bytes_written: u64,
     pub rows_exported: u64,
+    pub audit_evidence_rows: u64,
+    pub quality_summary_rows: u64,
+    pub deterministic_bundle_sha256: String,
+    pub registry_rows_sha256: String,
+    pub audit_evidence_sha256: String,
+    pub quality_summary_sha256: String,
     pub rows: Vec<ProfileRegistryRowSummary>,
 }
 
@@ -247,9 +285,13 @@ pub struct ProfileRegistryExportResponse {
 #[serde(deny_unknown_fields)]
 pub struct ProfileRegistryImportResponse {
     pub bundle_path: String,
+    pub bundle_kind: String,
     pub rows_read: u64,
     pub cf_profile_rows_written: u64,
     pub cf_kv_rows_written: u64,
+    pub duplicate_rows: u64,
+    pub contribution_row_key: Option<String>,
+    pub deterministic_bundle_sha256: Option<String>,
     pub rows: Vec<ProfileRegistryRowSummary>,
 }
 
@@ -314,8 +356,26 @@ pub struct AuditLearningCandidate {
 #[serde(deny_unknown_fields)]
 struct ProfileRegistryExportBundle {
     schema_version: u32,
+    #[serde(default = "default_bundle_kind")]
+    bundle_kind: String,
     exported_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    profile_id: Option<ProfileId>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    deterministic_bundle_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    registry_rows_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audit_evidence_sha256: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    quality_summary_sha256: Option<String>,
+    #[serde(default)]
+    merge_rules: Vec<String>,
     rows: Vec<ProfileRegistryBundleRow>,
+    #[serde(default)]
+    audit_evidence: Vec<ProfileRegistryAuditEvidenceRow>,
+    #[serde(default)]
+    quality_summaries: Vec<ProfileRegistryQualitySummaryRow>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -324,6 +384,36 @@ struct ProfileRegistryBundleRow {
     cf_name: String,
     key: String,
     value: Value,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileRegistryAuditEvidenceRow {
+    cf_name: String,
+    key_hex: String,
+    value_sha256: String,
+    profile_id: Option<ProfileId>,
+    foreground_profile_id: Option<ProfileId>,
+    foreground_process_name: Option<String>,
+    tool: Option<String>,
+    status: Option<String>,
+    error_code: Option<String>,
+    backend_used: Option<String>,
+    profile_schema_version: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProfileRegistryQualitySummaryRow {
+    cf_name: String,
+    key: String,
+    key_hex: String,
+    value_sha256: String,
+    profile_id: Option<ProfileId>,
+    evidence_hash: Option<String>,
+    score_0_100: Option<u64>,
+    sample_size: Option<u64>,
+    quality_signal: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -799,80 +889,66 @@ pub fn export_registry(
     params: &ProfileRegistryExportParams,
 ) -> Result<ProfileRegistryExportResponse, ErrorData> {
     validate_limit(params.limit)?;
+    validate_contribution_audit_rows(params.max_audit_rows)?;
+    let bundle_kind = normalized_bundle_kind(&params.bundle_kind)?;
+    if bundle_kind == CONTRIBUTION_BUNDLE_KIND && params.profile_id.is_none() {
+        return Err(registry_error(
+            "contribution_profile_id_missing",
+            "profile_registry_export bundle_kind=contribution requires profile_id",
+        ));
+    }
     let output_path = required_path("output_path", &params.output_path)?;
     let runtime = lock_runtime(reflex_runtime, "exporting profile registry")?;
-    let profile_rows = runtime
-        .storage_cf_prefix_rows(cf::CF_PROFILES, REGISTRY_PREFIX.as_bytes(), usize::MAX)
-        .map_err(storage_error)?;
-    let kv_rows = runtime
-        .storage_cf_prefix_rows(cf::CF_KV, REGISTRY_PREFIX.as_bytes(), usize::MAX)
-        .map_err(storage_error)?;
+    let inputs = registry_export_inputs(&runtime, params, bundle_kind.as_str())?;
     drop(runtime);
-    let search_params = ProfileRegistrySearchParams {
-        query: params.query.clone(),
-        row_kind: params.row_kind.clone(),
-        include_disabled: params.include_disabled,
-        limit: params.limit,
-    };
-    let query = normalized_query(params.query.as_deref());
-    let mut bundle_rows = Vec::new();
-    let mut summaries = Vec::new();
-    'rows: for (cf_name, rows) in [(cf::CF_PROFILES, profile_rows), (cf::CF_KV, kv_rows)] {
-        for (key, value) in rows {
-            let summary = row_summary(cf_name, &key, &value);
-            if !row_filter_matches(&summary, &value, query.as_deref(), &search_params) {
-                continue;
-            }
-            if summaries.len() >= params.limit as usize {
-                break 'rows;
-            }
-            let key_string = String::from_utf8_lossy(&key).into_owned();
-            let decoded = decode_json::<Value>(&value).map_err(decode_error)?;
-            bundle_rows.push(ProfileRegistryBundleRow {
-                cf_name: cf_name.to_owned(),
-                key: key_string,
-                value: decoded,
-            });
-            summaries.push(summary);
-        }
-    }
+    let (mut bundle_rows, summaries) = collect_export_bundle_rows(
+        params,
+        bundle_kind.as_str(),
+        inputs.profile_rows,
+        inputs.kv_rows,
+    )?;
+    sort_bundle_rows(&mut bundle_rows);
+    let audit_evidence =
+        collect_contribution_audit_evidence(params, bundle_kind.as_str(), inputs.audit_rows)?;
+    let quality_summaries = collect_contribution_quality_summaries(inputs.quality_row)?;
+    let merge_rules = merge_rules();
+    let registry_rows_sha256 = hash_json(&bundle_rows)?;
+    let audit_evidence_sha256 = hash_json(&audit_evidence)?;
+    let quality_summary_sha256 = hash_json(&quality_summaries)?;
+    let deterministic_bundle_sha256 = contribution_content_hash(
+        bundle_kind.as_str(),
+        params.profile_id.as_deref(),
+        &merge_rules,
+        &bundle_rows,
+        &audit_evidence,
+        &quality_summaries,
+    )?;
     let bundle = ProfileRegistryExportBundle {
         schema_version: SCHEMA_VERSION,
+        bundle_kind: bundle_kind.clone(),
         exported_at: Utc::now().to_rfc3339(),
+        profile_id: params.profile_id.clone(),
+        deterministic_bundle_sha256: Some(deterministic_bundle_sha256.clone()),
+        registry_rows_sha256: Some(registry_rows_sha256.clone()),
+        audit_evidence_sha256: Some(audit_evidence_sha256.clone()),
+        quality_summary_sha256: Some(quality_summary_sha256.clone()),
+        merge_rules,
         rows: bundle_rows,
+        audit_evidence,
+        quality_summaries,
     };
-    let bytes = serde_json::to_vec_pretty(&bundle).map_err(|error| {
-        mcp_error(
-            error_codes::TOOL_INTERNAL_ERROR,
-            format!("profile registry export encode failed: {error}"),
-        )
-    })?;
-    if let Some(parent) = output_path.parent()
-        && !parent.as_os_str().is_empty()
-    {
-        fs::create_dir_all(parent).map_err(|error| {
-            mcp_error(
-                error_codes::TOOL_INTERNAL_ERROR,
-                format!(
-                    "profile registry export could not create {}: {error}",
-                    parent.display()
-                ),
-            )
-        })?;
-    }
-    fs::write(&output_path, &bytes).map_err(|error| {
-        mcp_error(
-            error_codes::TOOL_INTERNAL_ERROR,
-            format!(
-                "profile registry export could not write {}: {error}",
-                output_path.display()
-            ),
-        )
-    })?;
+    let bytes = write_registry_export_bundle(&output_path, &bundle)?;
     Ok(ProfileRegistryExportResponse {
         output_path: output_path.display().to_string(),
+        bundle_kind,
         bytes_written: bytes.len() as u64,
         rows_exported: summaries.len() as u64,
+        audit_evidence_rows: bundle.audit_evidence.len() as u64,
+        quality_summary_rows: bundle.quality_summaries.len() as u64,
+        deterministic_bundle_sha256,
+        registry_rows_sha256,
+        audit_evidence_sha256,
+        quality_summary_sha256,
         rows: summaries,
     })
 }
@@ -891,7 +967,7 @@ pub fn import_registry(
             ),
         )
     })?;
-    let bundle =
+    let mut bundle =
         serde_json::from_slice::<ProfileRegistryExportBundle>(&bytes).map_err(|error| {
             mcp_error(
                 error_codes::TOOL_PARAMS_INVALID,
@@ -907,11 +983,14 @@ pub fn import_registry(
             ),
         ));
     }
+    let bundle_kind = normalized_bundle_kind(&bundle.bundle_kind)?;
+    bundle.bundle_kind.clone_from(&bundle_kind);
+    validate_bundle_hashes(&bundle)?;
     let mut profile_rows = Vec::new();
     let mut kv_rows = Vec::new();
     let mut summaries = Vec::new();
-    for row in bundle.rows {
-        validate_bundle_row(&row)?;
+    for row in &bundle.rows {
+        validate_bundle_row(row)?;
         let encoded = encode_json(&row.value).map_err(|error| {
             mcp_error(
                 error_codes::TOOL_INTERNAL_ERROR,
@@ -924,14 +1003,35 @@ pub fn import_registry(
             &encoded,
         ));
         if row.cf_name == cf::CF_PROFILES {
-            profile_rows.push((row.key.into_bytes(), encoded));
+            profile_rows.push((row.key.clone().into_bytes(), encoded));
         } else {
-            kv_rows.push((row.key.into_bytes(), encoded));
+            kv_rows.push((row.key.clone().into_bytes(), encoded));
         }
     }
+    let contribution_row_key = if bundle_kind == CONTRIBUTION_BUNDLE_KIND {
+        Some(contribution_key(
+            bundle.profile_id.as_deref().unwrap_or("unknown-profile"),
+            bundle.deterministic_bundle_sha256.as_deref(),
+        ))
+    } else {
+        None
+    };
+    if let Some(key) = &contribution_row_key {
+        let value = contribution_import_row(&bundle_path, &bundle, summaries.len() as u64)?;
+        let encoded = encode_json(&value).map_err(|error| {
+            mcp_error(
+                error_codes::TOOL_INTERNAL_ERROR,
+                format!("profile registry contribution row encode failed: {error}"),
+            )
+        })?;
+        summaries.push(row_summary(cf::CF_PROFILES, key.as_bytes(), &encoded));
+        profile_rows.push((key.clone().into_bytes(), encoded));
+    }
+    let runtime = lock_runtime(reflex_runtime, "importing profile registry")?;
+    let duplicate_rows =
+        filter_duplicate_or_conflicting_rows(&runtime, &mut profile_rows, &mut kv_rows)?;
     let profile_count = profile_rows.len() as u64;
     let kv_count = kv_rows.len() as u64;
-    let runtime = lock_runtime(reflex_runtime, "importing profile registry")?;
     runtime
         .storage_put_profile_rows(profile_rows)
         .map_err(storage_error)?;
@@ -941,11 +1041,164 @@ pub fn import_registry(
     drop(runtime);
     Ok(ProfileRegistryImportResponse {
         bundle_path: bundle_path.display().to_string(),
+        bundle_kind,
         rows_read: summaries.len() as u64,
         cf_profile_rows_written: profile_count,
         cf_kv_rows_written: kv_count,
+        duplicate_rows,
+        contribution_row_key,
+        deterministic_bundle_sha256: bundle.deterministic_bundle_sha256.clone(),
         rows: summaries,
     })
+}
+
+fn registry_export_inputs(
+    runtime: &MutexGuard<'_, ReflexRuntime>,
+    params: &ProfileRegistryExportParams,
+    bundle_kind: &str,
+) -> Result<RegistryExportInputs, ErrorData> {
+    let profile_rows = runtime
+        .storage_cf_prefix_rows(cf::CF_PROFILES, REGISTRY_PREFIX.as_bytes(), usize::MAX)
+        .map_err(storage_error)?;
+    let kv_rows = runtime
+        .storage_cf_prefix_rows(cf::CF_KV, REGISTRY_PREFIX.as_bytes(), usize::MAX)
+        .map_err(storage_error)?;
+    let audit_rows = if bundle_kind == CONTRIBUTION_BUNDLE_KIND && params.include_audit_evidence {
+        runtime
+            .storage_cf_tail_rows(cf::CF_ACTION_LOG, params.max_audit_rows as usize)
+            .map_err(storage_error)?
+    } else {
+        Vec::new()
+    };
+    let quality_row = if bundle_kind == CONTRIBUTION_BUNDLE_KIND
+        && params.include_quality_summary
+        && let Some(profile_id) = &params.profile_id
+    {
+        runtime
+            .storage_profile_row(quality_key(profile_id).as_bytes())
+            .map_err(storage_error)?
+            .map(|value| (quality_key(profile_id).into_bytes(), value))
+    } else {
+        None
+    };
+    Ok(RegistryExportInputs {
+        profile_rows,
+        kv_rows,
+        audit_rows,
+        quality_row,
+    })
+}
+
+fn collect_export_bundle_rows(
+    params: &ProfileRegistryExportParams,
+    bundle_kind: &str,
+    profile_rows: EncodedRows,
+    kv_rows: EncodedRows,
+) -> Result<
+    (
+        Vec<ProfileRegistryBundleRow>,
+        Vec<ProfileRegistryRowSummary>,
+    ),
+    ErrorData,
+> {
+    let search_params = ProfileRegistrySearchParams {
+        query: params.query.clone(),
+        row_kind: params.row_kind.clone(),
+        include_disabled: params.include_disabled,
+        limit: params.limit,
+    };
+    let query = normalized_query(params.query.as_deref());
+    let mut bundle_rows = Vec::new();
+    let mut summaries = Vec::new();
+    'rows: for (cf_name, rows) in [(cf::CF_PROFILES, profile_rows), (cf::CF_KV, kv_rows)] {
+        for (key, value) in rows {
+            let summary = row_summary(cf_name, &key, &value);
+            if !row_filter_matches(&summary, &value, query.as_deref(), &search_params) {
+                continue;
+            }
+            if bundle_kind == CONTRIBUTION_BUNDLE_KIND
+                && let Some(profile_id) = &params.profile_id
+                && !registry_row_contributes_to_profile(&summary, &value, profile_id)
+            {
+                continue;
+            }
+            if summaries.len() >= params.limit as usize {
+                break 'rows;
+            }
+            let mut decoded = decode_json::<Value>(&value).map_err(decode_error)?;
+            if bundle_kind == CONTRIBUTION_BUNDLE_KIND {
+                redact_contribution_registry_value(&mut decoded);
+            }
+            bundle_rows.push(ProfileRegistryBundleRow {
+                cf_name: cf_name.to_owned(),
+                key: String::from_utf8_lossy(&key).into_owned(),
+                value: decoded,
+            });
+            summaries.push(summary);
+        }
+    }
+    Ok((bundle_rows, summaries))
+}
+
+fn collect_contribution_audit_evidence(
+    params: &ProfileRegistryExportParams,
+    bundle_kind: &str,
+    audit_rows: EncodedRows,
+) -> Result<Vec<ProfileRegistryAuditEvidenceRow>, ErrorData> {
+    if bundle_kind != CONTRIBUTION_BUNDLE_KIND {
+        return Ok(Vec::new());
+    }
+    let mut evidence = Vec::new();
+    for (key, value) in audit_rows {
+        if let Some(row) = contribution_audit_row(params.profile_id.as_deref(), &key, &value)? {
+            evidence.push(row);
+        }
+    }
+    Ok(evidence)
+}
+
+fn collect_contribution_quality_summaries(
+    quality_row: Option<EncodedRow>,
+) -> Result<Vec<ProfileRegistryQualitySummaryRow>, ErrorData> {
+    quality_row
+        .map(|(key, value)| contribution_quality_summary(&key, &value))
+        .transpose()
+        .map(|row| row.into_iter().collect())
+}
+
+fn write_registry_export_bundle(
+    output_path: &Path,
+    bundle: &ProfileRegistryExportBundle,
+) -> Result<Vec<u8>, ErrorData> {
+    let bytes = serde_json::to_vec_pretty(bundle).map_err(|error| {
+        mcp_error(
+            error_codes::TOOL_INTERNAL_ERROR,
+            format!("profile registry export encode failed: {error}"),
+        )
+    })?;
+    if let Some(parent) = output_path.parent()
+        && !parent.as_os_str().is_empty()
+    {
+        fs::create_dir_all(parent).map_err(|error| {
+            mcp_error(
+                error_codes::TOOL_INTERNAL_ERROR,
+                format!(
+                    "profile registry export could not create {}: {error}",
+                    parent.display()
+                ),
+            )
+        })?;
+    }
+    fs::write(output_path, &bytes).map_err(|error| {
+        mcp_error(
+            error_codes::TOOL_INTERNAL_ERROR,
+            format!(
+                "profile registry export could not write {}: {error}",
+                output_path.display()
+            ),
+        )
+    })?;
+    Ok(bytes)
 }
 
 #[expect(
@@ -2182,6 +2435,337 @@ fn row_filter_matches(
     })
 }
 
+fn registry_row_contributes_to_profile(
+    summary: &ProfileRegistryRowSummary,
+    value: &[u8],
+    profile_id: &str,
+) -> bool {
+    if summary.profile_id.as_deref() == Some(profile_id) {
+        return true;
+    }
+    if decode_json::<Value>(value)
+        .ok()
+        .is_some_and(|decoded| value_mentions_profile(&decoded, profile_id))
+    {
+        return true;
+    }
+    matches!(
+        summary.row_kind.as_deref(),
+        Some("registry_source" | "registry_head" | "trust_root")
+    )
+}
+
+fn sort_bundle_rows(rows: &mut [ProfileRegistryBundleRow]) {
+    rows.sort_by(|left, right| {
+        left.cf_name
+            .cmp(&right.cf_name)
+            .then_with(|| left.key.cmp(&right.key))
+    });
+}
+
+fn contribution_audit_row(
+    profile_id_filter: Option<&str>,
+    key: &[u8],
+    value: &[u8],
+) -> Result<Option<ProfileRegistryAuditEvidenceRow>, ErrorData> {
+    let decoded = decode_json::<Value>(value).map_err(decode_error)?;
+    if let Some(profile_id) = profile_id_filter
+        && !value_mentions_profile(&decoded, profile_id)
+    {
+        return Ok(None);
+    }
+    Ok(Some(ProfileRegistryAuditEvidenceRow {
+        cf_name: cf::CF_ACTION_LOG.to_owned(),
+        key_hex: hex_encode(key),
+        value_sha256: sha256_hex(value),
+        profile_id: string_field(&decoded, "profile_id"),
+        foreground_profile_id: decoded
+            .pointer("/foreground/profile_id")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        foreground_process_name: decoded
+            .pointer("/foreground/process_name")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        tool: string_field(&decoded, "tool"),
+        status: string_field(&decoded, "status"),
+        error_code: string_field(&decoded, "error_code"),
+        backend_used: decoded
+            .pointer("/details/response/backend_used")
+            .or_else(|| decoded.pointer("/details/response/backend"))
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+        profile_schema_version: decoded
+            .pointer("/foreground/profile_schema_version")
+            .or_else(|| decoded.get("profile_schema_version"))
+            .and_then(Value::as_u64),
+    }))
+}
+
+fn contribution_quality_summary(
+    key: &[u8],
+    value: &[u8],
+) -> Result<ProfileRegistryQualitySummaryRow, ErrorData> {
+    let decoded = decode_json::<Value>(value).map_err(decode_error)?;
+    Ok(ProfileRegistryQualitySummaryRow {
+        cf_name: cf::CF_PROFILES.to_owned(),
+        key: String::from_utf8_lossy(key).into_owned(),
+        key_hex: hex_encode(key),
+        value_sha256: sha256_hex(value),
+        profile_id: string_field(&decoded, "profile_id"),
+        evidence_hash: string_field(&decoded, "evidence_hash"),
+        score_0_100: decoded
+            .pointer("/score/score_0_100")
+            .and_then(Value::as_u64),
+        sample_size: decoded
+            .pointer("/score/sample_size")
+            .and_then(Value::as_u64),
+        quality_signal: string_field(&decoded, "quality_signal"),
+    })
+}
+
+fn redact_contribution_registry_value(value: &mut Value) {
+    match value {
+        Value::Object(object) => {
+            let path_keys = object
+                .keys()
+                .filter(|key| {
+                    key.as_str() == "path"
+                        || key.ends_with("_path")
+                        || key.ends_with("_paths")
+                        || key.ends_with("Path")
+                })
+                .cloned()
+                .collect::<Vec<_>>();
+            for key in path_keys {
+                object.remove(&key);
+            }
+            for value in object.values_mut() {
+                redact_contribution_registry_value(value);
+            }
+        }
+        Value::Array(items) => {
+            for value in items {
+                redact_contribution_registry_value(value);
+            }
+        }
+        _ => {}
+    }
+}
+
+fn validate_bundle_hashes(bundle: &ProfileRegistryExportBundle) -> Result<(), ErrorData> {
+    let registry_rows_sha256 = hash_json(&bundle.rows)?;
+    verify_optional_hash(
+        "registry_rows_sha256",
+        bundle.registry_rows_sha256.as_deref(),
+        &registry_rows_sha256,
+    )?;
+    let audit_evidence_sha256 = hash_json(&bundle.audit_evidence)?;
+    verify_optional_hash(
+        "audit_evidence_sha256",
+        bundle.audit_evidence_sha256.as_deref(),
+        &audit_evidence_sha256,
+    )?;
+    let quality_summary_sha256 = hash_json(&bundle.quality_summaries)?;
+    verify_optional_hash(
+        "quality_summary_sha256",
+        bundle.quality_summary_sha256.as_deref(),
+        &quality_summary_sha256,
+    )?;
+    let content_hash = contribution_content_hash(
+        bundle.bundle_kind.as_str(),
+        bundle.profile_id.as_deref(),
+        &bundle.merge_rules,
+        &bundle.rows,
+        &bundle.audit_evidence,
+        &bundle.quality_summaries,
+    )?;
+    verify_optional_hash(
+        "deterministic_bundle_sha256",
+        bundle.deterministic_bundle_sha256.as_deref(),
+        &content_hash,
+    )?;
+    if bundle.bundle_kind == CONTRIBUTION_BUNDLE_KIND
+        && bundle.deterministic_bundle_sha256.is_none()
+    {
+        return Err(registry_error(
+            "contribution_bundle_hash_missing",
+            "contribution bundle must carry deterministic_bundle_sha256",
+        ));
+    }
+    Ok(())
+}
+
+fn verify_optional_hash(
+    field: &str,
+    expected: Option<&str>,
+    actual: &str,
+) -> Result<(), ErrorData> {
+    if let Some(expected) = expected
+        && expected != actual
+    {
+        return Err(registry_error(
+            "registry_bundle_hash_mismatch",
+            format!("{field} mismatch: expected {expected}, actual {actual}"),
+        ));
+    }
+    Ok(())
+}
+
+fn contribution_content_hash(
+    bundle_kind: &str,
+    profile_id: Option<&str>,
+    merge_rules: &[String],
+    rows: &[ProfileRegistryBundleRow],
+    audit_evidence: &[ProfileRegistryAuditEvidenceRow],
+    quality_summaries: &[ProfileRegistryQualitySummaryRow],
+) -> Result<String, ErrorData> {
+    #[derive(Serialize)]
+    struct DeterministicContent<'a> {
+        schema_version: u32,
+        bundle_kind: &'a str,
+        profile_id: Option<&'a str>,
+        merge_rules: &'a [String],
+        rows: &'a [ProfileRegistryBundleRow],
+        audit_evidence: &'a [ProfileRegistryAuditEvidenceRow],
+        quality_summaries: &'a [ProfileRegistryQualitySummaryRow],
+    }
+    let content = DeterministicContent {
+        schema_version: SCHEMA_VERSION,
+        bundle_kind,
+        profile_id,
+        merge_rules,
+        rows,
+        audit_evidence,
+        quality_summaries,
+    };
+    hash_json(&content)
+}
+
+fn hash_json<T: Serialize>(value: &T) -> Result<String, ErrorData> {
+    serde_json::to_vec(value)
+        .map(|bytes| sha256_hex(&bytes))
+        .map_err(|error| {
+            mcp_error(
+                error_codes::TOOL_INTERNAL_ERROR,
+                format!("profile registry hash encode failed: {error}"),
+            )
+        })
+}
+
+fn filter_duplicate_or_conflicting_rows(
+    runtime: &MutexGuard<'_, ReflexRuntime>,
+    profile_rows: &mut EncodedRows,
+    kv_rows: &mut EncodedRows,
+) -> Result<u64, ErrorData> {
+    let profile_duplicates =
+        filter_duplicate_or_conflicting_cf_rows(runtime, cf::CF_PROFILES, profile_rows)?;
+    let kv_duplicates = filter_duplicate_or_conflicting_cf_rows(runtime, cf::CF_KV, kv_rows)?;
+    Ok(profile_duplicates + kv_duplicates)
+}
+
+fn filter_duplicate_or_conflicting_cf_rows(
+    runtime: &MutexGuard<'_, ReflexRuntime>,
+    cf_name: &str,
+    rows: &mut EncodedRows,
+) -> Result<u64, ErrorData> {
+    let mut duplicates = 0;
+    let mut retained = Vec::new();
+    for (key, value) in rows.drain(..) {
+        let existing = if cf_name == cf::CF_PROFILES {
+            runtime.storage_profile_row(&key).map_err(storage_error)?
+        } else {
+            runtime.storage_kv_row(&key).map_err(storage_error)?
+        };
+        match existing {
+            Some(existing) if rows_are_duplicate(cf_name, &key, &existing, &value) => {
+                duplicates += 1;
+            }
+            Some(existing) => {
+                let existing_hash = sha256_hex(&existing);
+                let incoming_hash = sha256_hex(&value);
+                return Err(registry_error(
+                    "registry_bundle_conflict",
+                    format!(
+                        "import row {} in {cf_name} conflicts with existing local row: existing {existing_hash}, incoming {incoming_hash}",
+                        String::from_utf8_lossy(&key)
+                    ),
+                ));
+            }
+            None => retained.push((key, value)),
+        }
+    }
+    *rows = retained;
+    Ok(duplicates)
+}
+
+fn rows_are_duplicate(cf_name: &str, key: &[u8], existing: &[u8], incoming: &[u8]) -> bool {
+    if existing == incoming {
+        return true;
+    }
+    cf_name == cf::CF_PROFILES
+        && key.starts_with(CONTRIBUTION_PREFIX.as_bytes())
+        && contribution_rows_are_semantic_duplicates(existing, incoming)
+}
+
+fn contribution_rows_are_semantic_duplicates(existing: &[u8], incoming: &[u8]) -> bool {
+    let Some(mut existing) = decode_json::<Value>(existing).ok() else {
+        return false;
+    };
+    let Some(mut incoming) = decode_json::<Value>(incoming).ok() else {
+        return false;
+    };
+    if existing.get("row_kind").and_then(Value::as_str) != Some("profile_contribution_bundle")
+        || incoming.get("row_kind").and_then(Value::as_str) != Some("profile_contribution_bundle")
+    {
+        return false;
+    }
+    remove_object_field(&mut existing, "bundle_file_sha256");
+    remove_object_field(&mut incoming, "bundle_file_sha256");
+    existing == incoming
+}
+
+fn contribution_import_row(
+    bundle_path: &Path,
+    bundle: &ProfileRegistryExportBundle,
+    registry_rows_read: u64,
+) -> Result<Value, ErrorData> {
+    let bundle_file_sha256 = fs::read(bundle_path)
+        .map(|bytes| sha256_hex(&bytes))
+        .map_err(|error| {
+            mcp_error(
+                error_codes::TOOL_PARAMS_INVALID,
+                format!(
+                    "profile_registry_import could not re-read bundle {}: {error}",
+                    bundle_path.display()
+                ),
+            )
+        })?;
+    Ok(json!({
+        "schema_version": SCHEMA_VERSION,
+        "row_kind": "profile_contribution_bundle",
+        "row_id": contribution_key(
+            bundle.profile_id.as_deref().unwrap_or("unknown-profile"),
+            bundle.deterministic_bundle_sha256.as_deref(),
+        ),
+        "state": "staged",
+        "bundle_kind": bundle.bundle_kind.clone(),
+        "profile_id": bundle.profile_id.clone(),
+        "deterministic_bundle_sha256": bundle.deterministic_bundle_sha256.clone(),
+        "bundle_file_sha256": bundle_file_sha256,
+        "registry_rows_read": registry_rows_read,
+        "audit_evidence_rows": bundle.audit_evidence.len() as u64,
+        "quality_summary_rows": bundle.quality_summaries.len() as u64,
+        "registry_rows_sha256": bundle.registry_rows_sha256.clone(),
+        "audit_evidence_sha256": bundle.audit_evidence_sha256.clone(),
+        "quality_summary_sha256": bundle.quality_summary_sha256.clone(),
+        "merge_rules": bundle.merge_rules.clone(),
+        "audit_evidence": bundle.audit_evidence.clone(),
+        "quality_summaries": bundle.quality_summaries.clone(),
+        "external_sharing_allowed": false,
+    }))
+}
+
 fn validate_bundle_row(row: &ProfileRegistryBundleRow) -> Result<(), ErrorData> {
     if row.cf_name != cf::CF_PROFILES && row.cf_name != cf::CF_KV {
         return Err(registry_error(
@@ -2246,6 +2830,32 @@ fn validate_limit(limit: u32) -> Result<(), ErrorData> {
     Err(mcp_error(
         error_codes::TOOL_PARAMS_INVALID,
         format!("limit must be 1..={MAX_SEARCH_LIMIT}; got {limit}"),
+    ))
+}
+
+fn validate_contribution_audit_rows(limit: u32) -> Result<(), ErrorData> {
+    if (1..=MAX_CONTRIBUTION_AUDIT_ROWS).contains(&limit) {
+        return Ok(());
+    }
+    Err(mcp_error(
+        error_codes::TOOL_PARAMS_INVALID,
+        format!("max_audit_rows must be 1..={MAX_CONTRIBUTION_AUDIT_ROWS}; got {limit}"),
+    ))
+}
+
+fn normalized_bundle_kind(value: &str) -> Result<String, ErrorData> {
+    let normalized = value.trim().to_ascii_lowercase();
+    if matches!(
+        normalized.as_str(),
+        REGISTRY_BUNDLE_KIND | CONTRIBUTION_BUNDLE_KIND
+    ) {
+        return Ok(normalized);
+    }
+    Err(mcp_error(
+        error_codes::TOOL_PARAMS_INVALID,
+        format!(
+            "bundle_kind must be {REGISTRY_BUNDLE_KIND:?} or {CONTRIBUTION_BUNDLE_KIND:?}; got {value:?}"
+        ),
     ))
 }
 
@@ -2319,6 +2929,12 @@ fn set_object_field(value: &mut Value, field: &str, next: Value) {
     }
 }
 
+fn remove_object_field(value: &mut Value, field: &str) {
+    if let Value::Object(object) = value {
+        object.remove(field);
+    }
+}
+
 fn string_field(value: &Value, field: &str) -> Option<String> {
     value
         .get(field)
@@ -2387,6 +3003,13 @@ fn rollback_key(profile_id: &str, updated_at: &str) -> String {
     format!("{ROLLBACK_PREFIX}{profile_id}/{timestamp}")
 }
 
+fn contribution_key(profile_id: &str, digest: Option<&str>) -> String {
+    let digest = digest
+        .and_then(|value| value.strip_prefix("sha256:").or(Some(value)))
+        .unwrap_or("missing-digest");
+    format!("{CONTRIBUTION_PREFIX}{profile_id}/{digest}")
+}
+
 fn head_key(source_id: &str) -> String {
     format!("{HEAD_PREFIX}{source_id}")
 }
@@ -2405,6 +3028,11 @@ fn hex_encode(bytes: &[u8]) -> String {
     output
 }
 
+fn sha256_hex(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    format!("sha256:{}", hex_encode(&digest))
+}
+
 fn utf8_prefix(bytes: &[u8], max_chars: usize) -> String {
     String::from_utf8_lossy(bytes)
         .chars()
@@ -2416,8 +3044,35 @@ const fn default_search_limit() -> u32 {
     DEFAULT_SEARCH_LIMIT
 }
 
+fn default_bundle_kind() -> String {
+    DEFAULT_BUNDLE_KIND.to_owned()
+}
+
+const fn default_include_audit_evidence() -> bool {
+    true
+}
+
+const fn default_include_quality_summary() -> bool {
+    true
+}
+
+const fn default_contribution_audit_rows() -> u32 {
+    DEFAULT_CONTRIBUTION_AUDIT_ROWS
+}
+
 fn default_source_id() -> String {
     DEFAULT_SOURCE_ID.to_owned()
+}
+
+fn merge_rules() -> Vec<String> {
+    vec![
+        "identical_existing_rows_are_skipped".to_owned(),
+        "same_deterministic_contribution_rows_are_skipped_even_if_bundle_file_hash_differs"
+            .to_owned(),
+        "same_key_different_value_fails_closed".to_owned(),
+        "contribution_evidence_is_staged_under_profile_registry_contribution_rows".to_owned(),
+        "redacted_audit_evidence_is_not_imported_into_CF_ACTION_LOG".to_owned(),
+    ]
 }
 
 fn default_install_trust_policy() -> String {

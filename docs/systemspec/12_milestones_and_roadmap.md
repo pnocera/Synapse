@@ -155,8 +155,8 @@ expansion. Current build:
 | 42 | `profile_registry_inspect` | M5 (registry/audit) | live | reads one `CF_PROFILES`/`CF_KV` registry row |
 | 43 | `profile_registry_install` | M5 (registry/audit) | live | validates package manifest/profile TOML and writes registry rows |
 | 44 | `profile_registry_disable` | M5 (registry/audit) | live | disables or removes an installed registry row |
-| 45 | `profile_registry_export` | M5 (registry/audit) | live | exports local registry bundle |
-| 46 | `profile_registry_import` | M5 (registry/audit) | live | imports validated local registry bundle |
+| 45 | `profile_registry_export` | M5 (registry/audit) | live | exports local registry or contribution bundle |
+| 46 | `profile_registry_import` | M5 (registry/audit) | live | imports validated registry/contribution bundle |
 | 47 | `profile_registry_rollback` | M5 (registry/audit) | live | restores installed profile to a prior trusted package |
 | 48 | `audit_intelligence_query` | M5 (registry/audit) | live | summarizes profile-linked audit outcomes |
 | 49 | `audit_export_consent_set` | M5 (registry/audit) | live | writes/reads local audit export consent |

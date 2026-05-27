@@ -348,8 +348,12 @@ back before returning. The snapshot stores counts, rates, a Wilson 95% lower
 bound score for foreground-profile `ok` vs `error` outcomes, compatibility
 signals, profile-schema-version recency/mixed-version counters, source row
 range, evidence hash, and a local-only contribution policy. It never exports or
-shares data; contribution bundles require a future
-operator-approved path and the governance metadata defined in
+shares data by itself. Offline contribution bundles now use
+`profile_registry_export bundle_kind="contribution"` to package registry rows,
+redacted action-audit evidence summaries, and the quality summary under
+deterministic hashes, then `profile_registry_import` to stage the contribution
+row in a separate local registry path. Shared promotion still requires the
+operator-approved governance metadata defined in
 [`20_profile_registry_governance.md`](20_profile_registry_governance.md):
 license SPDX expression, attribution, provenance, revocation state, redaction
 policy, and operator consent id.
@@ -367,6 +371,14 @@ The M5 runtime registry surface now includes `profile_registry_search`,
 and local bundle files; they return exact row keys or bundle paths so manual
 FSV can trigger the real MCP tool and then separately read the stored RocksDB
 rows or filesystem bundle.
+
+For #464, contribution import never copies redacted shared evidence into
+`CF_ACTION_LOG`. It writes active registry rows when no local conflict exists,
+skips byte-identical duplicates plus same-deterministic-content contribution
+rows whose exact bundle-file hash differs, fails closed on
+same-key/different-value conflicts before writing, and stages contribution
+evidence under
+`CF_PROFILES/profile_registry/v1/contribution/<profile_id>/<hash>`.
 
 For #463, `storage_inspect` also returns `audit_retention_policies` for the
 operator-visible audit classes. `storage_gc_once` with

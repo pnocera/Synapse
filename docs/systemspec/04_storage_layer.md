@@ -159,6 +159,15 @@ explainability/compatibility counters, not invented success samples.
 sensitive fields, and writes local bundle files (`manifest.json`, `rows.json`,
 `redaction_report.json`) under the caller-selected output directory.
 
+`profile_registry_export bundle_kind="contribution"` writes a local JSON
+contribution bundle that combines registry rows, redacted action-audit evidence
+summaries, and profile quality summaries under deterministic hashes.
+`profile_registry_import` validates those hashes, skips byte-identical
+duplicates, fails closed on same-key/different-value conflicts, writes accepted
+registry rows to `CF_PROFILES` / `CF_KV`, and stages the contribution summary
+under `CF_PROFILES/profile_registry/v1/contribution/<profile_id>/<hash>`.
+Redacted contribution evidence is not imported into `CF_ACTION_LOG`.
+
 ## 5. Index strategy
 
 RocksDB indexes by key. Prefix-bloom filters are configured (`SliceTransform::create_fixed_prefix(8)`) on the three time-keyed CFs (`CF_EVENTS`, `CF_ACTION_LOG`, `CF_REFLEX_AUDIT`). For audit lookups by reflex id, callers use `Db::scan_cf_prefix(CF_REFLEX_AUDIT, b"<reflex_id>:")` (`crates/synapse-storage/src/lib.rs:302`), which seeks to the prefix and breaks once the iterator leaves the prefix.

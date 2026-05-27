@@ -26,8 +26,13 @@ failed trust verification writes a quarantine row instead of install rows.
 `profile_registry_disable` updates installed state; `profile_registry_rollback`
 rewrites the installed row to a prior trusted/local-validated package and writes
 a rollback audit row; `profile_registry_export` and `profile_registry_import`
-move local bundles. Manual FSV must verify them by reading `CF_PROFILES`/`CF_KV`
-with `storage_inspect` and registry-specific readback tools. The fixtures in
+move local registry bundles and offline contribution bundles. Contribution
+bundles carry deterministic component hashes, redacted action-audit evidence,
+and quality-summary rows; import stages their evidence under
+`profile_registry/v1/contribution/` instead of copying redacted shared evidence
+into `CF_ACTION_LOG`. Contribution export strips path-like registry metadata
+fields before writing the shared bundle file. Manual FSV must verify them by
+reading `CF_PROFILES` / `CF_KV`, local bundle files, and registry-specific readback tools. The fixtures in
 `docs/computergames/fixtures/profile_registry_data_model/` are synthetic row
 SoTs for this docs/data-model baseline.
 
@@ -59,6 +64,7 @@ All registry keys are UTF-8 and versioned under `profile_registry/v1/`.
 | Trust root | `CF_PROFILES` | `profile_registry/v1/trust_root/<signer_id>/<key_id>` |
 | Quarantined package | `CF_PROFILES` | `profile_registry/v1/quarantine/<package_id>/<package_version>/<manifest_digest_prefix>` |
 | Rollback event | `CF_PROFILES` | `profile_registry/v1/rollback/<profile_id>/<timestamp>` |
+| Contribution bundle | `CF_PROFILES` | `profile_registry/v1/contribution/<profile_id>/<deterministic_bundle_sha256>` |
 | Registry head pointer | `CF_KV` | `profile_registry/v1/head/<source_id>` |
 
 `profile_quality/v1/<profile_id>` remains the existing local quality snapshot
@@ -254,6 +260,32 @@ Required fields beyond the envelope:
 - `quality_score`
 - `sample_count`
 - `evidence_hash`
+
+### 5.10 Contribution bundle
+
+Stages an offline contribution bundle imported through `profile_registry_import`
+with `bundle_kind = "contribution"`. This row is a review/staging record, not a
+runtime action-audit row.
+
+Required fields beyond the envelope:
+
+- `bundle_kind`
+- `profile_id`
+- `deterministic_bundle_sha256`
+- `bundle_file_sha256`
+- `registry_rows_read`
+- `audit_evidence_rows`
+- `quality_summary_rows`
+- `registry_rows_sha256`
+- `audit_evidence_sha256`
+- `quality_summary_sha256`
+- `merge_rules`
+- `external_sharing_allowed`
+
+Contribution rows store redacted evidence summaries such as tool/status/error
+counts, foreground process name, backend, and profile schema version. They do
+not store raw file paths, window titles, PIDs, HWNDs, screenshots, clipboard
+content, audio, or raw unredacted audit rows.
 
 ## 6. Install/register transaction shape
 

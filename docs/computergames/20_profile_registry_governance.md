@@ -93,6 +93,18 @@ window titles, local file paths, account ids, secrets, or unredacted text leave
 the local machine in v1 contribution bundles. If a future feature needs a
 larger data class, it needs a new issue and manual SoT/FSV acceptance.
 
+The current local runtime path is `profile_registry_export` with
+`bundle_kind = "contribution"` followed by `profile_registry_import` into a
+separate local registry DB/path. The exported JSON carries deterministic hashes
+for registry rows, redacted audit evidence, quality summaries, and the combined
+content. Import recomputes those hashes, skips byte-identical duplicate rows,
+skips same-deterministic-content contribution rows even when the exact
+bundle-file hash differs, fails closed on same-key/different-value conflicts,
+and stages contribution evidence under
+`CF_PROFILES/profile_registry/v1/contribution/<profile_id>/...`. It does not
+import redacted shared evidence into `CF_ACTION_LOG`. Contribution export also
+strips path-like registry metadata fields from shared bundle rows.
+
 ## 5. Attribution and provenance
 
 Attribution is preserved across these flows:

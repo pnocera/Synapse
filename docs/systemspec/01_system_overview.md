@@ -176,8 +176,8 @@ All 50 live tools live in `crates/synapse-mcp/src/server.rs` (declared via `#[to
 | `profile_registry_inspect` | Inspect one registry row in `CF_PROFILES` or registry head row in `CF_KV` | `server.rs::profile_registry_inspect`, `m3/profile_registry.rs` |
 | `profile_registry_install` | Validate a local package manifest/profile TOML, enforce signed trust policy where required, quarantine failed trust packages, write registry rows, and return row keys/readbacks | `server.rs::profile_registry_install`, `m3/profile_registry.rs` |
 | `profile_registry_disable` | Mark an installed registry profile disabled or removed and read the stored row back | `server.rs::profile_registry_disable`, `m3/profile_registry.rs` |
-| `profile_registry_export` | Export local registry rows to a JSON bundle file | `server.rs::profile_registry_export`, `m3/profile_registry.rs` |
-| `profile_registry_import` | Import a validated local registry JSON bundle into `CF_PROFILES`/`CF_KV` | `server.rs::profile_registry_import`, `m3/profile_registry.rs` |
+| `profile_registry_export` | Export local registry rows or offline contribution bundles with deterministic hashes | `server.rs::profile_registry_export`, `m3/profile_registry.rs` |
+| `profile_registry_import` | Import validated registry/contribution bundles into `CF_PROFILES`/`CF_KV`, skipping duplicates and failing closed on conflicts | `server.rs::profile_registry_import`, `m3/profile_registry.rs` |
 | `profile_registry_rollback` | Restore an installed profile registry row to a prior trusted/local-validated package and write a rollback row | `server.rs::profile_registry_rollback`, `m3/profile_registry.rs` |
 | `audit_intelligence_query` | Summarize profile-linked action/event/reflex/session outcomes and quality snapshots | `server.rs::audit_intelligence_query`, `m3/profile_registry.rs` |
 | `audit_export_consent_set` | Write/read local audit-export consent state in `CF_KV/audit_export/v1/consent/<profile_id>` | `server.rs::audit_export_consent_set`, `m3/audit_export.rs` |

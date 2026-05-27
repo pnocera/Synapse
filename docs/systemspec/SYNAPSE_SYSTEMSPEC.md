@@ -262,8 +262,8 @@ All 50 live tools live in `crates/synapse-mcp/src/server.rs` (declared via `#[to
 | `profile_registry_inspect` | Inspect one registry row in `CF_PROFILES` or registry head row in `CF_KV` | `server.rs::profile_registry_inspect`, `m3/profile_registry.rs` |
 | `profile_registry_install` | Validate a local package manifest/profile TOML, enforce signed trust policy where required, quarantine failed trust packages, write registry rows, and return row keys/readbacks | `server.rs::profile_registry_install`, `m3/profile_registry.rs` |
 | `profile_registry_disable` | Mark an installed registry profile disabled or removed and read the stored row back | `server.rs::profile_registry_disable`, `m3/profile_registry.rs` |
-| `profile_registry_export` | Export local registry rows to a JSON bundle file | `server.rs::profile_registry_export`, `m3/profile_registry.rs` |
-| `profile_registry_import` | Import a validated local registry JSON bundle into `CF_PROFILES`/`CF_KV` | `server.rs::profile_registry_import`, `m3/profile_registry.rs` |
+| `profile_registry_export` | Export local registry rows or offline contribution bundles with deterministic hashes | `server.rs::profile_registry_export`, `m3/profile_registry.rs` |
+| `profile_registry_import` | Import validated registry/contribution bundles into `CF_PROFILES`/`CF_KV`, skipping duplicates and failing closed on conflicts | `server.rs::profile_registry_import`, `m3/profile_registry.rs` |
 | `profile_registry_rollback` | Restore an installed profile registry row to a prior trusted/local-validated package and write a rollback row | `server.rs::profile_registry_rollback`, `m3/profile_registry.rs` |
 | `audit_intelligence_query` | Summarize profile-linked action/event/reflex/session outcomes and quality snapshots | `server.rs::audit_intelligence_query`, `m3/profile_registry.rs` |
 | `audit_export_consent_set` | Write/read local audit-export consent state in `CF_KV/audit_export/v1/consent/<profile_id>` | `server.rs::audit_export_consent_set`, `m3/audit_export.rs` |
@@ -1388,6 +1388,15 @@ explainability/compatibility counters, not invented success samples.
 `CF_KV`, reads matching `CF_ACTION_LOG` rows for the requested profile, redacts
 sensitive fields, and writes local bundle files (`manifest.json`, `rows.json`,
 `redaction_report.json`) under the caller-selected output directory.
+
+`profile_registry_export bundle_kind="contribution"` writes a local JSON
+contribution bundle that combines registry rows, redacted action-audit evidence
+summaries, and profile quality summaries under deterministic hashes.
+`profile_registry_import` validates those hashes, skips byte-identical
+duplicates, fails closed on same-key/different-value conflicts, writes accepted
+registry rows to `CF_PROFILES` / `CF_KV`, and stages the contribution summary
+under `CF_PROFILES/profile_registry/v1/contribution/<profile_id>/<hash>`.
+Redacted contribution evidence is not imported into `CF_ACTION_LOG`.
 
 ## 5. Index strategy
 
@@ -3865,8 +3874,8 @@ expansion. Current build:
 | 42 | `profile_registry_inspect` | M5 (registry/audit) | live | reads one `CF_PROFILES`/`CF_KV` registry row |
 | 43 | `profile_registry_install` | M5 (registry/audit) | live | validates package manifest/profile TOML and writes registry rows |
 | 44 | `profile_registry_disable` | M5 (registry/audit) | live | disables or removes an installed registry row |
-| 45 | `profile_registry_export` | M5 (registry/audit) | live | exports local registry bundle |
-| 46 | `profile_registry_import` | M5 (registry/audit) | live | imports validated local registry bundle |
+| 45 | `profile_registry_export` | M5 (registry/audit) | live | exports local registry or contribution bundle |
+| 46 | `profile_registry_import` | M5 (registry/audit) | live | imports validated registry/contribution bundle |
 | 47 | `profile_registry_rollback` | M5 (registry/audit) | live | restores installed profile to a prior trusted package |
 | 48 | `audit_intelligence_query` | M5 (registry/audit) | live | summarizes profile-linked audit outcomes |
 | 49 | `audit_export_consent_set` | M5 (registry/audit) | live | writes/reads local audit export consent |
@@ -4624,33 +4633,48 @@ previous_state, state, wrote_row, row }`.
 
 **Description:** "Export local profile registry rows to a JSON bundle"
 **Permissions:** `READ_PROFILE`, `READ_STORAGE`
-**Side effects:** writes a local JSON bundle file
+**Side effects:** writes a local JSON bundle file; contribution mode includes
+redacted audit evidence and quality summaries
 
 | Parameter | Type | Required | Default | Range | Description |
 |---|---|---|---|---|---|
 | `output_path` | `String` | yes | — | — | Destination JSON bundle path |
+| `bundle_kind` | `String` | no | `registry` | `registry` / `contribution` | Export plain registry rows or an offline contribution bundle |
+| `profile_id` | `Option<String>` | no | — | — | Required for `bundle_kind=contribution` |
 | `query` | `Option<String>` | no | — | — | Same filter as search |
 | `row_kind` | `Option<String>` | no | — | — | Same filter as search |
 | `include_disabled` | `bool` | no | `false` | — | Include disabled/removed rows |
+| `include_audit_evidence` | `bool` | no | `true` | — | Include redacted action-audit summaries in contribution bundles |
+| `include_quality_summary` | `bool` | no | `true` | — | Include `profile_quality/v1/<profile_id>` summary if present |
+| `max_audit_rows` | `u32` | no | `100` | `1..=1000` | Tail rows scanned for contribution evidence |
 | `limit` | `u32` | no | `100` | `1..=1000` | Maximum exported rows |
 
-**Returns:** `ProfileRegistryExportResponse { output_path, bytes_written,
-rows_exported, rows }`.
+**Returns:** `ProfileRegistryExportResponse { output_path, bundle_kind,
+bytes_written, rows_exported, audit_evidence_rows, quality_summary_rows,
+deterministic_bundle_sha256, registry_rows_sha256, audit_evidence_sha256,
+quality_summary_sha256, rows }`.
+Contribution exports strip path-like registry metadata fields from the shared
+bundle rows before hashing and writing the JSON bundle.
 
 ## 23m. `profile_registry_import`
 
 **Description:** "Import a local profile registry JSON bundle"
 **Permissions:** `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE`
-**Side effects:** writes validated `CF_PROFILES` and `CF_KV` registry rows
+**Side effects:** writes validated `CF_PROFILES` and `CF_KV` registry rows;
+contribution imports stage a `profile_contribution_bundle` row
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `bundle_path` | `String` | yes | Local JSON bundle path |
 
-**Returns:** `ProfileRegistryImportResponse { bundle_path, rows_read,
-cf_profile_rows_written, cf_kv_rows_written, rows }`.
+**Returns:** `ProfileRegistryImportResponse { bundle_path, bundle_kind,
+rows_read, cf_profile_rows_written, cf_kv_rows_written, duplicate_rows,
+contribution_row_key, deterministic_bundle_sha256, rows }`.
+Duplicate rows are byte-identical rows, plus contribution rows with the same
+deterministic content even if the exact bundle-file hash differs.
 **Errors:** `TOOL_PARAMS_INVALID` for malformed bundle schema, unsupported CF,
-non-registry key, invalid `CF_KV` namespace, or non-object row values.
+non-registry key, invalid `CF_KV` namespace, non-object row values, hash
+mismatch, or same-key/different-value local conflicts.
 
 ## 23n. `profile_registry_rollback`
 

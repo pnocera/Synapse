@@ -77,8 +77,8 @@ future `tools/list` snapshots in #447/#448.
 | 42 | `profile_registry_inspect` | read | reads one registry row from `CF_PROFILES` or `CF_KV` |
 | 43 | `profile_registry_install` | write/read | validates a package manifest and writes registry rows |
 | 44 | `profile_registry_disable` | write/read | marks an installed profile disabled or removed |
-| 45 | `profile_registry_export` | read/write | writes a local JSON registry bundle file |
-| 46 | `profile_registry_import` | write/read | validates and imports a local JSON registry bundle |
+| 45 | `profile_registry_export` | read/write | writes local registry or contribution bundle JSON with deterministic hashes |
+| 46 | `profile_registry_import` | write/read | validates and imports registry/contribution bundles with duplicate/conflict handling |
 | 47 | `profile_registry_rollback` | write/read | rewrites an installed row to a prior trusted package |
 | 48 | `audit_intelligence_query` | read | summarizes profile-linked audit outcomes |
 | 49 | `audit_export_consent_set` | write/read | writes local consent state to `CF_KV` and reads it back |
@@ -1193,7 +1193,9 @@ Returns previous/current state, the row key, and the decoded stored row.
 ### 3.28l `profile_registry_export`
 
 Exports local registry rows from `CF_PROFILES` and `CF_KV` into a JSON bundle on
-disk. The bundle is a local file artifact and is not a consent/share path.
+disk. With `bundle_kind = "contribution"`, the same tool also includes
+deterministic component hashes, redacted action-audit evidence summaries, and
+the profile quality summary for a specific `profile_id`.
 
 ```json
 {
@@ -1204,21 +1206,32 @@ disk. The bundle is a local file artifact and is not a consent/share path.
     "required": ["output_path"],
     "properties": {
       "output_path": {"type": "string"},
+      "bundle_kind": {"type": "string", "default": "registry"},
+      "profile_id": {"type": "string"},
       "query": {"type": "string"},
       "row_kind": {"type": "string"},
       "include_disabled": {"type": "boolean", "default": false},
+      "include_audit_evidence": {"type": "boolean", "default": true},
+      "include_quality_summary": {"type": "boolean", "default": true},
+      "max_audit_rows": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100},
       "limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 100}
     }
   }
 }
 ```
 
-Returns output path, bytes written, exported row count, and row summaries.
+Returns output path, bundle kind, bytes written, exported row count, component
+hashes, redacted evidence counts, and row summaries.
 
 ### 3.28m `profile_registry_import`
 
 Imports a local JSON registry bundle after validating schema version, supported
-CF names, `profile_registry/v1/` key namespace, and object-valued rows.
+CF names, `profile_registry/v1/` key namespace, object-valued rows, and any
+deterministic bundle hashes present. Byte-identical rows are skipped on
+duplicate import; contribution rows with the same deterministic content are
+also skipped even when the exact bundle-file hash differs. Same-key/different
+value conflicts fail closed before writes. Imported contribution evidence is
+staged under `profile_registry/v1/contribution/`.
 
 ```json
 {
@@ -1232,8 +1245,8 @@ CF names, `profile_registry/v1/` key namespace, and object-valued rows.
 }
 ```
 
-Returns read row count, per-CF write counts, and summaries for the imported
-rows.
+Returns bundle kind, read row count, per-CF write counts, duplicate count,
+optional contribution row key, deterministic bundle hash, and row summaries.
 
 ### 3.28n `profile_registry_rollback`
 

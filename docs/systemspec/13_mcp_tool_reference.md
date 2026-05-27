@@ -581,33 +581,48 @@ previous_state, state, wrote_row, row }`.
 
 **Description:** "Export local profile registry rows to a JSON bundle"
 **Permissions:** `READ_PROFILE`, `READ_STORAGE`
-**Side effects:** writes a local JSON bundle file
+**Side effects:** writes a local JSON bundle file; contribution mode includes
+redacted audit evidence and quality summaries
 
 | Parameter | Type | Required | Default | Range | Description |
 |---|---|---|---|---|---|
 | `output_path` | `String` | yes | — | — | Destination JSON bundle path |
+| `bundle_kind` | `String` | no | `registry` | `registry` / `contribution` | Export plain registry rows or an offline contribution bundle |
+| `profile_id` | `Option<String>` | no | — | — | Required for `bundle_kind=contribution` |
 | `query` | `Option<String>` | no | — | — | Same filter as search |
 | `row_kind` | `Option<String>` | no | — | — | Same filter as search |
 | `include_disabled` | `bool` | no | `false` | — | Include disabled/removed rows |
+| `include_audit_evidence` | `bool` | no | `true` | — | Include redacted action-audit summaries in contribution bundles |
+| `include_quality_summary` | `bool` | no | `true` | — | Include `profile_quality/v1/<profile_id>` summary if present |
+| `max_audit_rows` | `u32` | no | `100` | `1..=1000` | Tail rows scanned for contribution evidence |
 | `limit` | `u32` | no | `100` | `1..=1000` | Maximum exported rows |
 
-**Returns:** `ProfileRegistryExportResponse { output_path, bytes_written,
-rows_exported, rows }`.
+**Returns:** `ProfileRegistryExportResponse { output_path, bundle_kind,
+bytes_written, rows_exported, audit_evidence_rows, quality_summary_rows,
+deterministic_bundle_sha256, registry_rows_sha256, audit_evidence_sha256,
+quality_summary_sha256, rows }`.
+Contribution exports strip path-like registry metadata fields from the shared
+bundle rows before hashing and writing the JSON bundle.
 
 ## 23m. `profile_registry_import`
 
 **Description:** "Import a local profile registry JSON bundle"
 **Permissions:** `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE`
-**Side effects:** writes validated `CF_PROFILES` and `CF_KV` registry rows
+**Side effects:** writes validated `CF_PROFILES` and `CF_KV` registry rows;
+contribution imports stage a `profile_contribution_bundle` row
 
 | Parameter | Type | Required | Description |
 |---|---|---|---|
 | `bundle_path` | `String` | yes | Local JSON bundle path |
 
-**Returns:** `ProfileRegistryImportResponse { bundle_path, rows_read,
-cf_profile_rows_written, cf_kv_rows_written, rows }`.
+**Returns:** `ProfileRegistryImportResponse { bundle_path, bundle_kind,
+rows_read, cf_profile_rows_written, cf_kv_rows_written, duplicate_rows,
+contribution_row_key, deterministic_bundle_sha256, rows }`.
+Duplicate rows are byte-identical rows, plus contribution rows with the same
+deterministic content even if the exact bundle-file hash differs.
 **Errors:** `TOOL_PARAMS_INVALID` for malformed bundle schema, unsupported CF,
-non-registry key, invalid `CF_KV` namespace, or non-object row values.
+non-registry key, invalid `CF_KV` namespace, non-object row values, hash
+mismatch, or same-key/different-value local conflicts.
 
 ## 23n. `profile_registry_rollback`
 
