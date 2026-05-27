@@ -4,7 +4,7 @@ use anyhow::{Context, ensure};
 use serde_json::{Value, json};
 use synapse_test_utils::stdio_mcp_client::StdioMcpClient;
 
-const EXPECTED_TOOLS: [&str; 38] = [
+const EXPECTED_TOOLS: [&str; 39] = [
     "act_aim",
     "act_click",
     "act_clipboard",
@@ -27,6 +27,7 @@ const EXPECTED_TOOLS: [&str; 38] = [
     "profile_registry_import",
     "profile_registry_inspect",
     "profile_registry_install",
+    "profile_registry_rollback",
     "profile_registry_search",
     "read_text",
     "reflex_cancel",
@@ -243,6 +244,13 @@ fn read_schema_defaults(readbacks: &mut Vec<Value>, tools: &[Value]) -> anyhow::
     read_default(
         readbacks,
         tools,
+        "profile_registry_install",
+        "inputSchema.properties.trust_policy.default",
+        &json!("local_first"),
+    )?;
+    read_default(
+        readbacks,
+        tools,
         "profile_registry_disable",
         "inputSchema.properties.state.default",
         &json!("disabled"),
@@ -320,6 +328,7 @@ fn read_required_fields(readbacks: &mut Vec<Value>, tools: &[Value]) -> anyhow::
     read_required(readbacks, tools, "profile_registry_disable", "profile_id")?;
     read_required(readbacks, tools, "profile_registry_export", "output_path")?;
     read_required(readbacks, tools, "profile_registry_import", "bundle_path")?;
+    read_required(readbacks, tools, "profile_registry_rollback", "profile_id")?;
     read_required(readbacks, tools, "audit_intelligence_query", "profile_id")?;
     read_required(readbacks, tools, "storage_put_probe_rows", "cf_name")?;
     read_required(readbacks, tools, "storage_put_probe_rows", "key_prefix")?;

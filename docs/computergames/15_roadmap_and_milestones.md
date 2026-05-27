@@ -209,13 +209,15 @@ registry tools land.
 The profile package manifest baseline is
 [`23_profile_package_manifest.md`](23_profile_package_manifest.md), which
 defines package metadata, provenance, compatibility targets, permissions,
-hashes, and fail-closed parser validation before install/registry tools land.
+hashes, signed trust metadata, quarantine-only trust failures, rollback
+verification, and fail-closed parser validation.
 
 Physical sources of truth for this track are registry index/package files,
 profile TOML files, RocksDB rows in `CF_ACTION_LOG`, `CF_REFLEX_AUDIT`,
 `CF_EVENTS`, `CF_OBSERVATIONS`, `CF_SESSIONS`, and `CF_PROFILES`, consent and
-export bundles, and MCP readbacks (`profile_list`, `profile_quality_refresh`,
-`storage_inspect`, and future registry/audit tools). Manual FSV must trigger
+export bundles, trust-root/quarantine/rollback rows, and MCP readbacks
+(`profile_list`, `profile_quality_refresh`, `storage_inspect`, and registry/
+audit tools). Manual FSV must trigger
 real Synapse runtime surfaces and then read those physical stores directly.
 GitHub Actions/CI, scripts, tests, and benchmark harnesses are supporting
 evidence only.

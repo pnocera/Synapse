@@ -2,8 +2,8 @@ use std::{fs, path::PathBuf};
 
 use synapse_core::{Backend, ProfileUseScope};
 use synapse_profiles::{
-    ProfileError, package_manifest_digest, parse_package_manifest_bytes_with_digest,
-    parse_package_manifest_file,
+    ProfileError, package_manifest_digest, package_signature_payload_digest,
+    parse_package_manifest_bytes_with_digest, parse_package_manifest_file,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -36,6 +36,25 @@ fn package_manifest_accepts_happy_fixture() -> TestResult {
         manifest.package_id,
         manifest.profile_id,
         manifest.targets[0].target_id
+    );
+    Ok(())
+}
+
+#[test]
+fn package_manifest_accepts_signed_fixture_metadata() -> TestResult {
+    let path = fixture("signed_good_package_manifest.toml");
+    let manifest = parse_package_manifest_file(&path)?;
+
+    assert_eq!(manifest.trust.policy, "signed_required");
+    assert_eq!(
+        manifest.trust.required_signers,
+        vec!["synapse.fixture.signer".to_owned()]
+    );
+    assert_eq!(manifest.signatures.len(), 1);
+    assert_eq!(manifest.signatures[0].algorithm, "ed25519");
+    assert_eq!(
+        package_signature_payload_digest(&manifest),
+        "sha256:a39fc832f873ed6ae62ee962f52b6bed705c8683beda44f65384dca85409df3e"
     );
     Ok(())
 }

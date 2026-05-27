@@ -7,7 +7,7 @@ use synapse_core::{ProfileUseScope, SCHEMA_VERSION};
 use super::types::{
     DisplayAssumptions, PackageAssumptions, PackageAuthor, PackageChangelogEntry,
     PackageDependency, PackageFiles, PackageHashes, PackageInput, PackagePermissions,
-    PackageSource, PackageTarget, ProfilePackageManifest,
+    PackageSignature, PackageSource, PackageTarget, PackageTrust, ProfilePackageManifest,
 };
 use crate::error::ProfileError;
 
@@ -46,6 +46,15 @@ impl ProfilePackageManifest {
         validate_changelog(path, &self.changelog)?;
         self.hashes.validate(path)?;
         self.files.validate(path)?;
+        self.trust.validate(path)?;
+        validate_signatures(path, &self.signatures)?;
+        if self.trust.policy == "signed_required" && self.signatures.is_empty() {
+            return Err(ProfileError::Parse {
+                path: path.to_path_buf(),
+                message: "trust.policy signed_required requires at least one package signature"
+                    .to_owned(),
+            });
+        }
         Ok(())
     }
 }
@@ -207,6 +216,57 @@ impl PackageFiles {
         }
         Ok(())
     }
+}
+
+impl PackageTrust {
+    fn validate(&self, path: &Path) -> Result<(), ProfileError> {
+        require_in_set(
+            path,
+            "trust.policy",
+            &self.policy,
+            &["local_unsigned_allowed", "signed_required"],
+        )?;
+        let mut seen = HashSet::new();
+        for signer in &self.required_signers {
+            validate_package_id(path, "trust.required_signers", signer)?;
+            if !seen.insert(signer) {
+                return Err(ProfileError::Parse {
+                    path: path.to_path_buf(),
+                    message: format!("duplicate trust.required_signers entry {signer:?}"),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
+fn validate_signatures(path: &Path, signatures: &[PackageSignature]) -> Result<(), ProfileError> {
+    let mut seen = HashSet::new();
+    for signature in signatures {
+        validate_package_id(path, "signature.signer_id", &signature.signer_id)?;
+        validate_sha256_digest(path, "signature.key_id", &signature.key_id)?;
+        require_in_set(
+            path,
+            "signature.algorithm",
+            &signature.algorithm,
+            &["ed25519"],
+        )?;
+        validate_ed25519_signature(path, "signature.signature", &signature.signature)?;
+        let unique = format!(
+            "{}:{}:{}",
+            signature.signer_id, signature.key_id, signature.algorithm
+        );
+        if !seen.insert(unique) {
+            return Err(ProfileError::Parse {
+                path: path.to_path_buf(),
+                message: format!(
+                    "duplicate package signature for signer {} and key {}",
+                    signature.signer_id, signature.key_id
+                ),
+            });
+        }
+    }
+    Ok(())
 }
 
 fn validate_targets(path: &Path, targets: &[PackageTarget]) -> Result<(), ProfileError> {
@@ -392,6 +452,22 @@ pub fn validate_sha256_digest(path: &Path, field: &str, value: &str) -> Result<(
         return Err(ProfileError::Parse {
             path: path.to_path_buf(),
             message: format!("{field} must contain a 64-hex SHA-256 digest"),
+        });
+    }
+    Ok(())
+}
+
+fn validate_ed25519_signature(path: &Path, field: &str, value: &str) -> Result<(), ProfileError> {
+    let Some(hex) = value.strip_prefix("ed25519:") else {
+        return Err(ProfileError::Parse {
+            path: path.to_path_buf(),
+            message: format!("{field} must start with ed25519:"),
+        });
+    };
+    if hex.len() != 128 || !hex.chars().all(|item| item.is_ascii_hexdigit()) {
+        return Err(ProfileError::Parse {
+            path: path.to_path_buf(),
+            message: format!("{field} must contain a 128-hex Ed25519 signature"),
         });
     }
     Ok(())

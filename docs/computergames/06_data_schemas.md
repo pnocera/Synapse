@@ -1063,7 +1063,16 @@ PROFILE_KEYMAP_INVALID
 PROFILE_HUD_REGION_INVALID
 CAPTURE_TARGET_INVALID
 PERCEPTION_MODE_INVALID
+PROFILE_TRUST_VERIFICATION_FAILED
+PROFILE_ROLLBACK_UNAVAILABLE
 ```
+
+M5 profile-registry trust/rollback codes:
+
+| Code | Trigger path |
+|---|---|
+| `PROFILE_TRUST_VERIFICATION_FAILED` | `profile_registry_install` rejects a package because signed trust is required and the signature is missing, invalid, or not rooted in a trusted signer. The failed package is written only to a quarantine row. |
+| `PROFILE_ROLLBACK_UNAVAILABLE` | `profile_registry_rollback` cannot find or validate a prior trusted/local-validated package target, so the installed row is left unchanged. |
 
 ### 8.5 MCP & session
 

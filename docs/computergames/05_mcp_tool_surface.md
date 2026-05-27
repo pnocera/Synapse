@@ -6,7 +6,7 @@
    surface to 33 live MCP tools by adding `act_combo`, `act_run_shell`, and
    `act_launch` per the M4 phase plan. M5 adds the local registry/audit scoring
    tool `profile_quality_refresh` plus the #458 local registry/intelligence
-   tool set, bringing the live surface to 41. Any further agent-facing tools
+   tool set, bringing the live surface to 42. Any further agent-facing tools
    require an ADR-approved cap change. Overlapping tools merge. Profile and
    parameter knobs are the escape hatches.
 2. **One tool, one verb.** No `do_everything(action_kind, ...)` mega-tools.
@@ -17,7 +17,7 @@
 7. **Stable identifiers.** `element_id`, `entity_id`, `track_id`, `reflex_id`, `session_id` are returned by tools and accepted unchanged by subsequent calls. Agent never invents these.
 
 The first 30 tools below are the live M3 baseline. M4 adds rows 31-33, and M5
-adds rows 34-41 for local profile-registry/audit quality scoring, registry row
+adds rows 34-42 for local profile-registry/audit quality scoring, registry row
 operations, import/export, and audit intelligence.
 Schemas use abbreviated JSON Schema syntax; canonical schema is exported by the
 daemon through standard MCP `tools/list`. Until the M4 tools are implemented,
@@ -70,9 +70,10 @@ future `tools/list` snapshots in #447/#448.
 | 38 | `profile_registry_disable` | write/read | marks an installed profile disabled or removed |
 | 39 | `profile_registry_export` | read/write | writes a local JSON registry bundle file |
 | 40 | `profile_registry_import` | write/read | validates and imports a local JSON registry bundle |
-| 41 | `audit_intelligence_query` | read | summarizes profile-linked audit outcomes |
+| 41 | `profile_registry_rollback` | write/read | rewrites an installed row to a prior trusted package |
+| 42 | `audit_intelligence_query` | read | summarizes profile-linked audit outcomes |
 
-M3 live count: 30 tools. M4 live count: 33 tools. Current M5 live count: 41
+M3 live count: 30 tools. M4 live count: 33 tools. Current M5 live count: 42
 tools.
 
 Deferred ideas from earlier drafts (`describe` and `read_hud`) are still not
@@ -975,10 +976,13 @@ plus the same row summary used by search.
 
 ### 3.28d `profile_registry_install`
 
-Validates a local profile package manifest, parses the referenced profile TOML,
-checks manifest/profile id agreement, writes local registry rows to
-`CF_PROFILES`, writes the source head pointer to `CF_KV`, and reads the written
-rows back before returning.
+Validates a local profile package manifest, verifies signed package trust when
+policy requires it, parses the referenced profile TOML, checks
+manifest/profile id agreement, writes local registry rows to `CF_PROFILES`,
+writes the source head pointer to `CF_KV`, and reads the written rows back
+before returning. If signed trust verification fails, the tool writes a
+`profile_package_quarantine` row and returns `PROFILE_TRUST_VERIFICATION_FAILED`
+without writing package/profile/installed/head rows.
 
 ```json
 {
@@ -990,7 +994,8 @@ rows back before returning.
     "properties": {
       "manifest_path": {"type": "string"},
       "expected_manifest_digest": {"type": "string"},
-      "source_id": {"type": "string", "default": "registry.local"}
+      "source_id": {"type": "string", "default": "registry.local"},
+      "trust_policy": {"enum": ["local_first", "signed_required"], "default": "local_first"}
     }
   }
 }
@@ -999,7 +1004,8 @@ rows back before returning.
 Duplicate package id/version with the same manifest digest is idempotent.
 Duplicate id/version with a different digest fails closed with no companion-row
 rewrite. The response returns `manifest_digest`, profile TOML path, `wrote_rows`,
-`idempotent`, `cf_profile_row_keys`, `cf_kv_row_keys`, and row summaries.
+`idempotent`, trust/signature status, signer/trust-root readback, row keys, and
+row summaries.
 
 ### 3.28e `profile_registry_disable`
 
@@ -1069,7 +1075,38 @@ CF names, `profile_registry/v1/` key namespace, and object-valued rows.
 Returns read row count, per-CF write counts, and summaries for the imported
 rows.
 
-### 3.28h `audit_intelligence_query`
+### 3.28h `profile_registry_rollback`
+
+Rewrites `profile_registry/v1/installed/<profile_id>` to a prior active package
+whose package row is `trusted` or `local_validated`, and writes a
+`profile_registry_rollback` row under `profile_registry/v1/rollback/`.
+
+```json
+{
+  "name": "profile_registry_rollback",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["profile_id"],
+    "properties": {
+      "profile_id": {"type": "string"},
+      "target_package_id": {"type": "string"},
+      "target_package_version": {"type": "string"},
+      "reason": {"type": "string"}
+    }
+  }
+}
+```
+
+If no target is supplied, the tool selects the newest prior known-good package
+for the profile. It fails closed with `PROFILE_ROLLBACK_UNAVAILABLE` if no
+known-good target exists, the target is current, revoked, quarantined, or not
+trusted/local-validated. The response includes the previous and rolled-back
+package id/version plus readback of both the installed and rollback rows. The
+installed row readback must carry the rolled-back package's trust/signature
+metadata, not stale metadata from the package being replaced.
+
+### 3.28i `audit_intelligence_query`
 
 Summarizes profile-linked outcomes across the audit SoTs now populated by
 profile activation, action, and reflex paths.

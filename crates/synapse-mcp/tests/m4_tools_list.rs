@@ -4,7 +4,7 @@ use anyhow::{Context, ensure};
 use serde_json::{Value, json};
 use synapse_test_utils::stdio_mcp_client::StdioMcpClient;
 
-const EXPECTED_TOOLS: [&str; 41] = [
+const EXPECTED_TOOLS: [&str; 42] = [
     "act_aim",
     "act_click",
     "act_clipboard",
@@ -30,6 +30,7 @@ const EXPECTED_TOOLS: [&str; 41] = [
     "profile_registry_import",
     "profile_registry_inspect",
     "profile_registry_install",
+    "profile_registry_rollback",
     "profile_registry_search",
     "read_text",
     "reflex_cancel",
@@ -64,7 +65,7 @@ async fn m4_tools_list_snapshot_defaults_and_closed_schemas() -> anyhow::Result<
         .map(str::to_owned)
         .collect::<Vec<_>>();
     assert_eq!(names, expected);
-    assert_eq!(names.len(), 41);
+    assert_eq!(names.len(), 42);
     assert_no_duplicate_names(&names)?;
 
     assert_schema_roots_closed(tools)?;

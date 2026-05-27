@@ -57,9 +57,10 @@ use crate::{
             ProfileRegistryImportParams, ProfileRegistryImportResponse,
             ProfileRegistryInspectParams, ProfileRegistryInspectResponse,
             ProfileRegistryInstallParams, ProfileRegistryInstallResponse,
+            ProfileRegistryRollbackParams, ProfileRegistryRollbackResponse,
             ProfileRegistrySearchParams, ProfileRegistrySearchResponse, disable_registry_profile,
             export_registry, import_registry, inspect_registry, install_registry_package,
-            query_audit_intelligence, search_registry,
+            query_audit_intelligence, rollback_registry_profile, search_registry,
         },
         reflex::{
             ReflexCancelParams, ReflexCancelResponse, ReflexHistoryParams, ReflexHistoryResponse,

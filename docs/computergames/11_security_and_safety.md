@@ -10,6 +10,7 @@ Synapse runs locally with operator authority, exposes a powerful surface to its 
 | **Compromised MCP transport** | Network attacker (HTTP mode) sends crafted tool calls |
 | **Side-channel exposure** | Screen secrets leak into logs / replay / telemetry |
 | **Local privilege misuse** | Lower-privilege process uses Synapse to act with operator's full UI authority |
+| **Profile package supply chain** | Malicious or stale profile package changes action policy, supported-use metadata, or registry audit interpretation |
 
 ---
 
@@ -295,6 +296,17 @@ Releases are signed. The installer verifies the signature against a project publ
 `synapse-mcp --version` shows build commit hash + signature status. Mismatch (modified binary) prints startup warning but does not refuse to run.
 
 ONNX models follow the same model: each release pins a sha256 manifest; downloads verified against it.
+
+Profile registry packages are also an execution-control supply-chain surface.
+`profile_registry_install` validates manifest and profile hashes, then enforces
+the package/operator trust policy before activation. When signed trust is
+required, Ed25519 signatures are verified against a local trust root and the
+signature payload digest is persisted in the registry row. Missing signatures,
+bad signatures, unknown signers, stale trust state, or revoked packages fail
+closed into `profile_package_quarantine` rows and do not rewrite installed/head
+rows. `profile_registry_rollback` restores only prior package rows whose stored
+trust status is `trusted` or `local_validated`; rollback attempts without a
+known-good target return `PROFILE_ROLLBACK_UNAVAILABLE`.
 
 ---
 

@@ -36,11 +36,11 @@ Comprehensive technical reference for the Synapse MCP server, produced by readin
 
 ## Read order
 
-1. [01_system_overview.md](#file-01) — architecture map, tech stack, 41-tool inventory, error hierarchy
+1. [01_system_overview.md](#file-01) — architecture map, tech stack, 42-tool inventory, error hierarchy
 2. [02_source_code_map.md](#file-02) — file tree with per-file descriptions, dep graph, entry-point traces
 3. [03_configuration.md](#file-03) — CLI flags, env vars, validation, all numeric defaults
 4. [04_storage_layer.md](#file-04) — RocksDB schema (11 CFs), schema sentinel, TTL filter, GC, disk pressure
-5. [05_core_types_and_errors.md](#file-05) — `synapse-core` wire types + 87 error codes
+5. [05_core_types_and_errors.md](#file-05) — `synapse-core` wire types + 97 error codes
 6. [06_mcp_service_and_transports.md](#file-06) — `SynapseService`, stdio + HTTP routers, Bearer/Origin/Session middleware, SSE bridge
 7. [07_reflex_runtime.md](#file-07) — EventBus, scheduler, the 5 reflex kinds, audit persistence
 8. [08_action_subsystem.md](#file-08) — emitter actor, backends, rate limits, hotkey, curves/dynamics
@@ -174,6 +174,7 @@ The repository operates under the doctrine in `AGENTS.md`: manual Full State Ver
 | CRC | `crc16` | `0.4.0` |
 | ONNX Runtime | `ort` (optional via `synapse-models` features `ort`/`cuda`/`directml`) | `2.0.0-rc.12` |
 | Hashing / constant-time | `sha2`, `subtle` | `0.11.0`, `2.6.1` |
+| Signatures | `ed25519-dalek` | `2.2.0` |
 | CLI | `clap` (derive + env) | `4.6.1` |
 | Time | `chrono` (serde) | `0.4.44` |
 | IDs | `uuid` (v4, v7, serde) | `1.23.1` |
@@ -191,7 +192,7 @@ Release profile: `opt-level=3`, `lto="thin"`, `codegen-units=16`, `panic="abort"
 
 ## 4. Public MCP tool surface (live)
 
-All 41 live tools live in `crates/synapse-mcp/src/server.rs` (declared via `#[tool_router]`). Grouped by milestone:
+All 42 live tools live in `crates/synapse-mcp/src/server.rs` (declared via `#[tool_router]`). Grouped by milestone:
 
 ### 4.1 M1 — perception (6 tools)
 
@@ -246,17 +247,18 @@ All 41 live tools live in `crates/synapse-mcp/src/server.rs` (declared via `#[to
 | `act_run_shell` | Run an allowlisted local shell command | `server.rs::act_run_shell`, `m4.rs` |
 | `act_launch` | Launch an allowlisted local process and optionally wait for a window | `server.rs::act_launch`, `m4.rs` |
 
-### 4.5 M5 — profile registry/audit loop (8 tools)
+### 4.5 M5 — profile registry/audit loop (9 tools)
 
 | Tool | Description | Source |
 |---|---|---|
 | `profile_quality_refresh` | Refresh a local profile-quality snapshot from real `CF_ACTION_LOG` rows and persist/read it in `CF_PROFILES` | `server.rs::profile_quality_refresh`, `m3/profile_quality.rs` |
 | `profile_registry_search` | Search local registry rows under `profile_registry/v1/` in `CF_PROFILES` | `server.rs::profile_registry_search`, `m3/profile_registry.rs` |
 | `profile_registry_inspect` | Inspect one registry row in `CF_PROFILES` or registry head row in `CF_KV` | `server.rs::profile_registry_inspect`, `m3/profile_registry.rs` |
-| `profile_registry_install` | Validate a local package manifest/profile TOML, write registry rows, and return row keys/readbacks | `server.rs::profile_registry_install`, `m3/profile_registry.rs` |
+| `profile_registry_install` | Validate a local package manifest/profile TOML, enforce signed trust policy where required, quarantine failed trust packages, write registry rows, and return row keys/readbacks | `server.rs::profile_registry_install`, `m3/profile_registry.rs` |
 | `profile_registry_disable` | Mark an installed registry profile disabled or removed and read the stored row back | `server.rs::profile_registry_disable`, `m3/profile_registry.rs` |
 | `profile_registry_export` | Export local registry rows to a JSON bundle file | `server.rs::profile_registry_export`, `m3/profile_registry.rs` |
 | `profile_registry_import` | Import a validated local registry JSON bundle into `CF_PROFILES`/`CF_KV` | `server.rs::profile_registry_import`, `m3/profile_registry.rs` |
+| `profile_registry_rollback` | Restore an installed profile registry row to a prior trusted/local-validated package and write a rollback row | `server.rs::profile_registry_rollback`, `m3/profile_registry.rs` |
 | `audit_intelligence_query` | Summarize profile-linked action/event/reflex/session outcomes and quality snapshots | `server.rs::audit_intelligence_query`, `m3/profile_registry.rs` |
 
 The profile-registry / audit-data network effect is the P1 strategic moat
@@ -275,6 +277,12 @@ Manual FSV must trigger the
 real runtime path and then read these physical stores directly; GitHub
 Actions/CI and automated checks never substitute for FSV.
 
+Registry package installs are treated as an execution-control supply-chain
+surface. Signed-required packages are verified against local trust roots before
+activation; failed signatures, missing signatures, and unknown signers fail
+closed into quarantine rows. Rollbacks restore only prior package rows whose
+stored trust state is `trusted` or `local_validated`.
+
 M5 profile-linked audit linkage starts at `profile_activate`: the daemon writes
 `CF_SESSIONS` and `CF_EVENTS` rows with `StoredAuditContext`, and action/reflex
 paths propagate that same context into `CF_ACTION_LOG` and
@@ -285,7 +293,7 @@ Full parameter/return tables: [13_mcp_tool_reference.md](#file-13).
 
 ### 4.6 PRD-planned tools NOT live in this build
 
-`docs/computergames/05_mcp_tool_surface.md` defines the tool surface. Synapse's live build now has the M3 baseline, four operator storage diagnostics, M4 `act_combo`/`act_run_shell`/`act_launch`, and the M5 local registry/audit tools (`profile_quality_refresh`, `profile_registry_*`, and `audit_intelligence_query`). The following PRD-planned entries remain unimplemented: `describe` (M5 VLM) and `read_hud` (M4 HUD pipeline).
+`docs/computergames/05_mcp_tool_surface.md` defines the tool surface. Synapse's live build now has the M3 baseline, four operator storage diagnostics, M4 `act_combo`/`act_run_shell`/`act_launch`, and the M5 local registry/audit tools (`profile_quality_refresh`, `profile_registry_*` including rollback, and `audit_intelligence_query`). The following PRD-planned entries remain unimplemented: `describe` (M5 VLM) and `read_hud` (M4 HUD pipeline).
 
 ## 5. Entry points
 
@@ -345,7 +353,7 @@ All errors carry `SCREAMING_SNAKE_CASE` codes defined as `pub const &str` in `cr
 | Perception (PRD 8.1) | `OBSERVE_NO_PERCEPTION_AVAILABLE`, `OBSERVE_INTERNAL`, `CAPTURE_GRAPHICS_API_UNSUPPORTED`, `CAPTURE_TARGET_LOST`, `CAPTURE_NO_DIRTY_REGIONS`, `A11Y_NOT_AVAILABLE`, `A11Y_ELEMENT_STALE`, `A11Y_NO_FOREGROUND`, `A11Y_CDP_UNREACHABLE`, `DETECTION_MODEL_NOT_LOADED`, `DETECTION_MODEL_INFER_FAILED`, `DETECTION_NO_FRAME`, `OCR_NO_TEXT`, `OCR_BACKEND_UNAVAILABLE`, `HUD_NO_ACTIVE_PROFILE`, `HUD_FIELD_NOT_DEFINED`, `HUD_EXTRACTION_FAILED`, `AUDIO_DEVICE_LOST`, `AUDIO_LOOPBACK_INIT_FAILED`, `AUDIO_STT_MODEL_NOT_LOADED` | `error_codes.rs` lines 2–21 |
 | Action (PRD 8.2) | `ACTION_QUEUE_FULL`, `ACTION_RATE_LIMITED`, `ACTION_BACKEND_UNAVAILABLE`, `ACTION_TARGET_INVALID`, `ACTION_HOLD_EXCEEDED_MAX`, `ACTION_HID_PORT_DISCONNECTED`, `ACTION_VIGEM_NOT_INSTALLED`, `ACTION_VIGEM_PLUGIN_FAILED`, `ACTION_ELEMENT_NOT_RESOLVED`, `ACTION_FOREGROUND_LOST`, `ACTION_UNSUPPORTED_KEY`, `ACTION_DRAG_DISTANCE_EXCEEDS_LIMIT`, `STUCK_KEY_AUTO_RELEASED`, `SAFETY_RELEASE_ALL_FIRED`, `SAFETY_OPERATOR_HOTKEY_FIRED` | lines 24–38 |
 | Reflex (PRD 8.3) | `REFLEX_CAP_REACHED`, `REFLEX_KIND_INVALID`, `REFLEX_PARAMS_INVALID`, `REFLEX_TARGET_INVALID`, `REFLEX_FILTER_INVALID`, `REFLEX_PRIORITY_INVALID`, `REFLEX_TICK_LATE`, `REFLEX_TRACK_LOST`, `REFLEX_STARVED`, `REFLEX_DISABLED_BY_OPERATOR`, `REFLEX_LIFETIME_EXPIRED`, `REFLEX_RECURSION_LIMIT`, `REFLEX_ACTION_PERMISSION_DENIED` | lines 41–53 |
-| Profile / config (PRD 8.4) | `PROFILE_NOT_FOUND`, `PROFILE_PARSE_ERROR`, `PROFILE_VERSION_INCOMPATIBLE`, `PROFILE_KEYMAP_INVALID`, `PROFILE_HUD_REGION_INVALID`, `CAPTURE_TARGET_INVALID`, `PERCEPTION_MODE_INVALID` | lines 56–62 |
+| Profile / config (PRD 8.4) | `PROFILE_NOT_FOUND`, `PROFILE_PARSE_ERROR`, `PROFILE_VERSION_INCOMPATIBLE`, `PROFILE_KEYMAP_INVALID`, `PROFILE_HUD_REGION_INVALID`, `CAPTURE_TARGET_INVALID`, `PERCEPTION_MODE_INVALID`, `PROFILE_TRUST_VERIFICATION_FAILED`, `PROFILE_ROLLBACK_UNAVAILABLE` | lines 56–62 |
 | MCP / session (PRD 8.5) | `SESSION_NOT_FOUND`, `SESSION_EXPIRED`, `SUBSCRIPTION_NOT_FOUND`, `SUBSCRIPTION_CAP_REACHED`, `TOOL_NOT_FOUND`, `TOOL_PARAMS_INVALID`, `TOOL_INTERNAL_ERROR`, `HTTP_BIND_NON_LOOPBACK_REFUSED`, `HTTP_TOKEN_INVALID`, `HTTP_ORIGIN_REFUSED`, `HTTP_SESSION_INVALID`, `REPLAY_TARGET_INVALID`, `REPLAY_FORMAT_INVALID` | lines 65–77 |
 | Storage (PRD 8.6) | `STORAGE_OPEN_FAILED`, `STORAGE_WRITE_FAILED`, `STORAGE_READ_FAILED`, `STORAGE_CORRUPTED`, `STORAGE_SCHEMA_MISMATCH`, `STORAGE_DISK_PRESSURE_LEVEL_1..4`, `STORAGE_CF_HARD_CAP_REACHED` | lines 80–89 |
 | Models (PRD 8.7) | `MODEL_DOWNLOAD_FAILED`, `MODEL_HASH_MISMATCH`, `MODEL_LOAD_FAILED`, `MODEL_BACKEND_UNAVAILABLE` | lines 92–95 |
@@ -485,7 +493,7 @@ crates/synapse-mcp/
 ├── Cargo.toml                      # Binary crate; depends on every other library crate
 └── src/
     ├── main.rs                     # Process entrypoint, clap CLI, telemetry init, stdio/http dispatch
-    ├── server.rs                   # SynapseService: ServerHandler + #[tool_router] declaring 41 MCP tools
+    ├── server.rs                   # SynapseService: ServerHandler + #[tool_router] declaring 42 MCP tools
     ├── server/
     │   ├── action_audit.rs         # CF_ACTION_LOG start/result audit rows with profile/session context
     │   ├── audit_context.rs        # Profile activation/session/event audit context persistence helpers
@@ -1514,9 +1522,14 @@ Source files covered:
 
 ## 3. Error code catalog
 
-All 95 codes are `pub const &'static str` in `crates/synapse-core/src/error_codes.rs`. Mapped from each subsystem's `thiserror` enum's `.code()` method. Categories with line ranges (see [01_system_overview.md §8](#file-01) for the table).
+All 97 codes are `pub const &'static str` in `crates/synapse-core/src/error_codes.rs`. Mapped from each subsystem's `thiserror` enum's `.code()` method. Categories with line ranges (see [01_system_overview.md §8](#file-01) for the table).
 
 M3 added the following codes to the M2 baseline: `REFLEX_RECURSION_LIMIT`, `REFLEX_ACTION_PERMISSION_DENIED`, `HTTP_BIND_NON_LOOPBACK_REFUSED`, `HTTP_TOKEN_INVALID`, `HTTP_ORIGIN_REFUSED`, `HTTP_SESSION_INVALID`, `REPLAY_TARGET_INVALID`, `REPLAY_FORMAT_INVALID`, `SUBSCRIPTION_CAP_REACHED`, `STORAGE_DISK_PRESSURE_LEVEL_1..4`, `STORAGE_CF_HARD_CAP_REACHED`, `SAFETY_PERMISSION_DENIED`, `SAFETY_PROFILE_ACTION_DENIED`, `SAFETY_OPERATOR_HOTKEY_FIRED`.
+
+M5 profile-registry security adds `PROFILE_TRUST_VERIFICATION_FAILED` for
+signed-package trust failures that quarantine instead of activate, and
+`PROFILE_ROLLBACK_UNAVAILABLE` when no prior trusted/local-validated package can
+be restored.
 
 ## 4. Retention defaults
 
@@ -1888,7 +1901,7 @@ pub struct SynapseService {
 }
 ```
 
-Implements `rmcp::ServerHandler` via `#[tool_handler(router = self.tool_router)]`. The 34 tools are declared on the same struct under the M1/M2/M3/M4 `#[tool_router]` impls; `#[tool(description = "...")]` annotations produce JSON-Schema entries for `tools/list` automatically.
+Implements `rmcp::ServerHandler` via `#[tool_handler(router = self.tool_router)]`. The 42 tools are declared on the same struct under the M1/M2/M3/M4 `#[tool_router]` impls; `#[tool(description = "...")]` annotations produce JSON-Schema entries for `tools/list` automatically.
 
 ### 1.1 Constructors
 
@@ -1911,7 +1924,7 @@ Implements `rmcp::ServerHandler` via `#[tool_handler(router = self.tool_router)]
   - `"... (recording enabled)"` if only recording on
   - else `"... with M2 action scaffold"`
 
-`m3_scaffold_ready` requires `M3State::scaffold_ready() && m3_tool_stubs().len() == 23` (the original 15 M3 tools plus the M5 profile-registry/audit tools that live in the M3 module because they use profile and storage state).
+`m3_scaffold_ready` requires `M3State::scaffold_ready() && m3_tool_stubs().len() == 24` (the original 15 M3 tools plus the M5 profile-registry/audit tools that live in the M3 module because they use profile and storage state).
 
 ### 1.3 Health payload
 
@@ -2151,7 +2164,7 @@ The disabling step persists `StoredReflexAudit` rows with `error_code = REFLEX_D
 
 ## 8. Tool list snapshot
 
-The full list of 41 declared tools is in [13_mcp_tool_reference.md](#file-13). They are: `health`, `observe`, `find`, `read_text`, `set_capture_target`, `set_perception_mode`, `act_click`, `act_type`, `act_press`, `act_aim`, `act_drag`, `act_scroll`, `act_pad`, `act_clipboard`, `release_all`, `subscribe`, `subscribe_cancel`, `reflex_register`, `reflex_cancel`, `reflex_list`, `reflex_history`, `profile_list`, `profile_activate`, `profile_quality_refresh`, `profile_registry_search`, `profile_registry_inspect`, `profile_registry_install`, `profile_registry_disable`, `profile_registry_export`, `profile_registry_import`, `audit_intelligence_query`, `replay_record`, `audio_tail`, `audio_transcribe`, `storage_inspect`, `storage_put_probe_rows`, `storage_gc_once`, `storage_pressure_sample`, `act_combo`, `act_run_shell`, `act_launch` — note the M3 module set lives in `m3_tool_stubs()` (length-asserted at 23 in `instructions()`).
+The full list of 42 declared tools is in [13_mcp_tool_reference.md](#file-13). They are: `health`, `observe`, `find`, `read_text`, `set_capture_target`, `set_perception_mode`, `act_click`, `act_type`, `act_press`, `act_aim`, `act_drag`, `act_scroll`, `act_pad`, `act_clipboard`, `release_all`, `subscribe`, `subscribe_cancel`, `reflex_register`, `reflex_cancel`, `reflex_list`, `reflex_history`, `profile_list`, `profile_activate`, `profile_quality_refresh`, `profile_registry_search`, `profile_registry_inspect`, `profile_registry_install`, `profile_registry_disable`, `profile_registry_export`, `profile_registry_import`, `profile_registry_rollback`, `audit_intelligence_query`, `replay_record`, `audio_tail`, `audio_transcribe`, `storage_inspect`, `storage_put_probe_rows`, `storage_gc_once`, `storage_pressure_sample`, `act_combo`, `act_run_shell`, `act_launch` — note the M3 module set lives in `m3_tool_stubs()` (length-asserted at 24 in `instructions()`).
 
 
 ---
@@ -3714,6 +3727,10 @@ registry/audit tools). Manual FSV triggers the real runtime surface and then
 reads those stores directly. GitHub Actions/CI, scripts, tests, and benchmarks
 are supporting evidence only.
 
+Issue #459 adds the trust-control layer for that loop: signed package payloads,
+local trust-root rows, quarantine rows for failed verification, and rollback
+rows for restoring only prior trusted/local-validated packages.
+
 M3 carry-over open for M4 to address:
 
 - **LoC overrun** — 500-LoC file cap was violated during M3. On `main` (HEAD `e54ca57`): `synapse-a11y/src/lib.rs` (2087), `synapse-capture/src/lib.rs` (1798), `synapse-core/src/types.rs` (1567), `synapse-mcp/src/server.rs` (1335), `synapse-mcp/src/m3/reflex.rs` (1165), `synapse-reflex/src/lib.rs` (986), `synapse-reflex/src/scheduler.rs` (890), `synapse-mcp/src/http/sse.rs` (764), `synapse-mcp/src/m3/replay.rs` (651), `synapse-models/src/lib.rs` (535). M4's Block A.0 splits these before adding hardware HID. Several test files also exceed cap.
@@ -3723,14 +3740,14 @@ Open M4 work (per `docs/impplan/05_m4_hardware_hid_first_game.md`):
 
 - `firmware/pico-hid/` — standalone RP2040 firmware project excluded from the root Cargo workspace; remaining firmware issues close only with real device evidence.
 - `synapse-hid-host` — serial driver with discovery, connect/IDENTIFY, CRC16 framing, pipeline/backpressure, and reconnect paths. `Backend::Hardware` uses `HardwareBackend` when `--hardware-hid <port|auto>` connects successfully, otherwise it fails closed through `HardwareUnavailableBackend`.
-- `act_combo`, `act_run_shell`, `act_launch` — three M4 tools that bring the live MCP tool count from 30 -> 33; M5 profile-registry/audit work adds `profile_quality_refresh`, six `profile_registry_*` tools, and `audit_intelligence_query`, bringing the live surface to 41.
+- `act_combo`, `act_run_shell`, `act_launch` — three M4 tools that bring the live MCP tool count from 30 -> 33; M5 profile-registry/audit work adds `profile_quality_refresh`, seven `profile_registry_*` tools including rollback, and `audit_intelligence_query`, bringing the live surface to 42.
 - `minecraft.java` profile (the first game profile) — fifth bundled profile, validated against a single-player creative world per `15_roadmap_and_milestones.md` §6.
 - M3 hold-over items still open: per-subscriber `subscribe.buffer_size` (currently hard-pinned to 4096); persistent writers for `CF_EVENTS`/`CF_OBSERVATIONS`/`CF_SESSIONS`/`CF_TELEMETRY`/`CF_PROCESS_HISTORY`/`CF_KV` (`CF_REFLEX_AUDIT` and `CF_ACTION_LOG` have live writers); audio detector → SSE-bus sink integration; HUD extraction pipeline. VLM `describe` and Florence-2 remain M5.
 
 ## 3. Tools delivered vs planned
 
 PRD `docs/computergames/05_mcp_tool_surface.md` started from a 30-tool M3
-baseline and now records the approved 41-tool live surface after M4/M5
+baseline and now records the approved 42-tool live surface after M4/M5
 expansion. Current build:
 
 | # | Tool | Milestone | Status | Note |
@@ -3776,14 +3793,15 @@ expansion. Current build:
 | 38 | `profile_registry_disable` | M5 (registry/audit) | live | disables or removes an installed registry row |
 | 39 | `profile_registry_export` | M5 (registry/audit) | live | exports local registry bundle |
 | 40 | `profile_registry_import` | M5 (registry/audit) | live | imports validated local registry bundle |
-| 41 | `audit_intelligence_query` | M5 (registry/audit) | live | summarizes profile-linked audit outcomes |
+| 41 | `profile_registry_rollback` | M5 (registry/audit) | live | restores installed profile to a prior trusted package |
+| 42 | `audit_intelligence_query` | M5 (registry/audit) | live | summarizes profile-linked audit outcomes |
 | — | `describe` | M5 (VLM) | not live | Florence-2 |
 
-Live count in `crates/synapse-mcp/src/server.rs`: **41** (M1: 6, M2: 9,
-M3/M5 module stubs: 23 including `profile_quality_refresh`, six
+Live count in `crates/synapse-mcp/src/server.rs`: **42** (M1: 6, M2: 9,
+M3/M5 module stubs: 24 including `profile_quality_refresh`, seven
 `profile_registry_*` tools, `audit_intelligence_query`, and 4 operator storage
 diagnostics, plus M4 `act_combo`/`act_run_shell`/`act_launch`; the M3
-`m3_tool_stubs()` length-asserts to 23).
+`m3_tool_stubs()` length-asserts to 24).
 
 ## 4. Architecture Decision Records (ADRs)
 
@@ -3954,7 +3972,7 @@ Source files covered:
 - `crates/synapse-mcp/src/m3/{audio, permissions, profile, profile_quality, profile_registry, reflex, replay, subscribe}.rs`
 - `crates/synapse-core/src/types.rs`
 
-All 41 tools below are registered on `SynapseService` via `#[tool(description=...)]` in `server.rs`. Tool descriptions are taken verbatim from the source. Every tool returns through `Json<T>` so the response shape exactly matches the deserialized response struct.
+All 42 tools below are registered on `SynapseService` via `#[tool(description=...)]` in `server.rs`. Tool descriptions are taken verbatim from the source. Every tool returns through `Json<T>` so the response shape exactly matches the deserialized response struct.
 
 Default error response shape (all tools): `ErrorData { code: rmcp::ErrorCode(-32099), message, data: { "code": <SCREAMING_SNAKE_CASE> } }` via `crates/synapse-mcp/src/m1.rs::mcp_error`.
 
@@ -4374,22 +4392,30 @@ where `row` includes the decoded JSON value when found.
 
 **Description:** "Install or update a local profile registry package manifest"
 **Permissions:** `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE`
-**Side effects:** validates manifest/profile files; writes `CF_PROFILES`
-registry rows and a `CF_KV` source head pointer; reads written rows back
+**Side effects:** validates manifest/profile files; enforces signed package
+trust where required; writes `CF_PROFILES` registry rows and a `CF_KV` source
+head pointer; reads written rows back. Failed trust verification writes only a
+`profile_package_quarantine` row in `CF_PROFILES`.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `manifest_path` | `String` | yes | — | Local package manifest TOML path |
 | `expected_manifest_digest` | `Option<String>` | no | — | Optional `sha256:<hex>` digest that must match manifest bytes |
 | `source_id` | `String` | no | `registry.local` | Lowercase source id for source/head rows |
+| `trust_policy` | `String` | no | `local_first` | `local_first` permits local unsigned packages after parser validation; `signed_required` requires a trusted Ed25519 signature |
 
 **Returns:** `ProfileRegistryInstallResponse { operation, source_id,
 package_id, package_version, profile_id, profile_version, manifest_path,
-manifest_digest, profile_toml_path, wrote_rows, idempotent,
+manifest_digest, profile_toml_path, wrote_rows, idempotent, trust_status,
+signature_status, signer_id, trust_root_key, signature_payload_digest,
 cf_profile_row_keys, cf_kv_row_keys, row_summaries }`.
 
 Duplicate package id/version with the same manifest digest is an idempotent
 no-op. Duplicate id/version with a different digest fails closed.
+Signed-required packages with missing, invalid, or unknown-signer signatures
+fail closed with `PROFILE_TRUST_VERIFICATION_FAILED`; package/profile/installed
+rows are not activated, and the response error data carries the quarantine row
+key and readback.
 
 ## 23e. `profile_registry_disable`
 
@@ -4438,7 +4464,36 @@ cf_profile_rows_written, cf_kv_rows_written, rows }`.
 **Errors:** `TOOL_PARAMS_INVALID` for malformed bundle schema, unsupported CF,
 non-registry key, invalid `CF_KV` namespace, or non-object row values.
 
-## 23h. `audit_intelligence_query`
+## 23h. `profile_registry_rollback`
+
+**Description:** "Rollback an installed profile registry row to a prior trusted package"
+**Permissions:** `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE`
+**Side effects:** validates a prior package row, rewrites
+`CF_PROFILES/profile_registry/v1/installed/<profile_id>`, writes a rollback row
+under `CF_PROFILES/profile_registry/v1/rollback/<profile_id>/<timestamp>`, and
+reads both rows back.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `profile_id` | `String` | yes | Installed profile id to restore |
+| `target_package_id` | `Option<String>` | no | Optional explicit package id; must be paired with `target_package_version` |
+| `target_package_version` | `Option<String>` | no | Optional explicit package version; must be paired with `target_package_id` |
+| `reason` | `Option<String>` | no | Local rollback reason stored on the rollback row |
+
+If no explicit target is supplied, the tool selects the newest prior package
+version for the installed profile. The target package row must be active,
+unrevoked, match the profile id, and carry `trust_status = "trusted"` or
+`"local_validated"`.
+
+**Returns:** `ProfileRegistryRollbackResponse { profile_id, installed_row_key,
+rollback_row_key, previous_package_id, previous_package_version,
+rolled_back_package_id, rolled_back_package_version, installed_row,
+rollback_row }`. The installed row readback carries the rolled-back package's
+trust/signature metadata, not stale metadata from the package being replaced.
+**Errors:** `TOOL_PARAMS_INVALID`, `PROFILE_ROLLBACK_UNAVAILABLE`,
+`STORAGE_READ_FAILED`, `STORAGE_WRITE_FAILED`.
+
+## 23i. `audit_intelligence_query`
 
 **Description:** "Summarize profile-linked audit outcomes for registry intelligence"
 **Permissions:** `READ_PROFILE`, `READ_STORAGE`
@@ -4573,7 +4628,7 @@ For convenience the M3 tool-call gating is summarized here (live source: `crates
 | `audio_tail`, `audio_transcribe` | `READ_AUDIO` |
 | `profile_quality_refresh` | `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE` |
 | `profile_registry_search`, `profile_registry_inspect`, `profile_registry_export`, `audit_intelligence_query` | `READ_PROFILE`, `READ_STORAGE` |
-| `profile_registry_install`, `profile_registry_disable`, `profile_registry_import` | `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE` |
+| `profile_registry_install`, `profile_registry_disable`, `profile_registry_import`, `profile_registry_rollback` | `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE` |
 | `storage_inspect` | `READ_STORAGE` |
 | `storage_put_probe_rows`, `storage_gc_once`, `storage_pressure_sample` | `WRITE_STORAGE` |
 
@@ -4676,7 +4731,7 @@ Source files covered:
 - `m3_reflex_cancel_tool.rs`, `m3_reflex_history_tool.rs`, `m3_reflex_list_tool.rs`, `m3_reflex_register_tool.rs` — reflex CRUD
 - `m3_replay_record_tool.rs` — replay JSONL writer
 - `m3_subscribe_tool.rs` — subscribe + cancel
-- `m3_tools_list.rs` / `m4_tools_list.rs` — `tools/list` exposes the current 41-tool surface, including M5 profile-registry/audit tools
+- `m3_tools_list.rs` / `m4_tools_list.rs` — `tools/list` exposes the current 42-tool surface, including M5 profile-registry/audit tools and `profile_registry_rollback`
 - `sigint_clean_exit.rs` — Ctrl-C / Ctrl-Break shuts the daemon down within deadline
 
 ### 2.5 `synapse-models` (1 file)
@@ -4893,10 +4948,10 @@ Counted by walking `crates/` and slicing by path. Comments, blank lines, and `mo
 | Total Rust source files (excluding tests/benches) | **148** |
 | Total Rust integration-test files | 76 |
 | Total Rust bench files | 13 |
-| MCP tools registered in `server.rs` | **41** (M1: 6, M2: 9, M3/M5 module stubs: 23 including `profile_quality_refresh`, `profile_registry_*`, and `audit_intelligence_query`; M4: `act_combo`, `act_run_shell`, `act_launch`) |
-| MCP tools approved by `05_mcp_tool_surface.md` (agent surface cap) | 41 |
+| MCP tools registered in `server.rs` | **42** (M1: 6, M2: 9, M3/M5 module stubs: 24 including `profile_quality_refresh`, seven `profile_registry_*` tools, and `audit_intelligence_query`; M4: `act_combo`, `act_run_shell`, `act_launch`) |
+| MCP tools approved by `05_mcp_tool_surface.md` (agent surface cap) | 42 |
 | RocksDB column families | **11** (`ALL_COLUMN_FAMILIES.len() == 11`; excludes implicit `default` CF) |
-| Stable error-code constants in `synapse_core::error_codes` | **95** |
+| Stable error-code constants in `synapse_core::error_codes` | **97** |
 | Reserved subsystem error enums (mapped to those codes) | 11 (`StorageError`, `ReflexError`, `ActionError`, `ProfileError`, `ProfileLoadError`, `AudioError`, `PerceptionError`, `CaptureError`, `ModelError`, `A11yError`, `TelemetryError` + parse errors `ElementIdParseError`/`EventFilterValidationError`) |
 | M3 metric specs declared in `synapse_telemetry::metrics::M3_METRICS` | **19** (12 counters, 5 gauges, 2 histograms) |
 | Permissions in M3 grant model | **13** (`READ_EVENTS`, `WRITE_REFLEX`, `READ_REFLEX`, `READ_PROFILE`, `WRITE_PROFILE_ACTIVE`, `WRITE_REPLAY`, `READ_AUDIO`, `READ_STORAGE`, `WRITE_STORAGE`, `INPUT_KEYBOARD`, `INPUT_MOUSE`, `INPUT_PAD`, `INPUT_HARDWARE_HID`) |
@@ -5030,7 +5085,7 @@ Files exceeding the 500-LoC impplan rule on `main` (M3 carry-over per `docs/impp
 
 | File | Topic |
 |---|---|
-| [01_system_overview.md](#file-01) | High-level architecture, tech stack, all 41 live tools |
+| [01_system_overview.md](#file-01) | High-level architecture, tech stack, all 42 live tools |
 | [02_source_code_map.md](#file-02) | Per-file tree with descriptions + dep graph + entry-point traces |
 | [03_configuration.md](#file-03) | All CLI flags, env vars, validation rules, default constants |
 | [04_storage_layer.md](#file-04) | RocksDB CFs, schema sentinel, TTL filter, GC, disk pressure |

@@ -152,6 +152,7 @@ uuid = { version = "1.23.1", features = ["v4", "v7", "serde"] }
 schemars = { version = "1.2.1", features = ["derive"] }
 regex = "1.12.3"
 sha2 = "0.11.0"
+ed25519-dalek = "2.2.0"
 crc16 = "0.4"
 notify = "9.0.0-rc.4"
 

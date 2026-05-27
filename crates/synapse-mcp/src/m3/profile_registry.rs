@@ -6,12 +6,14 @@ use std::{
 };
 
 use chrono::Utc;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use rmcp::{ErrorData, model::ErrorCode, schemars::JsonSchema};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use synapse_core::{ProfileId, SCHEMA_VERSION, error_codes};
 use synapse_profiles::{
-    ProfileError, ProfilePackageManifest, package_manifest_digest, parse_package_manifest_bytes,
+    PackageSignature, ProfileError, ProfilePackageManifest, package_manifest_digest,
+    package_signature_payload, package_signature_payload_digest, parse_package_manifest_bytes,
     parse_package_manifest_bytes_with_digest, parse_profile_file,
 };
 use synapse_reflex::ReflexRuntime;
@@ -31,11 +33,20 @@ const PROFILE_PREFIX: &str = "profile_registry/v1/profile/";
 const INSTALLED_PREFIX: &str = "profile_registry/v1/installed/";
 const COMPAT_PREFIX: &str = "profile_registry/v1/compat/";
 const QUALITY_LINK_PREFIX: &str = "profile_registry/v1/quality_link/";
+const TRUST_ROOT_PREFIX: &str = "profile_registry/v1/trust_root/";
+const QUARANTINE_PREFIX: &str = "profile_registry/v1/quarantine/";
+const ROLLBACK_PREFIX: &str = "profile_registry/v1/rollback/";
 const HEAD_PREFIX: &str = "profile_registry/v1/head/";
 const DEFAULT_SOURCE_ID: &str = "registry.local";
+const DEFAULT_INSTALL_TRUST_POLICY: &str = "local_first";
 const DEFAULT_SEARCH_LIMIT: u32 = 100;
 const MAX_SEARCH_LIMIT: u32 = 1000;
 const VALUE_PREFIX_CHARS: usize = 1024;
+const SYNTHETIC_FIXTURE_SIGNER_ID: &str = "synapse.fixture.signer";
+const SYNTHETIC_FIXTURE_PUBLIC_KEY_HEX: &str =
+    "03a107bff3ce10be1d70dd18e74bc09967e4d6309ba50d5f1ddc8664125531b8";
+const SYNTHETIC_FIXTURE_KEY_ID: &str =
+    "sha256:56475aa75463474c0285df5dbf2bcab73da651358839e9b77481b2eab107708c";
 
 type EncodedRow = (Vec<u8>, Vec<u8>);
 type EncodedRows = Vec<EncodedRow>;
@@ -82,6 +93,9 @@ pub struct ProfileRegistryInstallParams {
     #[serde(default = "default_source_id")]
     #[schemars(default = "default_source_id")]
     pub source_id: String,
+    #[serde(default = "default_install_trust_policy")]
+    #[schemars(default = "default_install_trust_policy")]
+    pub trust_policy: String,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -114,6 +128,18 @@ pub struct ProfileRegistryExportParams {
 #[serde(deny_unknown_fields)]
 pub struct ProfileRegistryImportParams {
     pub bundle_path: String,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileRegistryRollbackParams {
+    pub profile_id: ProfileId,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_package_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub target_package_version: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -187,6 +213,11 @@ pub struct ProfileRegistryInstallResponse {
     pub profile_toml_path: String,
     pub wrote_rows: bool,
     pub idempotent: bool,
+    pub trust_status: String,
+    pub signature_status: String,
+    pub signer_id: Option<String>,
+    pub trust_root_key: Option<String>,
+    pub signature_payload_digest: Option<String>,
     pub cf_profile_row_keys: Vec<String>,
     pub cf_kv_row_keys: Vec<String>,
     pub row_summaries: Vec<ProfileRegistryRowSummary>,
@@ -220,6 +251,21 @@ pub struct ProfileRegistryImportResponse {
     pub cf_profile_rows_written: u64,
     pub cf_kv_rows_written: u64,
     pub rows: Vec<ProfileRegistryRowSummary>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileRegistryRollbackResponse {
+    pub profile_id: ProfileId,
+    pub previous_package_id: String,
+    pub previous_package_version: String,
+    pub rolled_back_package_id: String,
+    pub rolled_back_package_version: String,
+    pub row_key: String,
+    pub rollback_row_key: String,
+    pub wrote_row: bool,
+    pub installed_row: ProfileRegistryStoredRow,
+    pub rollback_row: ProfileRegistryStoredRow,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
@@ -280,6 +326,44 @@ struct ProfileRegistryBundleRow {
     value: Value,
 }
 
+#[derive(Clone, Debug)]
+struct TrustRoot {
+    signer_id: &'static str,
+    key_id: &'static str,
+    public_key_hex: &'static str,
+    trust_domain: &'static str,
+}
+
+#[derive(Clone, Debug)]
+struct TrustVerification {
+    trust_policy_id: String,
+    trust_status: String,
+    signature_status: String,
+    signer_id: Option<String>,
+    key_id: Option<String>,
+    trust_root_key: Option<String>,
+    signature_payload_digest: Option<String>,
+    required: bool,
+}
+
+#[derive(Clone, Debug)]
+struct TrustFailure {
+    reason: &'static str,
+    message: String,
+    trust_policy_id: String,
+    signature_status: String,
+    signer_id: Option<String>,
+    key_id: Option<String>,
+    signature_payload_digest: Option<String>,
+}
+
+const BUILTIN_TRUST_ROOTS: &[TrustRoot] = &[TrustRoot {
+    signer_id: SYNTHETIC_FIXTURE_SIGNER_ID,
+    key_id: SYNTHETIC_FIXTURE_KEY_ID,
+    public_key_hex: SYNTHETIC_FIXTURE_PUBLIC_KEY_HEX,
+    trust_domain: "local-fixture",
+}];
+
 #[must_use]
 pub const fn profile_registry_search() -> M3ToolStub {
     M3ToolStub::new("profile_registry_search")
@@ -308,6 +392,11 @@ pub const fn profile_registry_export() -> M3ToolStub {
 #[must_use]
 pub const fn profile_registry_import() -> M3ToolStub {
     M3ToolStub::new("profile_registry_import")
+}
+
+#[must_use]
+pub const fn profile_registry_rollback() -> M3ToolStub {
+    M3ToolStub::new("profile_registry_rollback")
 }
 
 #[must_use]
@@ -350,6 +439,17 @@ pub fn required_permissions_export(_params: &ProfileRegistryExportParams) -> Req
 
 #[must_use]
 pub fn required_permissions_import(_params: &ProfileRegistryImportParams) -> RequiredPermissions {
+    required([
+        Permission::ReadProfile,
+        Permission::ReadStorage,
+        Permission::WriteStorage,
+    ])
+}
+
+#[must_use]
+pub fn required_permissions_rollback(
+    _params: &ProfileRegistryRollbackParams,
+) -> RequiredPermissions {
     required([
         Permission::ReadProfile,
         Permission::ReadStorage,
@@ -434,6 +534,7 @@ pub fn install_registry_package(
     params: &ProfileRegistryInstallParams,
 ) -> Result<ProfileRegistryInstallResponse, ErrorData> {
     validate_registry_id("source_id", &params.source_id)?;
+    validate_install_trust_policy(&params.trust_policy)?;
     let manifest_path = required_path("manifest_path", &params.manifest_path)?;
     let manifest_bytes = fs::read(&manifest_path).map_err(|error| {
         mcp_error(
@@ -446,6 +547,41 @@ pub fn install_registry_package(
     })?;
     let manifest_digest = package_manifest_digest(&manifest_bytes);
     let manifest = parse_manifest(&manifest_path, &manifest_bytes, params)?;
+    let trust = match verify_manifest_trust(&manifest, params) {
+        Ok(trust) => trust,
+        Err(failure) => {
+            let updated_at = Utc::now().to_rfc3339();
+            let quarantine_key = quarantine_key(
+                &manifest.package_id,
+                &manifest.package_version,
+                &manifest_digest,
+            );
+            let row = quarantine_row(
+                &manifest,
+                &manifest_path,
+                &manifest_digest,
+                &params.source_id,
+                &updated_at,
+                &failure,
+            );
+            let runtime = lock_runtime(reflex_runtime, "quarantining failed profile package")?;
+            runtime
+                .storage_put_profile_rows(vec![encoded_row(quarantine_key.clone(), &row)?])
+                .map_err(storage_error)?;
+            let stored = runtime
+                .storage_profile_row(quarantine_key.as_bytes())
+                .map_err(storage_error)?;
+            drop(runtime);
+            let quarantine_readback = stored
+                .as_ref()
+                .map(|value| row_summary(cf::CF_PROFILES, quarantine_key.as_bytes(), value));
+            return Err(trust_error(
+                &failure,
+                &quarantine_key,
+                quarantine_readback.as_ref(),
+            ));
+        }
+    };
     let profile_toml_path = resolve_package_file(&manifest_path, &manifest.files.profile_toml);
     let loaded_profile = parse_profile_file(&profile_toml_path).map_err(profile_error)?;
     if loaded_profile.profile.id != manifest.profile_id {
@@ -483,6 +619,28 @@ pub fn install_registry_package(
                 profile_toml_path: profile_toml_path.display().to_string(),
                 wrote_rows: false,
                 idempotent: true,
+                trust_status: existing_value
+                    .get("trust_status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                signature_status: existing_value
+                    .get("signature_status")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown")
+                    .to_owned(),
+                signer_id: existing_value
+                    .get("signer_id")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                trust_root_key: existing_value
+                    .get("trust_root_key")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                signature_payload_digest: existing_value
+                    .get("signature_payload_digest")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
                 cf_profile_row_keys: vec![package_key],
                 cf_kv_row_keys: Vec::new(),
                 row_summaries: vec![row],
@@ -507,6 +665,7 @@ pub fn install_registry_package(
         &profile_toml_path,
         &params.source_id,
         &updated_at,
+        &trust,
         quality_row.as_deref(),
     )?;
     let kv_rows = vec![head_row(
@@ -514,6 +673,7 @@ pub fn install_registry_package(
         &manifest_digest,
         &params.source_id,
         &updated_at,
+        &trust,
     )?];
     let profile_row_keys = profile_rows
         .iter()
@@ -559,6 +719,11 @@ pub fn install_registry_package(
         profile_toml_path: profile_toml_path.display().to_string(),
         wrote_rows: true,
         idempotent: false,
+        trust_status: trust.trust_status,
+        signature_status: trust.signature_status,
+        signer_id: trust.signer_id,
+        trust_root_key: trust.trust_root_key,
+        signature_payload_digest: trust.signature_payload_digest,
         cf_profile_row_keys: profile_row_keys,
         cf_kv_row_keys: kv_row_keys,
         row_summaries: summaries,
@@ -783,6 +948,252 @@ pub fn import_registry(
     })
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "rollback performs one atomic read/validate/write/readback operation"
+)]
+pub fn rollback_registry_profile(
+    reflex_runtime: &Arc<Mutex<ReflexRuntime>>,
+    params: &ProfileRegistryRollbackParams,
+) -> Result<ProfileRegistryRollbackResponse, ErrorData> {
+    if params.target_package_id.is_some() != params.target_package_version.is_some() {
+        return Err(registry_error(
+            "rollback_target_incomplete",
+            "target_package_id and target_package_version must be provided together",
+        ));
+    }
+    let installed_key = installed_key(&params.profile_id);
+    let updated_at = Utc::now().to_rfc3339();
+    let runtime = lock_runtime(reflex_runtime, "rolling back profile registry package")?;
+    let installed_bytes = runtime
+        .storage_profile_row(installed_key.as_bytes())
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            rollback_unavailable_error(
+                "installed_profile_missing",
+                format!(
+                    "installed profile row for {} was not found",
+                    params.profile_id
+                ),
+            )
+        })?;
+    let mut installed = decode_json::<Value>(&installed_bytes).map_err(decode_error)?;
+    let previous_package_id =
+        required_string_from_value(&installed, "installed_package_id", "installed row")?;
+    let previous_package_version =
+        required_string_from_value(&installed, "installed_package_version", "installed row")?;
+    let previous_installed_at = installed
+        .get("installed_at")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
+    let target_key = if let (Some(package_id), Some(package_version)) =
+        (&params.target_package_id, &params.target_package_version)
+    {
+        package_key(package_id, package_version)
+    } else {
+        select_prior_package_key(
+            &runtime,
+            &params.profile_id,
+            &previous_package_id,
+            &previous_package_version,
+        )?
+    };
+    let target_bytes = runtime
+        .storage_profile_row(target_key.as_bytes())
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            rollback_unavailable_error(
+                "rollback_target_missing",
+                format!("rollback target package row {target_key} was not found"),
+            )
+        })?;
+    let target = decode_json::<Value>(&target_bytes).map_err(decode_error)?;
+    validate_rollback_target(&target, &params.profile_id)?;
+    let target_package_id = required_string_from_value(&target, "package_id", "target package")?;
+    let target_package_version =
+        required_string_from_value(&target, "package_version", "target package")?;
+    let target_profile_version =
+        required_string_from_value(&target, "profile_version", "target package")?;
+    if target_package_id == previous_package_id
+        && target_package_version == previous_package_version
+    {
+        return Err(rollback_unavailable_error(
+            "rollback_target_is_current",
+            "rollback target is already the installed package",
+        ));
+    }
+    set_object_field(
+        &mut installed,
+        "previous_installed_package_id",
+        json!(previous_package_id),
+    );
+    set_object_field(
+        &mut installed,
+        "previous_installed_package_version",
+        json!(previous_package_version),
+    );
+    if let Some(previous_installed_at) = previous_installed_at {
+        set_object_field(
+            &mut installed,
+            "previous_installed_at",
+            json!(previous_installed_at),
+        );
+    }
+    set_object_field(
+        &mut installed,
+        "installed_package_id",
+        json!(target_package_id),
+    );
+    set_object_field(
+        &mut installed,
+        "installed_package_version",
+        json!(target_package_version),
+    );
+    set_object_field(
+        &mut installed,
+        "active_profile_version",
+        json!(target_profile_version),
+    );
+    set_object_field(&mut installed, "installed_at", json!(updated_at));
+    set_object_field(&mut installed, "updated_at", json!(updated_at));
+    set_object_field(&mut installed, "rollback_at", json!(updated_at));
+    set_object_field(
+        &mut installed,
+        "rollback_reason",
+        json!(params.reason.as_deref()),
+    );
+    set_object_field(&mut installed, "state", json!("active"));
+    set_object_field(&mut installed, "activation_state", json!("installed"));
+    set_object_field(
+        &mut installed,
+        "trust_status",
+        target
+            .get("trust_status")
+            .cloned()
+            .unwrap_or_else(|| json!("unknown")),
+    );
+    set_object_field(
+        &mut installed,
+        "signature_status",
+        target
+            .get("signature_status")
+            .cloned()
+            .unwrap_or_else(|| json!("unknown")),
+    );
+    set_object_field(
+        &mut installed,
+        "trust_root_key",
+        target.get("trust_root_key").cloned().unwrap_or(Value::Null),
+    );
+    set_object_field(
+        &mut installed,
+        "signature_payload_digest",
+        target
+            .get("signature_payload_digest")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    set_object_field(
+        &mut installed,
+        "signer_id",
+        target.get("signer_id").cloned().unwrap_or(Value::Null),
+    );
+    set_object_field(
+        &mut installed,
+        "key_id",
+        target.get("key_id").cloned().unwrap_or(Value::Null),
+    );
+    set_object_field(
+        &mut installed,
+        "trust_policy_id",
+        target
+            .get("trust_policy_id")
+            .cloned()
+            .unwrap_or(Value::Null),
+    );
+    set_object_field(
+        &mut installed,
+        "trust_required",
+        target.get("trust_required").cloned().unwrap_or(Value::Null),
+    );
+    let rollback_key = rollback_key(&params.profile_id, &updated_at);
+    let rollback = json!({
+        "schema_version": SCHEMA_VERSION,
+        "row_kind": "profile_registry_rollback",
+        "row_id": format!("{}@{}", params.profile_id, updated_at),
+        "created_at": updated_at,
+        "updated_at": updated_at,
+        "source_id": target.get("source_id").and_then(Value::as_str).unwrap_or(DEFAULT_SOURCE_ID),
+        "state": "active",
+        "profile_id": params.profile_id,
+        "from_package_id": previous_package_id,
+        "from_package_version": previous_package_version,
+        "to_package_id": target_package_id,
+        "to_package_version": target_package_version,
+        "to_profile_version": target_profile_version,
+        "target_package_key": target_key,
+        "reason": params.reason.as_deref(),
+        "trust_status": target.get("trust_status").cloned().unwrap_or_else(|| json!("unknown")),
+        "signature_status": target.get("signature_status").cloned().unwrap_or_else(|| json!("unknown")),
+        "trust_root_key": target.get("trust_root_key").cloned().unwrap_or(Value::Null),
+        "signature_payload_digest": target.get("signature_payload_digest").cloned().unwrap_or(Value::Null),
+        "signer_id": target.get("signer_id").cloned().unwrap_or(Value::Null),
+        "key_id": target.get("key_id").cloned().unwrap_or(Value::Null),
+        "trust_policy_id": target.get("trust_policy_id").cloned().unwrap_or(Value::Null),
+        "trust_required": target.get("trust_required").cloned().unwrap_or(Value::Null),
+    });
+    let installed_encoded = encode_json(&installed).map_err(|error| {
+        mcp_error(
+            error_codes::TOOL_INTERNAL_ERROR,
+            format!("rollback installed row encode failed: {error}"),
+        )
+    })?;
+    let rollback_encoded = encode_json(&rollback).map_err(|error| {
+        mcp_error(
+            error_codes::TOOL_INTERNAL_ERROR,
+            format!("rollback row encode failed: {error}"),
+        )
+    })?;
+    runtime
+        .storage_put_profile_rows(vec![
+            (installed_key.clone().into_bytes(), installed_encoded),
+            (rollback_key.clone().into_bytes(), rollback_encoded),
+        ])
+        .map_err(storage_error)?;
+    let installed_readback = runtime
+        .storage_profile_row(installed_key.as_bytes())
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            registry_error(
+                "rollback_installed_write_missing",
+                "installed profile row did not persist after rollback",
+            )
+        })?;
+    let rollback_readback = runtime
+        .storage_profile_row(rollback_key.as_bytes())
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            registry_error("rollback_row_write_missing", "rollback row did not persist")
+        })?;
+    drop(runtime);
+    Ok(ProfileRegistryRollbackResponse {
+        profile_id: params.profile_id.clone(),
+        previous_package_id,
+        previous_package_version,
+        rolled_back_package_id: target_package_id,
+        rolled_back_package_version: target_package_version,
+        row_key: installed_key.clone(),
+        rollback_row_key: rollback_key.clone(),
+        wrote_row: true,
+        installed_row: stored_row(
+            cf::CF_PROFILES,
+            installed_key.as_bytes(),
+            &installed_readback,
+        )?,
+        rollback_row: stored_row(cf::CF_PROFILES, rollback_key.as_bytes(), &rollback_readback)?,
+    })
+}
+
 pub fn query_audit_intelligence(
     reflex_runtime: &Arc<Mutex<ReflexRuntime>>,
     params: &AuditIntelligenceQueryParams,
@@ -845,6 +1256,269 @@ fn parse_manifest(
     )
 }
 
+#[expect(
+    clippy::result_large_err,
+    reason = "trust failure is returned once to write an explicit quarantine row"
+)]
+#[expect(
+    clippy::too_many_lines,
+    reason = "trust verification keeps fail-closed decision order visible"
+)]
+fn verify_manifest_trust(
+    manifest: &ProfilePackageManifest,
+    params: &ProfileRegistryInstallParams,
+) -> Result<TrustVerification, TrustFailure> {
+    let required =
+        params.trust_policy == "signed_required" || manifest.trust.policy == "signed_required";
+    let trust_policy_id = if required {
+        "signed-required".to_owned()
+    } else {
+        "local-first".to_owned()
+    };
+    let payload_digest = package_signature_payload_digest(manifest);
+    if manifest.signatures.is_empty() {
+        return if required {
+            Err(TrustFailure {
+                reason: "signature_required_missing",
+                message: "profile package policy requires a trusted Ed25519 signature".to_owned(),
+                trust_policy_id,
+                signature_status: "missing".to_owned(),
+                signer_id: None,
+                key_id: None,
+                signature_payload_digest: Some(payload_digest),
+            })
+        } else {
+            Ok(TrustVerification {
+                trust_policy_id,
+                trust_status: "local_validated".to_owned(),
+                signature_status: "unsigned_allowed".to_owned(),
+                signer_id: None,
+                key_id: None,
+                trust_root_key: None,
+                signature_payload_digest: Some(payload_digest),
+                required,
+            })
+        };
+    }
+    let required_signers = manifest
+        .trust
+        .required_signers
+        .iter()
+        .map(String::as_str)
+        .collect::<Vec<_>>();
+    let mut unknown = None;
+    let mut invalid = None;
+    for signature in &manifest.signatures {
+        if !required_signers.is_empty() && !required_signers.contains(&signature.signer_id.as_str())
+        {
+            unknown = Some(signature);
+            continue;
+        }
+        let Some(root) = find_trust_root(&signature.signer_id, &signature.key_id) else {
+            unknown = Some(signature);
+            continue;
+        };
+        match verify_ed25519_signature(manifest, root, signature) {
+            Ok(()) => {
+                let trust_root_key = trust_root_key(root);
+                return Ok(TrustVerification {
+                    trust_policy_id,
+                    trust_status: "trusted".to_owned(),
+                    signature_status: "verified".to_owned(),
+                    signer_id: Some(signature.signer_id.clone()),
+                    key_id: Some(signature.key_id.clone()),
+                    trust_root_key: Some(trust_root_key),
+                    signature_payload_digest: Some(payload_digest),
+                    required,
+                });
+            }
+            Err(message) => {
+                invalid = Some((signature, message));
+            }
+        }
+    }
+    if let Some((signature, message)) = invalid {
+        return Err(TrustFailure {
+            reason: "signature_invalid",
+            message,
+            trust_policy_id,
+            signature_status: "invalid".to_owned(),
+            signer_id: Some(signature.signer_id.clone()),
+            key_id: Some(signature.key_id.clone()),
+            signature_payload_digest: Some(payload_digest),
+        });
+    }
+    let Some(signature) = unknown.or_else(|| manifest.signatures.first()) else {
+        return Err(TrustFailure {
+            reason: "signature_required_missing",
+            message: "profile package policy requires a trusted Ed25519 signature".to_owned(),
+            trust_policy_id,
+            signature_status: "missing".to_owned(),
+            signer_id: None,
+            key_id: None,
+            signature_payload_digest: Some(payload_digest),
+        });
+    };
+    Err(TrustFailure {
+        reason: "signer_unknown",
+        message: format!(
+            "profile package signer {} with key {} is not trusted by the local registry",
+            signature.signer_id, signature.key_id
+        ),
+        trust_policy_id,
+        signature_status: "unknown_signer".to_owned(),
+        signer_id: Some(signature.signer_id.clone()),
+        key_id: Some(signature.key_id.clone()),
+        signature_payload_digest: Some(payload_digest),
+    })
+}
+
+fn verify_ed25519_signature(
+    manifest: &ProfilePackageManifest,
+    root: &TrustRoot,
+    signature: &PackageSignature,
+) -> Result<(), String> {
+    let public_key_bytes = decode_hex_array::<32>("trust root public key", root.public_key_hex)?;
+    let signature_bytes =
+        decode_prefixed_hex_array::<64>("package signature", &signature.signature, "ed25519:")?;
+    let verifying_key = VerifyingKey::from_bytes(&public_key_bytes)
+        .map_err(|error| format!("trust root public key is invalid: {error}"))?;
+    let signature = Signature::from_bytes(&signature_bytes);
+    verifying_key
+        .verify(&package_signature_payload(manifest), &signature)
+        .map_err(|error| format!("profile package signature did not verify: {error}"))
+}
+
+fn find_trust_root(signer_id: &str, key_id: &str) -> Option<&'static TrustRoot> {
+    BUILTIN_TRUST_ROOTS
+        .iter()
+        .find(|root| root.signer_id == signer_id && root.key_id == key_id)
+}
+
+fn find_trust_root_by_signer(signer_id: &str) -> Option<&'static TrustRoot> {
+    BUILTIN_TRUST_ROOTS
+        .iter()
+        .find(|root| root.signer_id == signer_id)
+}
+
+fn trust_root_row(root: &TrustRoot, source_id: &str, updated_at: &str) -> Value {
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "row_kind": "registry_trust_root",
+        "row_id": format!("{}:{}", root.signer_id, root.key_id),
+        "created_at": updated_at,
+        "updated_at": updated_at,
+        "source_id": source_id,
+        "state": "active",
+        "signer_id": root.signer_id,
+        "key_id": root.key_id,
+        "algorithm": "ed25519",
+        "public_key_sha256": root.key_id,
+        "public_key_hex": root.public_key_hex,
+        "trust_domain": root.trust_domain,
+        "origin": "bundled_fixture_root",
+        "operator_owned": true,
+    })
+}
+
+fn quarantine_row(
+    manifest: &ProfilePackageManifest,
+    manifest_path: &Path,
+    manifest_digest: &str,
+    source_id: &str,
+    updated_at: &str,
+    failure: &TrustFailure,
+) -> Value {
+    json!({
+        "schema_version": SCHEMA_VERSION,
+        "row_kind": "profile_package_quarantine",
+        "row_id": format!("{}@{}", manifest.package_id, manifest.package_version),
+        "created_at": manifest.created_at,
+        "updated_at": updated_at,
+        "source_id": source_id,
+        "state": "quarantined",
+        "activation_state": "quarantined",
+        "package_id": manifest.package_id,
+        "package_version": manifest.package_version,
+        "profile_id": manifest.profile_id,
+        "profile_version": manifest.profile_version,
+        "manifest_path": manifest_path.display().to_string(),
+        "manifest_digest": manifest_digest,
+        "trust_policy_id": failure.trust_policy_id,
+        "signature_status": failure.signature_status,
+        "signer_id": failure.signer_id.as_deref(),
+        "key_id": failure.key_id.as_deref(),
+        "signature_payload_digest": failure.signature_payload_digest.as_deref(),
+        "quarantine_reason": failure.reason,
+        "error_code": error_codes::PROFILE_TRUST_VERIFICATION_FAILED,
+        "error_message": failure.message,
+    })
+}
+
+fn trust_error(
+    failure: &TrustFailure,
+    quarantine_row_key: &str,
+    quarantine_readback: Option<&ProfileRegistryRowSummary>,
+) -> ErrorData {
+    ErrorData::new(
+        ErrorCode(-32099),
+        format!(
+            "profile package trust verification failed and package was quarantined: {}",
+            failure.message
+        ),
+        Some(json!({
+            "code": error_codes::PROFILE_TRUST_VERIFICATION_FAILED,
+            "reason": failure.reason,
+            "quarantine_row_key": quarantine_row_key,
+            "signature_status": failure.signature_status.as_str(),
+            "signer_id": failure.signer_id.as_deref(),
+            "key_id": failure.key_id.as_deref(),
+            "signature_payload_digest": failure.signature_payload_digest.as_deref(),
+            "quarantine_readback": quarantine_readback,
+        })),
+    )
+}
+
+fn decode_prefixed_hex_array<const N: usize>(
+    field: &str,
+    value: &str,
+    prefix: &str,
+) -> Result<[u8; N], String> {
+    let hex = value
+        .strip_prefix(prefix)
+        .ok_or_else(|| format!("{field} must start with {prefix}"))?;
+    decode_hex_array(field, hex)
+}
+
+fn decode_hex_array<const N: usize>(field: &str, hex: &str) -> Result<[u8; N], String> {
+    if hex.len() != N * 2 {
+        return Err(format!("{field} must contain {} hex characters", N * 2));
+    }
+    let mut output = [0_u8; N];
+    let bytes = hex.as_bytes();
+    for index in 0..N {
+        let high =
+            hex_nibble(bytes[index * 2]).ok_or_else(|| format!("{field} contains non-hex data"))?;
+        let low = hex_nibble(bytes[index * 2 + 1])
+            .ok_or_else(|| format!("{field} contains non-hex data"))?;
+        output[index] = (high << 4) | low;
+    }
+    Ok(output)
+}
+
+const fn hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
+#[expect(
+    clippy::too_many_arguments,
+    reason = "row builder takes explicit SoT ingredients from install readback"
+)]
 fn registry_rows(
     manifest: &ProfilePackageManifest,
     manifest_path: &Path,
@@ -852,12 +1526,13 @@ fn registry_rows(
     profile_toml_path: &Path,
     source_id: &str,
     updated_at: &str,
+    trust: &TrustVerification,
     quality_row: Option<&[u8]>,
 ) -> Result<EncodedRows, ErrorData> {
     let mut rows = vec![
         encoded_row(
             source_key(source_id),
-            &source_row(manifest, source_id, updated_at),
+            &source_row(manifest, source_id, updated_at, trust),
         )?,
         encoded_row(
             package_key(&manifest.package_id, &manifest.package_version),
@@ -867,17 +1542,29 @@ fn registry_rows(
                 manifest_digest,
                 source_id,
                 updated_at,
+                trust,
             ),
         )?,
         encoded_row(
             profile_key(&manifest.profile_id, &manifest.profile_version),
-            &profile_row(manifest, profile_toml_path, source_id, updated_at),
+            &profile_row(manifest, profile_toml_path, source_id, updated_at, trust),
         )?,
         encoded_row(
             installed_key(&manifest.profile_id),
-            &installed_row(manifest, source_id, updated_at),
+            &installed_row(manifest, source_id, updated_at, trust),
         )?,
     ];
+    if let Some(root_key) = &trust.trust_root_key
+        && let Some(root) = trust
+            .signer_id
+            .as_deref()
+            .and_then(find_trust_root_by_signer)
+    {
+        rows.push(encoded_row(
+            root_key.clone(),
+            &trust_root_row(root, source_id, updated_at),
+        )?);
+    }
     for target in &manifest.targets {
         rows.push(encoded_row(
             compat_key(
@@ -891,6 +1578,7 @@ fn registry_rows(
                 &target.target_kind,
                 source_id,
                 updated_at,
+                trust,
             ),
         )?);
     }
@@ -914,7 +1602,12 @@ fn encoded_row(key: String, value: &Value) -> Result<EncodedRow, ErrorData> {
     Ok((key.into_bytes(), encoded))
 }
 
-fn source_row(manifest: &ProfilePackageManifest, source_id: &str, updated_at: &str) -> Value {
+fn source_row(
+    manifest: &ProfilePackageManifest,
+    source_id: &str,
+    updated_at: &str,
+    trust: &TrustVerification,
+) -> Value {
     json!({
         "schema_version": SCHEMA_VERSION,
         "row_kind": "registry_source",
@@ -927,7 +1620,8 @@ fn source_row(manifest: &ProfilePackageManifest, source_id: &str, updated_at: &s
         "base_url": manifest.source.uri,
         "root_path": null,
         "auth_mode": "none",
-        "trust_policy_id": "local-first",
+        "trust_policy_id": trust.trust_policy_id.as_str(),
+        "trust_required": trust.required,
         "offline_usable": true,
         "last_health_status": "ok",
     })
@@ -939,6 +1633,7 @@ fn package_row(
     manifest_digest: &str,
     source_id: &str,
     updated_at: &str,
+    trust: &TrustVerification,
 ) -> Value {
     json!({
         "schema_version": SCHEMA_VERSION,
@@ -958,7 +1653,14 @@ fn package_row(
         "target_ids": manifest.targets.iter().map(|target| target.target_id.clone()).collect::<Vec<_>>(),
         "license_spdx": manifest.permissions.license_spdx,
         "governance_manifest_key": format!("profile_registry/v1/package/{}/{}", manifest.package_id, manifest.package_version),
-        "trust_status": "local_validated",
+        "trust_status": trust.trust_status.as_str(),
+        "signature_status": trust.signature_status.as_str(),
+        "signer_id": trust.signer_id.as_deref(),
+        "key_id": trust.key_id.as_deref(),
+        "trust_root_key": trust.trust_root_key.as_deref(),
+        "signature_payload_digest": trust.signature_payload_digest.as_deref(),
+        "trust_policy_id": trust.trust_policy_id.as_str(),
+        "trust_required": trust.required,
         "moderation_status": "local_only",
         "revoked": false,
         "profile_versions": [manifest.profile_version.clone()],
@@ -977,6 +1679,7 @@ fn profile_row(
     profile_toml_path: &Path,
     source_id: &str,
     updated_at: &str,
+    trust: &TrustVerification,
 ) -> Value {
     json!({
         "schema_version": SCHEMA_VERSION,
@@ -994,10 +1697,18 @@ fn profile_row(
         "profile_toml_digest": manifest.hashes.profile_toml_sha256,
         "use_scope": manifest.permissions.use_scope,
         "schema_version_supported": true,
+        "trust_status": trust.trust_status.as_str(),
+        "signature_status": trust.signature_status.as_str(),
+        "trust_root_key": trust.trust_root_key.as_deref(),
     })
 }
 
-fn installed_row(manifest: &ProfilePackageManifest, source_id: &str, updated_at: &str) -> Value {
+fn installed_row(
+    manifest: &ProfilePackageManifest,
+    source_id: &str,
+    updated_at: &str,
+    trust: &TrustVerification,
+) -> Value {
     json!({
         "schema_version": SCHEMA_VERSION,
         "row_kind": "installed_profile",
@@ -1012,6 +1723,14 @@ fn installed_row(manifest: &ProfilePackageManifest, source_id: &str, updated_at:
         "installed_package_version": manifest.package_version,
         "installed_at": updated_at,
         "activation_state": "installed",
+        "trust_status": trust.trust_status.as_str(),
+        "signature_status": trust.signature_status.as_str(),
+        "signer_id": trust.signer_id.as_deref(),
+        "key_id": trust.key_id.as_deref(),
+        "trust_root_key": trust.trust_root_key.as_deref(),
+        "signature_payload_digest": trust.signature_payload_digest.as_deref(),
+        "trust_policy_id": trust.trust_policy_id.as_str(),
+        "trust_required": trust.required,
         "operator_overrides_path": null,
     })
 }
@@ -1022,6 +1741,7 @@ fn compat_row(
     target_kind: &str,
     source_id: &str,
     updated_at: &str,
+    trust: &TrustVerification,
 ) -> Value {
     json!({
         "schema_version": SCHEMA_VERSION,
@@ -1036,6 +1756,7 @@ fn compat_row(
         "profile_id": manifest.profile_id,
         "profile_version": manifest.profile_version,
         "compatibility_status": "declared",
+        "trust_status": trust.trust_status.as_str(),
         "source_quality_snapshot_key": quality_key(&manifest.profile_id),
         "evidence_hash": manifest.hashes.package_sha256,
     })
@@ -1073,6 +1794,7 @@ fn head_row(
     manifest_digest: &str,
     source_id: &str,
     updated_at: &str,
+    trust: &TrustVerification,
 ) -> Result<EncodedRow, ErrorData> {
     let value = json!({
         "schema_version": SCHEMA_VERSION,
@@ -1086,6 +1808,9 @@ fn head_row(
         "package_version": manifest.package_version,
         "package_key": package_key(&manifest.package_id, &manifest.package_version),
         "manifest_digest": manifest_digest,
+        "trust_status": trust.trust_status.as_str(),
+        "signature_status": trust.signature_status.as_str(),
+        "trust_root_key": trust.trust_root_key.as_deref(),
     });
     encoded_row(head_key(source_id), &value)
 }
@@ -1280,6 +2005,118 @@ fn value_mentions_profile(value: &Value, profile_id: &str) -> bool {
             })
 }
 
+fn select_prior_package_key(
+    runtime: &MutexGuard<'_, ReflexRuntime>,
+    profile_id: &str,
+    current_package_id: &str,
+    current_package_version: &str,
+) -> Result<String, ErrorData> {
+    let rows = runtime
+        .storage_cf_prefix_rows(cf::CF_PROFILES, PACKAGE_PREFIX.as_bytes(), usize::MAX)
+        .map_err(storage_error)?;
+    let mut candidates = Vec::new();
+    for (key, value) in rows {
+        let row = decode_json::<Value>(&value).map_err(decode_error)?;
+        if row.get("profile_id").and_then(Value::as_str) != Some(profile_id) {
+            continue;
+        }
+        let package_id = row
+            .get("package_id")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let package_version = row
+            .get("package_version")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        if package_id == current_package_id && package_version == current_package_version {
+            continue;
+        }
+        if !is_known_good_package(&row) {
+            continue;
+        }
+        candidates.push((
+            semver_sort_key(package_version),
+            String::from_utf8_lossy(&key).into_owned(),
+        ));
+    }
+    candidates.sort_by(|left, right| left.0.cmp(&right.0).then_with(|| left.1.cmp(&right.1)));
+    candidates.pop().map(|(_version, key)| key).ok_or_else(|| {
+        rollback_unavailable_error(
+            "rollback_prior_package_missing",
+            format!("no prior known-good package row exists for profile {profile_id}"),
+        )
+    })
+}
+
+fn validate_rollback_target(target: &Value, profile_id: &str) -> Result<(), ErrorData> {
+    if target.get("row_kind").and_then(Value::as_str) != Some("profile_package") {
+        return Err(rollback_unavailable_error(
+            "rollback_target_kind_invalid",
+            "rollback target row must be a profile_package row",
+        ));
+    }
+    if target.get("profile_id").and_then(Value::as_str) != Some(profile_id) {
+        return Err(rollback_unavailable_error(
+            "rollback_target_profile_mismatch",
+            format!("rollback target package does not belong to profile {profile_id}"),
+        ));
+    }
+    if !is_known_good_package(target) {
+        return Err(rollback_unavailable_error(
+            "rollback_target_not_known_good",
+            "rollback target is not an active trusted/local-validated package",
+        ));
+    }
+    Ok(())
+}
+
+fn is_known_good_package(value: &Value) -> bool {
+    value.get("state").and_then(Value::as_str) == Some("active")
+        && matches!(
+            value.get("trust_status").and_then(Value::as_str),
+            Some("trusted" | "local_validated")
+        )
+        && value.get("revoked").and_then(Value::as_bool) != Some(true)
+}
+
+fn semver_sort_key(version: &str) -> (u64, u64, u64, String) {
+    let mut parts = version.splitn(2, ['-', '+']);
+    let core = parts.next().unwrap_or_default();
+    let suffix = parts.next().unwrap_or_default().to_owned();
+    let mut numbers = core.split('.');
+    let major = numbers
+        .next()
+        .and_then(|part| part.parse().ok())
+        .unwrap_or(0);
+    let minor = numbers
+        .next()
+        .and_then(|part| part.parse().ok())
+        .unwrap_or(0);
+    let patch = numbers
+        .next()
+        .and_then(|part| part.parse().ok())
+        .unwrap_or(0);
+    (major, minor, patch, suffix)
+}
+
+fn required_string_from_value(
+    value: &Value,
+    field: &str,
+    context: &str,
+) -> Result<String, ErrorData> {
+    value
+        .get(field)
+        .and_then(Value::as_str)
+        .filter(|value| !value.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| {
+            registry_error(
+                "registry_required_field_missing",
+                format!("{context} missing required string field {field}"),
+            )
+        })
+}
+
 fn inspect_key(params: &ProfileRegistryInspectParams) -> Result<(&'static str, String), ErrorData> {
     if let Some(row_key) = params
         .row_key
@@ -1445,6 +2282,18 @@ fn validate_disabled_state(value: &str) -> Result<(), ErrorData> {
     ))
 }
 
+fn validate_install_trust_policy(value: &str) -> Result<(), ErrorData> {
+    if matches!(value, "local_first" | "signed_required") {
+        return Ok(());
+    }
+    Err(mcp_error(
+        error_codes::TOOL_PARAMS_INVALID,
+        format!(
+            "profile_registry_install trust_policy must be local_first or signed_required; got {value:?}"
+        ),
+    ))
+}
+
 fn normalized_query(value: Option<&str>) -> Option<String> {
     value
         .map(str::trim)
@@ -1506,6 +2355,38 @@ fn quality_link_key(profile_id: &str, profile_version: &str) -> String {
     format!("{QUALITY_LINK_PREFIX}{profile_id}/{profile_version}")
 }
 
+fn trust_root_key(root: &TrustRoot) -> String {
+    format!(
+        "{TRUST_ROOT_PREFIX}{}/{}",
+        root.signer_id,
+        root.key_id.strip_prefix("sha256:").unwrap_or(root.key_id)
+    )
+}
+
+fn quarantine_key(package_id: &str, package_version: &str, manifest_digest: &str) -> String {
+    let digest = manifest_digest
+        .strip_prefix("sha256:")
+        .unwrap_or(manifest_digest)
+        .chars()
+        .take(16)
+        .collect::<String>();
+    format!("{QUARANTINE_PREFIX}{package_id}/{package_version}/{digest}")
+}
+
+fn rollback_key(profile_id: &str, updated_at: &str) -> String {
+    let timestamp = updated_at
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect::<String>();
+    format!("{ROLLBACK_PREFIX}{profile_id}/{timestamp}")
+}
+
 fn head_key(source_id: &str) -> String {
     format!("{HEAD_PREFIX}{source_id}")
 }
@@ -1537,6 +2418,10 @@ const fn default_search_limit() -> u32 {
 
 fn default_source_id() -> String {
     DEFAULT_SOURCE_ID.to_owned()
+}
+
+fn default_install_trust_policy() -> String {
+    DEFAULT_INSTALL_TRUST_POLICY.to_owned()
 }
 
 fn default_disabled_state() -> String {
@@ -1577,6 +2462,17 @@ fn registry_error(reason: &'static str, message: impl Into<String>) -> ErrorData
         message,
         Some(json!({
             "code": error_codes::TOOL_PARAMS_INVALID,
+            "reason": reason,
+        })),
+    )
+}
+
+fn rollback_unavailable_error(reason: &'static str, message: impl Into<String>) -> ErrorData {
+    ErrorData::new(
+        ErrorCode(-32099),
+        message.into(),
+        Some(json!({
+            "code": error_codes::PROFILE_ROLLBACK_UNAVAILABLE,
             "reason": reason,
         })),
     )

@@ -6,12 +6,14 @@ use std::{fs, path::Path};
 
 use crate::error::ProfileError;
 
-pub use digest::package_manifest_digest;
+pub use digest::{
+    package_manifest_digest, package_signature_payload, package_signature_payload_digest,
+};
 pub use types::{
     DisplayAssumptions, PackageAssumptions, PackageAuthor, PackageChangelogEntry,
     PackageContributionPermissions, PackageDependency, PackageExecutionPermissions, PackageFiles,
-    PackageHashes, PackageInput, PackagePermissions, PackageSource, PackageTarget,
-    ProfilePackageManifest,
+    PackageHashes, PackageInput, PackagePermissions, PackageSignature, PackageSource,
+    PackageTarget, PackageTrust, ProfilePackageManifest,
 };
 pub use validation::{PROFILE_PACKAGE_KIND, PROFILE_PACKAGE_SCHEMA_VERSION};
 

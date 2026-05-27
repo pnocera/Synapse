@@ -20,7 +20,14 @@
       "luanti.minetest"
     ],
     "license_spdx": "MIT OR Apache-2.0",
-    "trust_status": "local_fixture",
+    "trust_status": "local_validated",
+    "signature_status": "unsigned_allowed",
+    "signer_id": null,
+    "key_id": null,
+    "trust_root_key": null,
+    "signature_payload_digest": "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "trust_policy_id": "local-first",
+    "trust_required": false,
     "moderation_status": "approved",
     "revoked": false
   }

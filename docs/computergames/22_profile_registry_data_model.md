@@ -19,12 +19,15 @@ Decision:
    provenance, trust, compatibility, quality, and audit evidence.
 
 Runtime tools now write these rows through Synapse: `profile_registry_install`
-validates a local package manifest/profile TOML and writes source, package,
-profile, installed, compatibility, optional quality-link, and source-head rows;
-`profile_registry_disable` updates installed state; `profile_registry_export`
-and `profile_registry_import` move local bundles. Manual FSV must verify them
-by reading `CF_PROFILES`/`CF_KV` with `storage_inspect` and registry-specific
-readback tools. The fixtures in
+validates a local package manifest/profile TOML, verifies signed trust when
+policy requires it, and writes source, package, profile, installed,
+compatibility, trust-root, optional quality-link, and source-head rows;
+failed trust verification writes a quarantine row instead of install rows.
+`profile_registry_disable` updates installed state; `profile_registry_rollback`
+rewrites the installed row to a prior trusted/local-validated package and writes
+a rollback audit row; `profile_registry_export` and `profile_registry_import`
+move local bundles. Manual FSV must verify them by reading `CF_PROFILES`/`CF_KV`
+with `storage_inspect` and registry-specific readback tools. The fixtures in
 `docs/computergames/fixtures/profile_registry_data_model/` are synthetic row
 SoTs for this docs/data-model baseline.
 
@@ -53,6 +56,9 @@ All registry keys are UTF-8 and versioned under `profile_registry/v1/`.
 | Installed profile | `CF_PROFILES` | `profile_registry/v1/installed/<profile_id>` |
 | Compatibility target | `CF_PROFILES` | `profile_registry/v1/compat/<target_id>/<profile_id>/<profile_version>` |
 | Quality link | `CF_PROFILES` | `profile_registry/v1/quality_link/<profile_id>/<profile_version>` |
+| Trust root | `CF_PROFILES` | `profile_registry/v1/trust_root/<signer_id>/<key_id>` |
+| Quarantined package | `CF_PROFILES` | `profile_registry/v1/quarantine/<package_id>/<package_version>/<manifest_digest_prefix>` |
+| Rollback event | `CF_PROFILES` | `profile_registry/v1/rollback/<profile_id>/<timestamp>` |
 | Registry head pointer | `CF_KV` | `profile_registry/v1/head/<source_id>` |
 
 `profile_quality/v1/<profile_id>` remains the existing local quality snapshot
@@ -119,6 +125,13 @@ Required fields beyond the envelope:
 - `license_spdx`
 - `governance_manifest_key`
 - `trust_status`
+- `signature_status`
+- `signer_id`
+- `key_id`
+- `trust_root_key`
+- `signature_payload_digest`
+- `trust_policy_id`
+- `trust_required`
 - `moderation_status`
 - `revoked`
 - `profile_versions`
@@ -152,6 +165,14 @@ Required fields beyond the envelope:
 - `installed_at`
 - `activation_state`
 - `operator_overrides_path`
+- `trust_status`
+- `signature_status`
+- `trust_root_key`
+- `signature_payload_digest`
+- `signer_id`
+- `key_id`
+- `trust_policy_id`
+- `trust_required`
 
 ### 5.5 Compatibility target
 
@@ -167,7 +188,60 @@ Required fields beyond the envelope:
 - `source_quality_snapshot_key`
 - `evidence_hash`
 
-### 5.6 Quality link
+### 5.6 Trust root
+
+Stores the public verifier identity used for signed packages accepted by local
+policy.
+
+Required fields beyond the envelope:
+
+- `signer_id`
+- `key_id`
+- `algorithm`
+- `public_key_sha256`
+- `public_key_hex`
+- `trust_domain`
+- `operator_owned`
+
+### 5.7 Quarantined package
+
+Records packages rejected by signed-trust policy. Quarantine rows are evidence,
+not install state: bad packages must not create package/profile/installed/head
+rows.
+
+Required fields beyond the envelope:
+
+- `package_id`
+- `package_version`
+- `profile_id`
+- `manifest_digest`
+- `trust_policy_id`
+- `signature_status`
+- `quarantine_reason`
+- `error_code`
+
+### 5.8 Rollback event
+
+Records an installed-row rollback.
+
+Required fields beyond the envelope:
+
+- `profile_id`
+- `from_package_id`
+- `from_package_version`
+- `to_package_id`
+- `to_package_version`
+- `target_package_key`
+- `reason`
+- `trust_status`
+- `signature_status`
+- `trust_root_key`
+- `signature_payload_digest`
+- `signer_id`
+- `key_id`
+- `trust_policy_id`
+
+### 5.9 Quality link
 
 Points registry rows to audit-derived quality snapshots.
 
@@ -191,10 +265,13 @@ A successful local package registration writes these rows through the real MCP
 3. One or more `profile_registry/v1/profile/<profile_id>/<profile_version>`.
 4. `profile_registry/v1/installed/<profile_id>` when the package is installed.
 5. One or more compatibility rows.
-6. One quality-link row when audit-derived quality already exists.
-7. `CF_KV` head pointer for the source/index only after the rows above succeed.
+6. One trust-root row when a package signature verified against a local root.
+7. One quality-link row when audit-derived quality already exists.
+8. `CF_KV` head pointer for the source/index only after the rows above succeed.
 
-If validation fails, none of the companion rows are written. If a duplicate
+If parsing/schema validation fails, none of the companion rows are written. If
+signature/trust verification fails, `profile_registry_install` writes only a
+quarantine row and returns `PROFILE_TRUST_VERIFICATION_FAILED`. If a duplicate
 package id/version exists with the same digest, the operation is idempotent and
 does not rewrite the row. If it exists with a different digest, the operation
 fails with a duplicate-conflict result.
@@ -208,6 +285,8 @@ fails with a duplicate-conflict result.
 | Corrupt manifest | Reject with `manifest_decode_failed`; no rows written. |
 | Incompatible schema version | Reject with `registry_schema_version_unsupported`; no rows written. |
 | Missing governance metadata | Reject per `20_profile_registry_governance.md`. |
+| Bad signature or unknown signer where signed policy is required | Write quarantine row only; no activation/install rows. |
+| Rollback target missing, current, revoked, quarantined, or untrusted | Reject with `PROFILE_ROLLBACK_UNAVAILABLE`; installed row unchanged. |
 | Revoked package | Reject install/activation; tombstone can still be written. |
 
 ## 8. Manual FSV contract
@@ -219,8 +298,9 @@ Runtime FSV for this model must:
 2. Trigger the real package registration path.
 3. Separately read `CF_PROFILES`/`CF_KV` after the trigger and print the exact
    source/package/profile/installed/compatibility/quality-link rows.
-4. Exercise duplicate id/version, corrupt manifest, and incompatible schema
-   version edges and prove no silent partial install.
+4. Exercise duplicate id/version, corrupt manifest, incompatible schema
+   version, bad signature, unknown signer, and rollback-target edges and prove
+   no silent partial install/activation.
 
 For this docs baseline, the synthetic fixture row files remain the physical SoT
 for expected row shape. Runtime acceptance must additionally prove the same row
@@ -236,6 +316,9 @@ classes exist in RocksDB after the MCP trigger.
 | `cf_profiles_installed_row.json` | Local installed profile row. |
 | `cf_profiles_compatibility_row.json` | Compatibility target row. |
 | `cf_profiles_quality_link_row.json` | Link from registry package to `profile_quality/v1/<profile_id>`. |
+| `cf_profiles_trust_root_row.json` | Trust root row for the synthetic Ed25519 signer. |
+| `cf_profiles_quarantine_row.json` | Quarantine-only row for a rejected signed package. |
+| `cf_profiles_rollback_row.json` | Rollback event row for restoring a prior trusted package. |
 | `cf_kv_registry_head_row.json` | Source/index head pointer in `CF_KV`. |
 | `edge_duplicate_id_version.toml` | Duplicate id/version conflict edge. |
 | `edge_corrupt_manifest.toml` | Corrupt manifest edge. |

@@ -24,6 +24,10 @@ pub struct ProfilePackageManifest {
     pub changelog: Vec<PackageChangelogEntry>,
     pub hashes: PackageHashes,
     pub files: PackageFiles,
+    #[serde(default)]
+    pub trust: PackageTrust,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub signatures: Vec<PackageSignature>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub metadata: BTreeMap<String, String>,
 }
@@ -148,4 +152,35 @@ pub struct PackageFiles {
     pub profile_toml: String,
     #[serde(default)]
     pub assets: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageTrust {
+    #[serde(default = "default_trust_policy")]
+    pub policy: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub required_signers: Vec<String>,
+}
+
+impl Default for PackageTrust {
+    fn default() -> Self {
+        Self {
+            policy: default_trust_policy(),
+            required_signers: Vec::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PackageSignature {
+    pub signer_id: String,
+    pub key_id: String,
+    pub algorithm: String,
+    pub signature: String,
+}
+
+fn default_trust_policy() -> String {
+    "local_unsigned_allowed".to_owned()
 }

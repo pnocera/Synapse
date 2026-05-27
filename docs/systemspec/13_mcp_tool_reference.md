@@ -7,7 +7,7 @@ Source files covered:
 - `crates/synapse-mcp/src/m3/{audio, permissions, profile, profile_quality, profile_registry, reflex, replay, subscribe}.rs`
 - `crates/synapse-core/src/types.rs`
 
-All 41 tools below are registered on `SynapseService` via `#[tool(description=...)]` in `server.rs`. Tool descriptions are taken verbatim from the source. Every tool returns through `Json<T>` so the response shape exactly matches the deserialized response struct.
+All 42 tools below are registered on `SynapseService` via `#[tool(description=...)]` in `server.rs`. Tool descriptions are taken verbatim from the source. Every tool returns through `Json<T>` so the response shape exactly matches the deserialized response struct.
 
 Default error response shape (all tools): `ErrorData { code: rmcp::ErrorCode(-32099), message, data: { "code": <SCREAMING_SNAKE_CASE> } }` via `crates/synapse-mcp/src/m1.rs::mcp_error`.
 
@@ -427,22 +427,30 @@ where `row` includes the decoded JSON value when found.
 
 **Description:** "Install or update a local profile registry package manifest"
 **Permissions:** `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE`
-**Side effects:** validates manifest/profile files; writes `CF_PROFILES`
-registry rows and a `CF_KV` source head pointer; reads written rows back
+**Side effects:** validates manifest/profile files; enforces signed package
+trust where required; writes `CF_PROFILES` registry rows and a `CF_KV` source
+head pointer; reads written rows back. Failed trust verification writes only a
+`profile_package_quarantine` row in `CF_PROFILES`.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
 | `manifest_path` | `String` | yes | — | Local package manifest TOML path |
 | `expected_manifest_digest` | `Option<String>` | no | — | Optional `sha256:<hex>` digest that must match manifest bytes |
 | `source_id` | `String` | no | `registry.local` | Lowercase source id for source/head rows |
+| `trust_policy` | `String` | no | `local_first` | `local_first` permits local unsigned packages after parser validation; `signed_required` requires a trusted Ed25519 signature |
 
 **Returns:** `ProfileRegistryInstallResponse { operation, source_id,
 package_id, package_version, profile_id, profile_version, manifest_path,
-manifest_digest, profile_toml_path, wrote_rows, idempotent,
+manifest_digest, profile_toml_path, wrote_rows, idempotent, trust_status,
+signature_status, signer_id, trust_root_key, signature_payload_digest,
 cf_profile_row_keys, cf_kv_row_keys, row_summaries }`.
 
 Duplicate package id/version with the same manifest digest is an idempotent
 no-op. Duplicate id/version with a different digest fails closed.
+Signed-required packages with missing, invalid, or unknown-signer signatures
+fail closed with `PROFILE_TRUST_VERIFICATION_FAILED`; package/profile/installed
+rows are not activated, and the response error data carries the quarantine row
+key and readback.
 
 ## 23e. `profile_registry_disable`
 
@@ -491,7 +499,36 @@ cf_profile_rows_written, cf_kv_rows_written, rows }`.
 **Errors:** `TOOL_PARAMS_INVALID` for malformed bundle schema, unsupported CF,
 non-registry key, invalid `CF_KV` namespace, or non-object row values.
 
-## 23h. `audit_intelligence_query`
+## 23h. `profile_registry_rollback`
+
+**Description:** "Rollback an installed profile registry row to a prior trusted package"
+**Permissions:** `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE`
+**Side effects:** validates a prior package row, rewrites
+`CF_PROFILES/profile_registry/v1/installed/<profile_id>`, writes a rollback row
+under `CF_PROFILES/profile_registry/v1/rollback/<profile_id>/<timestamp>`, and
+reads both rows back.
+
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `profile_id` | `String` | yes | Installed profile id to restore |
+| `target_package_id` | `Option<String>` | no | Optional explicit package id; must be paired with `target_package_version` |
+| `target_package_version` | `Option<String>` | no | Optional explicit package version; must be paired with `target_package_id` |
+| `reason` | `Option<String>` | no | Local rollback reason stored on the rollback row |
+
+If no explicit target is supplied, the tool selects the newest prior package
+version for the installed profile. The target package row must be active,
+unrevoked, match the profile id, and carry `trust_status = "trusted"` or
+`"local_validated"`.
+
+**Returns:** `ProfileRegistryRollbackResponse { profile_id, installed_row_key,
+rollback_row_key, previous_package_id, previous_package_version,
+rolled_back_package_id, rolled_back_package_version, installed_row,
+rollback_row }`. The installed row readback carries the rolled-back package's
+trust/signature metadata, not stale metadata from the package being replaced.
+**Errors:** `TOOL_PARAMS_INVALID`, `PROFILE_ROLLBACK_UNAVAILABLE`,
+`STORAGE_READ_FAILED`, `STORAGE_WRITE_FAILED`.
+
+## 23i. `audit_intelligence_query`
 
 **Description:** "Summarize profile-linked audit outcomes for registry intelligence"
 **Permissions:** `READ_PROFILE`, `READ_STORAGE`
@@ -626,7 +663,7 @@ For convenience the M3 tool-call gating is summarized here (live source: `crates
 | `audio_tail`, `audio_transcribe` | `READ_AUDIO` |
 | `profile_quality_refresh` | `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE` |
 | `profile_registry_search`, `profile_registry_inspect`, `profile_registry_export`, `audit_intelligence_query` | `READ_PROFILE`, `READ_STORAGE` |
-| `profile_registry_install`, `profile_registry_disable`, `profile_registry_import` | `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE` |
+| `profile_registry_install`, `profile_registry_disable`, `profile_registry_import`, `profile_registry_rollback` | `READ_PROFILE`, `READ_STORAGE`, `WRITE_STORAGE` |
 | `storage_inspect` | `READ_STORAGE` |
 | `storage_put_probe_rows`, `storage_gc_once`, `storage_pressure_sample` | `WRITE_STORAGE` |
 

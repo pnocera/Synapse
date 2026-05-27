@@ -84,6 +84,7 @@ fn m3_tool_stub_names_are_stable() {
         "profile_registry_disable",
         "profile_registry_export",
         "profile_registry_import",
+        "profile_registry_rollback",
         "audit_intelligence_query",
         "replay_record",
         "audio_tail",

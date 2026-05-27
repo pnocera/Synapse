@@ -357,10 +357,18 @@ policy, and operator consent id.
 The M5 runtime registry surface now includes `profile_registry_search`,
 `profile_registry_inspect`, `profile_registry_install`,
 `profile_registry_disable`, `profile_registry_export`,
-`profile_registry_import`, and `audit_intelligence_query`. These tools operate
-on the physical `CF_PROFILES` / `CF_KV` row namespaces below and return exact
-row keys or bundle paths so manual FSV can trigger the real MCP tool and then
-separately read the stored RocksDB rows or filesystem bundle.
+`profile_registry_import`, `profile_registry_rollback`, and
+`audit_intelligence_query`. These tools operate on the physical `CF_PROFILES` /
+`CF_KV` row namespaces below and return exact row keys or bundle paths so manual
+FSV can trigger the real MCP tool and then separately read the stored RocksDB
+rows or filesystem bundle.
+
+`profile_registry_install` enforces signed package trust when a package or
+operator call requires it. Successful signed installs write trust status and a
+trust-root row; failed signatures, missing signatures, or unknown signers write
+only a quarantine row and do not activate. `profile_registry_rollback` rewrites
+an installed row only to a prior active package row whose trust status is
+`trusted` or `local_validated`, and writes a rollback evidence row.
 
 ### 7.1 Local profile registry row namespaces
 
@@ -376,6 +384,9 @@ is needed. `CF_KV` is reserved only for tiny registry head/pointer rows.
 | Installed profile | `CF_PROFILES` | `profile_registry/v1/installed/<profile_id>` |
 | Compatibility target | `CF_PROFILES` | `profile_registry/v1/compat/<target_id>/<profile_id>/<profile_version>` |
 | Quality link | `CF_PROFILES` | `profile_registry/v1/quality_link/<profile_id>/<profile_version>` |
+| Trust root | `CF_PROFILES` | `profile_registry/v1/trust_root/<signer_id>/<key_id_hex>` |
+| Quarantined package | `CF_PROFILES` | `profile_registry/v1/quarantine/<package_id>/<package_version>/<digest-prefix>` |
+| Rollback event | `CF_PROFILES` | `profile_registry/v1/rollback/<profile_id>/<timestamp>` |
 | Registry head pointer | `CF_KV` | `profile_registry/v1/head/<source_id>` |
 
 The data model and synthetic row fixtures are defined in
@@ -577,9 +588,14 @@ Synapse watches the profile directory via `notify` crate. File changes trigger r
 
 `version` is semver. Loader rejects profiles whose major > Synapse-supported major. Minor is informational. Expected workflow: community-contributed profiles in a separate repo, installed via `synapse-mcp profiles install <repo>/<name>`.
 
-### 8.7 Profile signing (post-v1)
+### 8.7 Profile signing
 
-Profiles are TOML data; no scripts in v1. Post-v1: optional profile signing via a community-key model so the operator can choose to load only signed profiles. Tracked in `16_open_questions.md`.
+Profiles are TOML data; no scripts in v1. M5 registry packages can carry
+Ed25519 signatures over deterministic package metadata. Local unsigned packages
+remain allowed only under the explicit `local_first` install policy; packages
+or operator calls that require signed trust fail closed into quarantine unless a
+trusted local signer verifies the payload. Broader community/shared trust-root
+governance remains tracked by #469/#470.
 
 ---
 

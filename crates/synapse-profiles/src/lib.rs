@@ -10,7 +10,8 @@ pub use package::{
     PROFILE_PACKAGE_KIND, PROFILE_PACKAGE_SCHEMA_VERSION, PackageAssumptions, PackageAuthor,
     PackageChangelogEntry, PackageContributionPermissions, PackageDependency,
     PackageExecutionPermissions, PackageFiles, PackageHashes, PackageInput, PackagePermissions,
-    PackageSource, PackageTarget, ProfilePackageManifest, package_manifest_digest,
+    PackageSignature, PackageSource, PackageTarget, PackageTrust, ProfilePackageManifest,
+    package_manifest_digest, package_signature_payload, package_signature_payload_digest,
     parse_package_manifest_bytes, parse_package_manifest_bytes_with_digest,
     parse_package_manifest_file,
 };

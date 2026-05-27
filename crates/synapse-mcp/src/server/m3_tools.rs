@@ -6,19 +6,19 @@ use super::{
     ProfileRegistryDisableResponse, ProfileRegistryExportParams, ProfileRegistryExportResponse,
     ProfileRegistryImportParams, ProfileRegistryImportResponse, ProfileRegistryInspectParams,
     ProfileRegistryInspectResponse, ProfileRegistryInstallParams, ProfileRegistryInstallResponse,
-    ProfileRegistrySearchParams, ProfileRegistrySearchResponse, ReflexCancelParams,
-    ReflexCancelResponse, ReflexHistoryParams, ReflexHistoryResponse, ReflexListParams,
-    ReflexListResponse, ReflexRegisterParams, ReflexRegisterResponse, ReplayRecordParams,
-    ReplayRecordResponse, StorageGcOnceParams, StorageGcOnceResponse, StorageInspectParams,
-    StorageInspectResponse, StoragePressureSampleParams, StoragePressureSampleResponse,
-    StoragePutProbeRowsParams, StoragePutProbeRowsResponse, SubscribeCancelParams,
-    SubscribeCancelResponse, SubscribeParams, SubscribeResponse, SynapseService,
-    apply_storage_pressure_sample, cancel_reflex, cancel_subscription, disable_registry_profile,
-    export_registry, history_reflexes, import_registry, inspect_registry, inspect_storage,
-    install_registry_package, list_profiles, list_reflexes, put_probe_rows,
-    query_audit_intelligence, record_replay, refresh_profile_quality, register_reflex,
-    run_storage_gc_once, search_registry, subscribe_to_events, tail_audio, tool, tool_router,
-    transcribe_audio,
+    ProfileRegistryRollbackParams, ProfileRegistryRollbackResponse, ProfileRegistrySearchParams,
+    ProfileRegistrySearchResponse, ReflexCancelParams, ReflexCancelResponse, ReflexHistoryParams,
+    ReflexHistoryResponse, ReflexListParams, ReflexListResponse, ReflexRegisterParams,
+    ReflexRegisterResponse, ReplayRecordParams, ReplayRecordResponse, StorageGcOnceParams,
+    StorageGcOnceResponse, StorageInspectParams, StorageInspectResponse,
+    StoragePressureSampleParams, StoragePressureSampleResponse, StoragePutProbeRowsParams,
+    StoragePutProbeRowsResponse, SubscribeCancelParams, SubscribeCancelResponse, SubscribeParams,
+    SubscribeResponse, SynapseService, apply_storage_pressure_sample, cancel_reflex,
+    cancel_subscription, disable_registry_profile, export_registry, history_reflexes,
+    import_registry, inspect_registry, inspect_storage, install_registry_package, list_profiles,
+    list_reflexes, put_probe_rows, query_audit_intelligence, record_replay,
+    refresh_profile_quality, register_reflex, rollback_registry_profile, run_storage_gc_once,
+    search_registry, subscribe_to_events, tail_audio, tool, tool_router, transcribe_audio,
 };
 
 #[tool_router(router = m3_tool_router, vis = "pub(super)")]
@@ -335,6 +335,27 @@ impl SynapseService {
         )?;
         let reflex_runtime = self.reflex_runtime()?;
         import_registry(&reflex_runtime, &params.0).map(Json)
+    }
+
+    #[tool(description = "Rollback an installed profile registry row to a prior trusted package")]
+    pub async fn profile_registry_rollback(
+        &self,
+        params: Parameters<ProfileRegistryRollbackParams>,
+    ) -> Result<Json<ProfileRegistryRollbackResponse>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "profile_registry_rollback",
+            profile_id = %params.0.profile_id,
+            target_package_id = ?params.0.target_package_id,
+            target_package_version = ?params.0.target_package_version,
+            "tool.invocation kind=profile_registry_rollback"
+        );
+        self.require_m3_permissions(
+            "profile_registry_rollback",
+            &crate::m3::profile_registry::required_permissions_rollback(&params.0),
+        )?;
+        let reflex_runtime = self.reflex_runtime()?;
+        rollback_registry_profile(&reflex_runtime, &params.0).map(Json)
     }
 
     #[tool(description = "Summarize profile-linked audit outcomes for registry intelligence")]

@@ -422,7 +422,7 @@ impl M3ToolStub {
 }
 
 #[must_use]
-pub const fn m3_tool_stubs() -> [M3ToolStub; 23] {
+pub const fn m3_tool_stubs() -> [M3ToolStub; 24] {
     [
         subscribe::subscribe(),
         subscribe::subscribe_cancel(),
@@ -439,6 +439,7 @@ pub const fn m3_tool_stubs() -> [M3ToolStub; 23] {
         profile_registry::profile_registry_disable(),
         profile_registry::profile_registry_export(),
         profile_registry::profile_registry_import(),
+        profile_registry::profile_registry_rollback(),
         profile_registry::audit_intelligence_query(),
         replay::replay_record(),
         audio::audio_tail(),

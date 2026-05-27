@@ -85,6 +85,10 @@ registry/audit tools). Manual FSV triggers the real runtime surface and then
 reads those stores directly. GitHub Actions/CI, scripts, tests, and benchmarks
 are supporting evidence only.
 
+Issue #459 adds the trust-control layer for that loop: signed package payloads,
+local trust-root rows, quarantine rows for failed verification, and rollback
+rows for restoring only prior trusted/local-validated packages.
+
 M3 carry-over open for M4 to address:
 
 - **LoC overrun** — 500-LoC file cap was violated during M3. On `main` (HEAD `e54ca57`): `synapse-a11y/src/lib.rs` (2087), `synapse-capture/src/lib.rs` (1798), `synapse-core/src/types.rs` (1567), `synapse-mcp/src/server.rs` (1335), `synapse-mcp/src/m3/reflex.rs` (1165), `synapse-reflex/src/lib.rs` (986), `synapse-reflex/src/scheduler.rs` (890), `synapse-mcp/src/http/sse.rs` (764), `synapse-mcp/src/m3/replay.rs` (651), `synapse-models/src/lib.rs` (535). M4's Block A.0 splits these before adding hardware HID. Several test files also exceed cap.
@@ -94,14 +98,14 @@ Open M4 work (per `docs/impplan/05_m4_hardware_hid_first_game.md`):
 
 - `firmware/pico-hid/` — standalone RP2040 firmware project excluded from the root Cargo workspace; remaining firmware issues close only with real device evidence.
 - `synapse-hid-host` — serial driver with discovery, connect/IDENTIFY, CRC16 framing, pipeline/backpressure, and reconnect paths. `Backend::Hardware` uses `HardwareBackend` when `--hardware-hid <port|auto>` connects successfully, otherwise it fails closed through `HardwareUnavailableBackend`.
-- `act_combo`, `act_run_shell`, `act_launch` — three M4 tools that bring the live MCP tool count from 30 -> 33; M5 profile-registry/audit work adds `profile_quality_refresh`, six `profile_registry_*` tools, and `audit_intelligence_query`, bringing the live surface to 41.
+- `act_combo`, `act_run_shell`, `act_launch` — three M4 tools that bring the live MCP tool count from 30 -> 33; M5 profile-registry/audit work adds `profile_quality_refresh`, seven `profile_registry_*` tools including rollback, and `audit_intelligence_query`, bringing the live surface to 42.
 - `minecraft.java` profile (the first game profile) — fifth bundled profile, validated against a single-player creative world per `15_roadmap_and_milestones.md` §6.
 - M3 hold-over items still open: per-subscriber `subscribe.buffer_size` (currently hard-pinned to 4096); persistent writers for `CF_EVENTS`/`CF_OBSERVATIONS`/`CF_SESSIONS`/`CF_TELEMETRY`/`CF_PROCESS_HISTORY`/`CF_KV` (`CF_REFLEX_AUDIT` and `CF_ACTION_LOG` have live writers); audio detector → SSE-bus sink integration; HUD extraction pipeline. VLM `describe` and Florence-2 remain M5.
 
 ## 3. Tools delivered vs planned
 
 PRD `docs/computergames/05_mcp_tool_surface.md` started from a 30-tool M3
-baseline and now records the approved 41-tool live surface after M4/M5
+baseline and now records the approved 42-tool live surface after M4/M5
 expansion. Current build:
 
 | # | Tool | Milestone | Status | Note |
@@ -147,14 +151,15 @@ expansion. Current build:
 | 38 | `profile_registry_disable` | M5 (registry/audit) | live | disables or removes an installed registry row |
 | 39 | `profile_registry_export` | M5 (registry/audit) | live | exports local registry bundle |
 | 40 | `profile_registry_import` | M5 (registry/audit) | live | imports validated local registry bundle |
-| 41 | `audit_intelligence_query` | M5 (registry/audit) | live | summarizes profile-linked audit outcomes |
+| 41 | `profile_registry_rollback` | M5 (registry/audit) | live | restores installed profile to a prior trusted package |
+| 42 | `audit_intelligence_query` | M5 (registry/audit) | live | summarizes profile-linked audit outcomes |
 | — | `describe` | M5 (VLM) | not live | Florence-2 |
 
-Live count in `crates/synapse-mcp/src/server.rs`: **41** (M1: 6, M2: 9,
-M3/M5 module stubs: 23 including `profile_quality_refresh`, six
+Live count in `crates/synapse-mcp/src/server.rs`: **42** (M1: 6, M2: 9,
+M3/M5 module stubs: 24 including `profile_quality_refresh`, seven
 `profile_registry_*` tools, `audit_intelligence_query`, and 4 operator storage
 diagnostics, plus M4 `act_combo`/`act_run_shell`/`act_launch`; the M3
-`m3_tool_stubs()` length-asserts to 23).
+`m3_tool_stubs()` length-asserts to 24).
 
 ## 4. Architecture Decision Records (ADRs)
 
