@@ -4,6 +4,7 @@ use synapse_core::DetectionBatch;
 mod download;
 mod ep;
 mod error;
+mod registry;
 mod session;
 mod verify;
 
@@ -11,6 +12,13 @@ pub use download::{ModelDescriptor, default_model_dir, model_download_failed};
 pub use ep::{ModelBackend, default_provider_order};
 pub use error::{
     ModelError, ModelResult, detection_infer_failed, detection_model_not_loaded, detection_no_frame,
+};
+pub use registry::{
+    COCO80_CLASS_MAP, DEFAULT_DETECTION_INPUT_SHAPE, DEFAULT_DETECTION_MODEL_ID, REGISTERED_MODELS,
+    RTDETR_V2_S_COCO_ONNX, RTDETR_V2_S_COCO_ONNX_DOWNLOAD_URL, RTDETR_V2_S_COCO_ONNX_FILENAME,
+    RTDETR_V2_S_COCO_ONNX_ID, RTDETR_V2_S_COCO_ONNX_LICENSE, RTDETR_V2_S_COCO_ONNX_SHA256,
+    RTDETR_V2_S_COCO_ONNX_SOURCE_MODEL, RTDETR_V2_S_COCO_ONNX_SOURCE_REPO, RegisteredModel,
+    default_detection_model, default_detection_model_descriptor, registered_model,
 };
 pub use session::{
     LoadedModel, ModelLoader, OrtSessionFactory, SessionBuildResult, SessionFactory, SessionHandle,

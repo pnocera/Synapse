@@ -59,7 +59,7 @@ at = "2026-05-27T20:05:00Z"
 summary = "Invalid unknown use-scope edge for Minecraft Java curated starter registry."
 
 [hashes]
-profile_toml_sha256 = "sha256:055855a4039bc42766b616206e56c70cca3a51ec7bfa404a0e5f62435c59c9d1"
+profile_toml_sha256 = "sha256:4054a4d0195574b719f7ef7bd2abcd4ce4522de2b1882d0d8f270d1be7904a98"
 package_sha256 = "sha256:4824824824824824824824824824824824824824824824824824824824824824"
 
 [files]

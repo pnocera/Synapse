@@ -7,9 +7,12 @@ use std::{
 
 use synapse_core::error_codes;
 use synapse_models::{
-    DetectOpts, DetectionFrame, Detector, ModelBackend, ModelDescriptor, ModelError, ModelLoader,
-    ModelResult, SessionBuildResult, SessionFactory, SessionHandle, detection_infer_failed,
-    detection_model_not_loaded, model_download_failed, sha256_file,
+    DEFAULT_DETECTION_MODEL_ID, DetectOpts, DetectionFrame, Detector, ModelBackend,
+    ModelDescriptor, ModelError, ModelLoader, ModelResult, RTDETR_V2_S_COCO_ONNX_DOWNLOAD_URL,
+    RTDETR_V2_S_COCO_ONNX_FILENAME, RTDETR_V2_S_COCO_ONNX_LICENSE, RTDETR_V2_S_COCO_ONNX_SHA256,
+    SessionBuildResult, SessionFactory, SessionHandle, default_detection_model,
+    default_detection_model_descriptor, detection_infer_failed, detection_model_not_loaded,
+    model_download_failed, registered_model, sha256_file,
 };
 use tempfile::NamedTempFile;
 
@@ -233,6 +236,29 @@ fn missing_yolov10n_file_is_not_an_error() -> TestResult {
 }
 
 #[test]
+fn missing_default_detection_file_is_not_an_error() -> TestResult {
+    let tempdir = tempfile::tempdir()?;
+    let missing = tempdir.path().join(RTDETR_V2_S_COCO_ONNX_FILENAME);
+    let mut descriptor = default_detection_model_descriptor();
+    descriptor.path.clone_from(&missing);
+    let loader = ModelLoader::default();
+    let factory = FakeSessionFactory::success(ModelBackend::Cpu);
+    record(format_args!(
+        "regression_state=default_detection_loader edge=missing before=model_id:{} exists:{} path:{}",
+        descriptor.id,
+        missing.exists(),
+        missing.display()
+    ))?;
+    let after = loader.load_if_present(descriptor, &factory)?;
+    record(format_args!(
+        "regression_state=default_detection_loader edge=missing after={after:?}"
+    ))?;
+    assert!(after.is_none());
+    assert_eq!(factory.calls.get(), 0);
+    Ok(())
+}
+
+#[test]
 fn backend_unavailable_surfaces_provider_attempts() -> TestResult {
     let (file, digest) = temp_model(b"backend-missing")?;
     let loader = ModelLoader::new(vec![ModelBackend::Cuda, ModelBackend::DirectMl]);
@@ -269,6 +295,45 @@ fn canonical_yolov10n_descriptor_uses_local_appdata_shape() -> TestResult {
                 .collect::<PathBuf>()
         )
     );
+    Ok(())
+}
+
+#[test]
+fn default_detection_registry_points_to_rtdetr_v2_s_coco() -> TestResult {
+    let model = default_detection_model();
+    let descriptor = model.descriptor();
+    record(format_args!(
+        "regression_state=model_registry edge=default before=requested:{} after=id:{} sha256:{} url:{} license:{} classes:{}",
+        DEFAULT_DETECTION_MODEL_ID,
+        descriptor.id,
+        model.sha256,
+        model.download_url,
+        model.license_spdx,
+        model.class_map.len()
+    ))?;
+
+    assert_eq!(model.id, DEFAULT_DETECTION_MODEL_ID);
+    assert_eq!(model.license_spdx, RTDETR_V2_S_COCO_ONNX_LICENSE);
+    assert_eq!(model.sha256, RTDETR_V2_S_COCO_ONNX_SHA256);
+    assert_eq!(model.download_url, RTDETR_V2_S_COCO_ONNX_DOWNLOAD_URL);
+    assert_eq!(model.class_map.len(), 80);
+    assert_eq!(model.class_map[0], "person");
+    assert_eq!(model.class_map[66], "keyboard");
+    assert_eq!(descriptor.id, DEFAULT_DETECTION_MODEL_ID);
+    assert_eq!(descriptor.input_shape, vec![1, 3, 640, 640]);
+    assert_eq!(descriptor.class_map.len(), 80);
+    assert!(
+        descriptor.path.ends_with(
+            ["synapse", "models", RTDETR_V2_S_COCO_ONNX_FILENAME]
+                .iter()
+                .collect::<PathBuf>()
+        )
+    );
+    assert_eq!(
+        registered_model(DEFAULT_DETECTION_MODEL_ID).map(|entry| entry.id),
+        Some(DEFAULT_DETECTION_MODEL_ID)
+    );
+    assert!(registered_model("").is_none());
     Ok(())
 }
 

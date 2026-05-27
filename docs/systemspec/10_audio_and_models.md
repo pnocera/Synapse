@@ -10,6 +10,7 @@ Source files covered:
 - `crates/synapse-audio/src/stt.rs`
 - `crates/synapse-audio/src/stt/window.rs`
 - `crates/synapse-models/src/lib.rs`
+- `crates/synapse-models/src/registry.rs`
 - `crates/synapse-mcp/src/m3/audio.rs`
 
 ## 1. `synapse-audio`
@@ -163,7 +164,8 @@ directml = ["ort", "ort/directml"]
 
 | Type | Definition |
 |---|---|
-| `ModelDescriptor` | `{ id: String, path: PathBuf, sha256: String, input_shape: Vec<usize>, class_map: Vec<String> }`. `yolov10n_general(sha256, class_map)` ctor produces the canonical YOLOv10-nano descriptor with `path = default_model_dir().join("yolov10n_general.onnx")` and `input_shape = vec![1, 3, 640, 640]`. |
+| `ModelDescriptor` | `{ id: String, path: PathBuf, sha256: String, input_shape: Vec<usize>, class_map: Vec<String> }`. `yolov10n_general(sha256, class_map)` remains for legacy/operator-imported YOLO descriptors. The default detector comes from `registry.rs` as `rtdetr_v2_s_coco_onnx` with `path = default_model_dir().join("rtdetr_v2_s_coco.onnx")`, `sha256:583a236ac21c95a7fd94f284fc21485e42355bfef82c27011ba78fbc09ee87e2`, input shape `[1, 3, 640, 640]`, and the COCO 80 class map. |
+| `RegisteredModel` | Registry metadata for default detection models: id, label, filename, SHA-256, download URL, license SPDX, source model/repo, input shape, and class map. `DEFAULT_DETECTION_MODEL_ID = "rtdetr_v2_s_coco_onnx"` per ADR-0010. |
 | `ModelBackend` | `Cuda` \| `DirectMl` \| `Cpu` (default) |
 | `DetectOpts` | `{ confidence_threshold: u16 (default 50), max_detections: usize (default 100) }` |
 | `DetectionFrame` | `{ frame_seq: u64, width: u32, height: u32 }`. `validate()` returns `DETECTION_NO_FRAME` for zero dimensions. |
@@ -177,7 +179,7 @@ When the `ort` feature is enabled:
 1. `Detector::load(descriptor: &ModelDescriptor)` reads the file bytes.
 2. Computes SHA-256 (`sha2::Sha256`) and compares against `descriptor.sha256`. Mismatch → `ModelError::HashMismatch` → `MODEL_HASH_MISMATCH`.
 3. Constructs an `ort::Session` with the configured `ModelBackend` (`Cpu` if no acceleration feature is enabled).
-4. Per-inference: validates the frame, runs the session, decodes the YOLOv10 output tensor into `Vec<Detection>` filtered by `confidence_threshold/100` and capped at `max_detections`.
+4. Per-inference: validates the frame, runs the session, decodes the model output tensor into `Vec<Detection>` filtered by `confidence_threshold/100` and capped at `max_detections`.
 
 When `ort` is not enabled, all `Detector::load` paths return `ModelError::BackendUnavailable` → `MODEL_BACKEND_UNAVAILABLE`.
 
@@ -237,4 +239,4 @@ See `tests/fixtures/audio/README.md` for the synthesis recipe.
 - **No streaming transcription.** `audio_transcribe` returns a complete `Transcription` after running over the buffered tail; there is no incremental streaming API.
 - **Model auto-download.** `MODEL_DOWNLOAD_FAILED` is reserved as an error code but there is no download path; when a workflow requires the ONNX file, the agent acquires or imports it on the configured host through a license-compliant local setup path and verifies `synapse-audio::stt::default_model_path()` plus the expected hash directly.
 - **Custom audio devices.** WASAPI loopback always uses the default render endpoint; there is no selector for non-default outputs.
-- **YOLO inference pipeline.** `synapse-models::Detector::load` works end-to-end but no `M1State` code path runs detection yet (entities are populated only by synthetic fixtures).
+- **Minecraft-specific entity detector.** ADR-0010 selects a license-safe general COCO detector. Labels such as `creeper` and `zombie` still need a future fine-tune or profile-specific detector.

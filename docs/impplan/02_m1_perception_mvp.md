@@ -67,7 +67,7 @@ Notepad open with cursor in editor → agent calls `observe()` → reply has `fo
 
 | Model | Purpose | Source |
 |---|---|---|
-| `yolov10n_general.onnx` | Default detection | downloaded at first need (sha-verified); license-permissive build only — Ultralytics AGPL weights forbidden in bundle (`OQ-025`) |
+| `yolov10n_general.onnx` | Archival M1 detector placeholder | superseded as default by ADR-0010 (`rtdetr_v2_s_coco_onnx`); YOLO remains operator-import only when license-compliant and SHA-pinned |
 | WinRT OCR | OS-provided via `Windows.Media.Ocr` | no download |
 
 ### Error codes (must throw + test)

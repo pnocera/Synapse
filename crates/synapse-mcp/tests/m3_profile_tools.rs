@@ -164,8 +164,10 @@ fn assert_initial_profile_list(list: &Value) -> anyhow::Result<()> {
         .find(|profile| profile["id"] == "beta")
         .context("beta profile missing")?;
     assert_eq!(alpha["use_scope"], "productivity");
+    assert_eq!(alpha["detection_model_id"], "alpha_detector");
     assert_eq!(alpha["metadata"]["test_profile_id"], "alpha");
     assert_eq!(beta["use_scope"], "productivity");
+    assert_eq!(beta["detection_model_id"], "beta_detector");
     assert_eq!(beta["metadata"]["test_profile_id"], "beta");
     assert!(
         listed
@@ -289,6 +291,12 @@ keyboard_dynamics_default = "natural"
 
 [[matches]]
 exe = "{exe}"
+
+[detection]
+model_id = "{id}_detector"
+classes_of_interest = ["window", "text"]
+confidence_threshold = 0.50
+max_detections = 8
 
 [metadata]
 test_profile_id = "{id}"

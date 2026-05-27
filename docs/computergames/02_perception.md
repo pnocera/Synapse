@@ -159,12 +159,15 @@ When pixel-path perception is needed, run a small object detection model per cap
 
 | Model | Size | Latency on RTX 3060 (DirectML) | Latency on RTX 5090 (CUDA) | Use |
 |---|---|---|---|---|
-| YOLOv8n / YOLOv10n | ~6 MB | ~6 ms @ 640px | ~2 ms @ 640px | Default. Object detection. |
-| YOLOv8s | ~22 MB | ~10 ms | ~3 ms | Higher accuracy when latency budget permits |
-| RT-DETR-s | ~80 MB | ~25 ms | ~5 ms | Stable-jitter alternative; selectable per profile |
+| RT-DETRv2-S COCO ONNX | ~81 MB | ~25 ms @ 640px | ~5 ms @ 640px | Default per ADR-0010. License-safe general object detection. |
+| YOLOv10n / YOLOv8n | ~6 MB | ~6 ms @ 640px | ~2 ms @ 640px | Operator-import only when the checkpoint is license-compliant and SHA-pinned. |
+| YOLOv8s | ~22 MB | ~10 ms | ~3 ms | Optional import for higher accuracy when latency budget permits. |
 | Florence-2-base (or similar) | ~480 MB | ~120 ms | ~25 ms | Slow loop only, ≤1 Hz, for unknown-game labeling |
 
-**Selectable per profile.** Productivity profile (Notepad) disables detection entirely. Game profile pins YOLOv10n at 60 Hz.
+**Selectable per profile.** Productivity profile (Notepad) disables detection
+entirely. The Minecraft profile pins `rtdetr_v2_s_coco_onnx`. Future
+Minecraft-specific fine-tuned detectors can override the profile model id when
+they have license-clean artifacts and SHA-pinned registry rows.
 
 ### Inference path
 
@@ -205,7 +208,12 @@ Lightweight tracker assigns persistent `track_id`s by IoU + class-name matching 
 
 ### Model cache
 
-Models live in `%LOCALAPPDATA%\synapse\models\<sha256>.onnx`. On first need, Synapse downloads from a configured URL list (defaults: public GitHub releases). SHA-verified before load. NEVER load a model without verification.
+Models live under `%LOCALAPPDATA%\synapse\models\`. The default registry entry
+declares `rtdetr_v2_s_coco_onnx`, filename `rtdetr_v2_s_coco.onnx`, its
+download URL, and SHA-256. The current runtime fails closed if a model is
+missing; setup/import work must acquire the artifact through a license-compliant
+local path and then verify SHA before load. NEVER load a model without
+verification.
 
 For offline use, operator side-loads: `synapse-mcp models import <path>`.
 
@@ -425,7 +433,7 @@ Sensors recover independently. UIA failure does not stop pixel capture, and vice
 |---|---|---|---|
 | Capture (idle, no consumers) | ~0.1% | ~0% (texture shared with DWM) | ~10 MB |
 | Capture (60 fps, consumer attached) | ~2% | ~2% | ~40 MB |
-| Detection at 60 fps (YOLOv10n) | ~3% | ~15% on RTX 5090 | ~250 MB |
+| Detection async loop (RT-DETRv2-S COCO) | ~5% | ~20% on RTX 5090 | ~350 MB |
 | UIA event subscriber | ~1% | 0 | ~10 MB |
 | Audio loopback + ring buffer | ~0.5% | 0 | ~5 MB |
 | OCR (on demand, region) | spike to ~5% for ~5 ms | spike to ~10% | ~50 MB |

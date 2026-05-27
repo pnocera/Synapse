@@ -591,7 +591,7 @@ min_update_interval_ms = 16
 cursor_visible = true
 
 [detection]
-model_id = "yolov10n_general"
+model_id = "rtdetr_v2_s_coco_onnx"
 classes_of_interest = ["player", "zombie", "skeleton", "creeper", "villager"]
 confidence_threshold = 0.45
 max_detections = 32

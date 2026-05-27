@@ -57,7 +57,7 @@ fn bundled_minecraft_profile_carries_first_game_contract() -> Result<(), Box<dyn
     assert_eq!(profile.matches.len(), 2);
     assert_eq!(
         profile.detection.model_id.as_deref(),
-        Some("yolov10n_general")
+        Some("rtdetr_v2_s_coco_onnx")
     );
     assert_eq!(
         profile.detection.classes_of_interest,

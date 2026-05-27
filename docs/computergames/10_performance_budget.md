@@ -22,7 +22,7 @@ Every PR violating a target either fixes the regression or comes with an explici
 | Reflex `on_event` matched → action emitted | ≤ 5 ms p99 |  |
 | Reflex `aim_track` per-tick adjustment | ≤ 2 ms p99 |  |
 | Capture loop frame interval | 16 ms (60 fps) | configurable per profile |
-| Detection inference (YOLOv10n, 640px) | ≤ 8 ms p99 | RTX 3060 DirectML / RTX 4090+ CUDA |
+| Detection inference (RT-DETRv2-S COCO, 640px) | ≤ 25 ms p99 DirectML / ≤ 8 ms p99 CUDA | Default model per ADR-0010; runs async from `observe()` latest-result lookup |
 | OCR WinRT, single small region | ≤ 8 ms p99 |  |
 | Health check `health` tool | ≤ 5 ms |  |
 
@@ -56,7 +56,7 @@ Idle = no agent connected, no profile active. Active = an agent running and exer
 | Subsystem | Idle | Active |
 |---|---|---|
 | Process RSS (no models loaded) | ≤ 80 MB | ≤ 200 MB |
-| Process RSS (YOLOv10n + Whisper-tiny loaded) | ≤ 250 MB | ≤ 500 MB |
+| Process RSS (RT-DETRv2-S COCO + Whisper-tiny loaded) | ≤ 350 MB | ≤ 700 MB |
 | GPU VRAM (models resident) | ≤ 500 MB | ≤ 1500 MB |
 | Capture textures | ≤ 50 MB | ≤ 100 MB |
 | Event bus buffers | ≤ 10 MB | ≤ 50 MB |
@@ -98,8 +98,8 @@ Different profiles change the load. A game profile must not blow up productivity
 |---|---|---|---|---|---|
 | Notepad / VS Code (a11y_only) | 0 (disabled) | none | on demand | ~0 | ~0 |
 | Chrome (hybrid) | 5 (poll) | none | on demand | ~1% | ~0 |
-| Minecraft (pixel_only) | 60 | YOLOv10n | HUD continuous | ~4% | ~12% |
-| FPS demo (pixel_only) | 60 | YOLOv10n | HUD continuous + audio | ~5% | ~14% |
+| Minecraft (pixel_only) | 60 capture / async detection | RT-DETRv2-S COCO | HUD continuous | ~5% | ~18% |
+| FPS demo (pixel_only) | 60 capture / async detection | RT-DETRv2-S COCO | HUD continuous + audio | ~6% | ~20% |
 
 Higher capture FPS (e.g., 144 for high-fps replay analysis) scales CPU/GPU linearly. Documented in profile TOML comments.
 
@@ -190,7 +190,7 @@ Every bounded channel has a documented drop policy:
 |---|---|
 | Process startup → MCP server ready to accept connections | ≤ 1.0 s |
 | Profile load + cache warm | ≤ 200 ms per profile |
-| Model load (YOLOv10n) | ≤ 1.5 s (CUDA), ≤ 3 s (DirectML), ≤ 8 s (CPU) |
+| Model load (RT-DETRv2-S COCO) | ≤ 2.5 s (CUDA), ≤ 5 s (DirectML), ≤ 12 s (CPU) |
 | First `observe()` after connect | ≤ 100 ms (depends on first UIA call) |
 | First `act_press` | ≤ 5 ms |
 
@@ -263,7 +263,7 @@ SERVER-SIDE latencies, measured from request parse to response send. Network and
 - `bench_aim_curve_step_calc`: <1 µs per step
 - `bench_action_software_press`: 1 ms p99
 - `bench_action_hardware_press`: 5 ms p99 (requires HW gateway attached)
-- `bench_detection_yolov10n_640`: 8 ms p99 (GPU dependent)
+- `bench_detection_rtdetr_v2_s_coco_640`: 25 ms p99 DirectML / 8 ms p99 CUDA (GPU dependent)
 - `bench_ocr_winrt_120x32`: 8 ms p99
 
 Benches run locally on the configured Windows host with Criterion named baselines and exported `critcmp` JSON. Regression > 20% blocks next release unless fixed or accepted by ADR with measurable justification.

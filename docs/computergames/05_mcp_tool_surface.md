@@ -896,7 +896,7 @@ Returns count of released inputs by class.
 ### 3.27 `profile_list`
 
 ```json
-{"name": "profile_list", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"filter": {"type":"string"}}}}
+{"name": "profile_list", "input_schema": {"type": "object", "additionalProperties": false, "properties": {"include_inactive": {"type": "boolean", "default": true}}}}
 ```
 
 Returns:
@@ -904,10 +904,10 @@ Returns:
 ```json
 {
   "profiles": [
-    {"id": "minecraft.java", "label": "Minecraft Java Edition", "match": {"exe": "javaw.exe", "title_regex": "Minecraft"}},
-    {"id": "vscode", "label": "Visual Studio Code", "match": {"exe": "Code.exe"}}
+    {"id": "minecraft.java", "label": "Minecraft Java Edition", "detection_model_id": "rtdetr_v2_s_coco_onnx", "matches": [{"exe": "javaw.exe", "title_regex": "Minecraft.*"}]},
+    {"id": "vscode", "label": "Visual Studio Code", "detection_model_id": null, "matches": [{"exe": "Code.exe", "title_regex": null}]}
   ],
-  "active": "vscode"
+  "active_profile_id": "vscode"
 }
 ```
 

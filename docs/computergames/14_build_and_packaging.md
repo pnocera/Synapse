@@ -361,7 +361,7 @@ min_update_interval_ms = 16
 default_mode = "auto"
 
 [detection]
-default_model = "yolov10n_general"
+default_model = "rtdetr_v2_s_coco_onnx"
 backend_preference = ["cuda", "directml", "cpu"]
 
 [ocr]
@@ -536,9 +536,9 @@ Default install size targets:
 |---|---|
 | `synapse-mcp.exe` (stripped, LTO) | ≤ 15 MB |
 | `synapse-overlay.exe` | ≤ 10 MB |
-| ONNX models bundled (YOLOv10n, Whisper-tiny; WinRT-OCR is OS-provided) | ≤ 80 MB |
+| ONNX models bundled (RT-DETRv2-S COCO, Whisper-tiny; WinRT-OCR is OS-provided) | ≤ 160 MB |
 | Profiles | ≤ 1 MB |
-| Total MSI | ≤ 120 MB |
+| Total MSI | ≤ 200 MB |
 
 `describe` VLM is NOT bundled; downloaded on first use (~500 MB). Operator can opt out and skip `describe`.
 

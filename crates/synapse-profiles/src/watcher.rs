@@ -29,6 +29,7 @@ pub struct ProfileStatus {
     pub label: String,
     pub use_scope: ProfileUseScope,
     pub mode: PerceptionMode,
+    pub detection_model_id: Option<String>,
     pub detection_classes: Vec<String>,
     pub hud_fields: Vec<String>,
     pub keymap_actions: Vec<String>,
@@ -240,6 +241,7 @@ fn profile_statuses(state: &ProfileState, include_inactive: bool) -> Vec<Profile
                 label: loaded.profile.label.clone(),
                 use_scope: loaded.profile.use_scope,
                 mode: loaded.profile.mode,
+                detection_model_id: loaded.profile.detection.model_id.clone(),
                 detection_classes: loaded.profile.detection.classes_of_interest.clone(),
                 hud_fields: loaded
                     .profile

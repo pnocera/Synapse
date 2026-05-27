@@ -156,7 +156,24 @@ impl ModelLoader {
         })
     }
 
-    /// Loads the canonical `YOLOv10n` model only if it exists.
+    /// Loads a model only if its descriptor path exists.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same structured errors as [`Self::load_with_factory`] when
+    /// the file exists but verification or runtime creation fails.
+    pub fn load_if_present(
+        &self,
+        descriptor: ModelDescriptor,
+        factory: &dyn SessionFactory,
+    ) -> ModelResult<Option<LoadedModel>> {
+        if !descriptor.path.exists() {
+            return Ok(None);
+        }
+        self.load_with_factory(descriptor, factory).map(Some)
+    }
+
+    /// Loads the legacy canonical `YOLOv10n` model only if it exists.
     ///
     /// # Errors
     ///
@@ -167,10 +184,7 @@ impl ModelLoader {
         descriptor: ModelDescriptor,
         factory: &dyn SessionFactory,
     ) -> ModelResult<Option<LoadedModel>> {
-        if !descriptor.path.exists() {
-            return Ok(None);
-        }
-        self.load_with_factory(descriptor, factory).map(Some)
+        self.load_if_present(descriptor, factory)
     }
 
     /// Uses the built-in ORT session factory.

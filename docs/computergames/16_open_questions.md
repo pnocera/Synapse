@@ -32,15 +32,19 @@ configured Windows host.
 
 ---
 
-## OQ-003 — Detection model default
+## OQ-003 — Detection model default — DECIDED 2026-05-27
 
-**Q.** YOLOv10n vs RT-DETR-s as default?
+→ decided in ADR-0010.
 
-**Trade-off.** YOLOv10n: faster (~5 ms on 5090), smaller (~6 MB), higher jitter. RT-DETR-s: more stable across frames (~10 ms), bigger (~80 MB), better small-object recall.
+**Decision.** `rtdetr_v2_s_coco_onnx` (RT-DETRv2-S COCO ONNX) is the default
+general detection model and the pinned model id in `minecraft.java`.
 
-**Default.** YOLOv10n.
+**Rationale.** It has a concrete Apache-2.0 artifact, stable download URL,
+SHA-256, and COCO class map. YOLO remains operator-import/local override only
+when the supplied checkpoint is license-compliant and SHA-pinned.
 
-**Target.** M4. Benchmark both on Minecraft entity detection. Switch if RT-DETR-s materially improves task success.
+**Future change.** Minecraft-specific labels such as `creeper` and `zombie`
+still need a future license-clean fine-tune or profile-specific detector.
 
 ---
 

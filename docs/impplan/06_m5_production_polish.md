@@ -107,7 +107,7 @@ Total token cost ≤ 30 K across the whole sequence.
 1. Write-permission check on `%LOCALAPPDATA%\synapse\`
 2. License agreement acknowledgment (`08 §7`) → `%APPDATA%\synapse\agreement.json`
 3. ViGEmBus detect + optional install
-4. Model selection (YOLOv10n alternates / Whisper-tiny / optional VLM)
+4. Model selection (RT-DETRv2-S default / YOLO local alternates / Whisper-tiny / optional VLM)
 5. Profile selection (bundled set)
 6. Bearer token gen → `%APPDATA%\synapse\token.txt` (Windows ACL: SYSTEM + current user)
 7. Optional RP2040 detect + flash

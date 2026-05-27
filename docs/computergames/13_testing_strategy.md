@@ -192,7 +192,7 @@ Tracked benches:
 | `reflex_tick_jitter_under_load` | ≤ 500 µs |
 | `aim_curve_step_calc_natural` | ≤ 1 µs |
 | `action_software_press` | ≤ 3 ms |
-| `detection_yolov10n_640` | ≤ 8 ms (with GPU) |
+| `detection_rtdetr_v2_s_coco_640` | ≤ 25 ms DirectML / ≤ 8 ms CUDA |
 | `ocr_winrt_120x32` | ≤ 8 ms |
 | `serialize_observation_typical` | ≤ 5 ms |
 

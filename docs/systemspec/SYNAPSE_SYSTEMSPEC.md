@@ -3139,6 +3139,7 @@ Source files covered:
 - `crates/synapse-audio/src/stt.rs`
 - `crates/synapse-audio/src/stt/window.rs`
 - `crates/synapse-models/src/lib.rs`
+- `crates/synapse-models/src/registry.rs`
 - `crates/synapse-mcp/src/m3/audio.rs`
 
 ## 1. `synapse-audio`
@@ -3292,7 +3293,8 @@ directml = ["ort", "ort/directml"]
 
 | Type | Definition |
 |---|---|
-| `ModelDescriptor` | `{ id: String, path: PathBuf, sha256: String, input_shape: Vec<usize>, class_map: Vec<String> }`. `yolov10n_general(sha256, class_map)` ctor produces the canonical YOLOv10-nano descriptor with `path = default_model_dir().join("yolov10n_general.onnx")` and `input_shape = vec![1, 3, 640, 640]`. |
+| `ModelDescriptor` | `{ id: String, path: PathBuf, sha256: String, input_shape: Vec<usize>, class_map: Vec<String> }`. `yolov10n_general(sha256, class_map)` remains for legacy/operator-imported YOLO descriptors. The default detector comes from `registry.rs` as `rtdetr_v2_s_coco_onnx` with `path = default_model_dir().join("rtdetr_v2_s_coco.onnx")`, `sha256:583a236ac21c95a7fd94f284fc21485e42355bfef82c27011ba78fbc09ee87e2`, input shape `[1, 3, 640, 640]`, and the COCO 80 class map. |
+| `RegisteredModel` | Registry metadata for default detection models: id, label, filename, SHA-256, download URL, license SPDX, source model/repo, input shape, and class map. `DEFAULT_DETECTION_MODEL_ID = "rtdetr_v2_s_coco_onnx"` per ADR-0010. |
 | `ModelBackend` | `Cuda` \| `DirectMl` \| `Cpu` (default) |
 | `DetectOpts` | `{ confidence_threshold: u16 (default 50), max_detections: usize (default 100) }` |
 | `DetectionFrame` | `{ frame_seq: u64, width: u32, height: u32 }`. `validate()` returns `DETECTION_NO_FRAME` for zero dimensions. |
@@ -3306,7 +3308,7 @@ When the `ort` feature is enabled:
 1. `Detector::load(descriptor: &ModelDescriptor)` reads the file bytes.
 2. Computes SHA-256 (`sha2::Sha256`) and compares against `descriptor.sha256`. Mismatch → `ModelError::HashMismatch` → `MODEL_HASH_MISMATCH`.
 3. Constructs an `ort::Session` with the configured `ModelBackend` (`Cpu` if no acceleration feature is enabled).
-4. Per-inference: validates the frame, runs the session, decodes the YOLOv10 output tensor into `Vec<Detection>` filtered by `confidence_threshold/100` and capped at `max_detections`.
+4. Per-inference: validates the frame, runs the session, decodes the model output tensor into `Vec<Detection>` filtered by `confidence_threshold/100` and capped at `max_detections`.
 
 When `ort` is not enabled, all `Detector::load` paths return `ModelError::BackendUnavailable` → `MODEL_BACKEND_UNAVAILABLE`.
 
@@ -3366,7 +3368,7 @@ See `tests/fixtures/audio/README.md` for the synthesis recipe.
 - **No streaming transcription.** `audio_transcribe` returns a complete `Transcription` after running over the buffered tail; there is no incremental streaming API.
 - **Model auto-download.** `MODEL_DOWNLOAD_FAILED` is reserved as an error code but there is no download path; when a workflow requires the ONNX file, the agent acquires or imports it on the configured host through a license-compliant local setup path and verifies `synapse-audio::stt::default_model_path()` plus the expected hash directly.
 - **Custom audio devices.** WASAPI loopback always uses the default render endpoint; there is no selector for non-default outputs.
-- **YOLO inference pipeline.** `synapse-models::Detector::load` works end-to-end but no `M1State` code path runs detection yet (entities are populated only by synthetic fixtures).
+- **Minecraft-specific entity detector.** ADR-0010 selects a license-safe general COCO detector. Labels such as `creeper` and `zombie` still need a future fine-tune or profile-specific detector.
 
 
 ---
@@ -3485,6 +3487,7 @@ pub struct ProfileStatus {
     pub label: String,
     pub use_scope: ProfileUseScope,
     pub mode: PerceptionMode,
+    pub detection_model_id: Option<String>,
     pub detection_classes: Vec<String>,
     pub hud_fields: Vec<String>,
     pub keymap_actions: Vec<String>,
@@ -3746,7 +3749,7 @@ Source files covered:
 - `docs/computergames/21_profile_registry_protocol.md`
 - `docs/computergames/22_profile_registry_data_model.md`
 - `docs/computergames/23_profile_package_manifest.md`
-- `docs/adr/0001..0007*.md`
+- `docs/adr/0001..0010*.md`
 
 ## 1. Authority order
 
@@ -3908,6 +3911,7 @@ length-asserts to 33).
 | `docs/adr/0005-multi-monitor-capture-target.md` | Multi-monitor capture target | Resolution rules for `Primary`/`Monitor`/`Window`/`ElementWindow` capture targets across multi-monitor configurations |
 | `docs/adr/0006-profile-match-precedence.md` | Profile match precedence | When multiple profiles match the current foreground, the most-specific match (most non-`None` fields satisfied) wins; ties broken by load order |
 | `docs/adr/0007-per-event-vs-batched-notifications.md` | Per-event vs batched SSE notifications | One Event = one SSE frame; no in-process batching to keep `event-to-subscriber p99 ≤ 50 ms` achievable |
+| `docs/adr/0010-detection-model-default.md` | Default detection model | Default detector is `rtdetr_v2_s_coco_onnx`; YOLO remains operator-import only when license-compliant and SHA-pinned |
 
 ## 5. Operator-level invariants (from `docs/impplan/00_methodology.md`)
 
@@ -3986,10 +3990,11 @@ The PRD's "Open Questions" file enumerates roughly 30 numbered items (OQ-001 …
 | OQ-015 | Profile match precedence | ADR-0006 |
 | OQ-022 | Reflex recursion guard | ADR-0003 |
 | OQ-029 | Per-event vs batched SSE notifications | ADR-0007 |
+| OQ-003 | Default detection model is `rtdetr_v2_s_coco_onnx`; YOLO is operator-import only when license-compliant | ADR-0010 |
 | OQ-009/010/023/024 | M1 perception closures (max_elements default, CDP auto-attach, element_id stability, token budget) | M1 source |
 | operator decisions 2026-05-24 (issues #246/#247/#350/#351) | No GitHub Actions / CI as a shipping gate | `AGENTS.md` |
 
-Open items remaining (PRD §16): OQ-003 (detection model default — YOLOv10n vs RT-DETR-s), OQ-013 (aim_track EMA smoothing), OQ-016 (action coalescing on hardware) closed in M4; OQ-008 (VLM bundling), OQ-014 (Whisper-tiny vs base), OQ-017 (disk-pressure thresholds final), OQ-019 (telemetry split), OQ-020 (`game_screenshot_once` exposure), OQ-030 (GC cadence final) closed in M5; OQ-006/007/021/027/028/026/018 remain v1.x.
+Open items remaining (PRD §16): OQ-013 (aim_track EMA smoothing), OQ-016 (action coalescing on hardware) closed in M4; OQ-008 (VLM bundling), OQ-014 (Whisper-tiny vs base), OQ-017 (disk-pressure thresholds final), OQ-019 (telemetry split), OQ-020 (`game_screenshot_once` exposure), OQ-030 (GC cadence final) closed in M5; OQ-006/007/021/027/028/026/018 remain v1.x.
 
 ## 9. Doctrine documents
 
@@ -4402,7 +4407,7 @@ Default error response shape (all tools): `ErrorData { code: rmcp::ErrorCode(-32
 |---|---|---|---|---|
 | `include_inactive` | `bool` | no | `true` | When false, only the active profile is returned |
 
-**Returns:** `ProfileListResponse { profiles: Vec<ProfileStatus>, active_profile_id: Option<String> }`. Each `ProfileStatus` carries `id`, `label`, `use_scope`, `mode`, `detection_classes`, `hud_fields`, `keymap_actions`, `backends`, `event_extensions`, `matches: Vec<ProfileMatchStatus>`, `metadata: BTreeMap<String, String>`, `active: bool`, `schema_version: u32`.
+**Returns:** `ProfileListResponse { profiles: Vec<ProfileStatus>, active_profile_id: Option<String> }`. Each `ProfileStatus` carries `id`, `label`, `use_scope`, `mode`, `detection_model_id: Option<String>`, `detection_classes`, `hud_fields`, `keymap_actions`, `backends`, `event_extensions`, `matches: Vec<ProfileMatchStatus>`, `metadata: BTreeMap<String, String>`, `active: bool`, `schema_version: u32`.
 
 ## 23. `profile_activate`
 

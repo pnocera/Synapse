@@ -20,7 +20,7 @@ min_update_interval_ms = 16
 cursor_visible = true
 
 [detection]
-model_id = "yolov10n_general"
+model_id = "rtdetr_v2_s_coco_onnx"
 classes_of_interest = ["player", "zombie", "skeleton", "creeper", "villager"]
 confidence_threshold = 0.45
 max_detections = 32
@@ -95,6 +95,7 @@ benchmark_id = "minecraft.java"
 "registry.curated_tier" = "game.seed"
 "registry.curated_priority" = "p1"
 "registry.backlog_issue" = "#416,#482"
+"registry.default_detection_decision" = "#415,ADR-0010"
 "registry.quality_signal" = "profile_quality.minecraft.java"
 "registry.minimum_manual_fsv" = "profile_list,profile_registry_install,observe,storage_inspect,profile_quality_refresh,minecraft_process_window_readback,minecraft_world_log_readback,luanti_analogue_readback"
 "registry.compatibility_target" = "minecraft.java"

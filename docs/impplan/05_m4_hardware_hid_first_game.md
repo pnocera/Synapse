@@ -376,7 +376,7 @@ Profile contents:
 - Window match for `javaw.exe` and Minecraft title.
 - HUD specs for `hp_hearts`, `hunger`, and `xp`.
 - Keymap for default Minecraft Java controls.
-- Entity detection model decision from #415.
+- Entity detection model decision from #415 / ADR-0010: default `rtdetr_v2_s_coco_onnx`.
 - Event extensions for `creeper_nearby` and `low_hp`.
 - Natural motion defaults only; no `Instant` curves in bundled profile actions.
 
@@ -707,7 +707,7 @@ code exists; it is done only when the issue is closed with manual FSV evidence.
 
 | Issue | State | Work item |
 |---|---|---|
-| #415 | open | F-01 ADR: default detection model, YOLOv10n vs RT-DETR-s. |
+| #415 | open | F-01 ADR: default detection model, RT-DETRv2-S COCO selected in ADR-0010. |
 | #416 | open | F-02 `minecraft.java.toml` matches, detection, HUD, keymap, events. |
 | #417 | open | F-03 heart HUD templates. |
 | #418 | open | F-04 hunger HUD templates. |

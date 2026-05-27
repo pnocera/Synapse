@@ -108,6 +108,7 @@ pub struct ProfileStatus {
     pub label: String,
     pub use_scope: ProfileUseScope,
     pub mode: PerceptionMode,
+    pub detection_model_id: Option<String>,
     pub detection_classes: Vec<String>,
     pub hud_fields: Vec<String>,
     pub keymap_actions: Vec<String>,

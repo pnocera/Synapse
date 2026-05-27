@@ -76,7 +76,7 @@ scripts/release/ (skeleton)
 - `synapse-capture`: `windows-capture`; emit `CapturedFrame` over crossbeam channel
 - `synapse-a11y`: UIA tree walker (depth-limited snapshot); WinEvent hook (foreground, focus, value, structure); small UIA cache (focused element)
 - `synapse-perception`: stub detection (empty unless model loaded); WinRT OCR wrapper; `Observation` assembler
-- `synapse-models`: minimum ONNX loader; YOLOv10n via `ort`
+- `synapse-models`: minimum ONNX loader; default detector registry now `rtdetr_v2_s_coco_onnx` per ADR-0010
 - `synapse-mcp` adds: `observe`, `find`, `read_text`, `set_capture_target`, `set_perception_mode`, `health`
 - Coordinate transforms (per-monitor DPI)
 
@@ -162,7 +162,7 @@ Agent registers `on_event` reflex: "when Save dialog appears, type path + Enter.
 - `synapse-hid-host`: serial driver; identity handshake; frame protocol with CRC, ACK/NAK, watchdog; reconnect logic
 - `firmware/pico-hid/`: RP2040 firmware in Rust with `embassy-rp`; USB HID composite (mouse + keyboard + pad) + CDC ACM serial; watchdog, protocol parser, LED status, `.uf2` build pipeline
 - `synapse-mcp` adds: `act_combo` (reflex scheduler), `act_run_shell` (gated), `act_launch` (gated), `hid identify`, `hid flash`
-- First game profile: `minecraft.java` — HUD (hp_hearts, hunger, xp); keymap with Minecraft defaults; detection YOLOv10n_general (no MC fine-tune); `event_extensions` (`creeper_nearby`, `low_hp`)
+- First game profile: `minecraft.java` — HUD (hp_hearts, hunger, xp); keymap with Minecraft defaults; default detection `rtdetr_v2_s_coco_onnx` per ADR-0010 (no MC fine-tune yet); `event_extensions` (`creeper_nearby`, `low_hp`)
 - Supported-use policy enforcement (`08`): profile `use_scope` metadata, backend permission gating
 
 ### Out of scope
@@ -177,7 +177,7 @@ Bonus: same demo via hardware HID (`--hardware-hid auto`).
 
 ### Risk areas
 
-- Detection accuracy on Minecraft (specialty fine-tune may be needed)
+- Detection accuracy on Minecraft (RT-DETRv2-S COCO is license-safe general detection; specialty fine-tune may be needed)
 - HUD OCR for hearts/hunger via template-match; carefully cropped assets
 - Hardware HID latency under sustained load; benchmark + tune
 

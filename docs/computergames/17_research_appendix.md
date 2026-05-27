@@ -141,7 +141,7 @@ Synapse: **cubic Bezier mouse curves + Gaussian-jittered control points + Xorshi
 | Ultralytics — RTDETRv2 vs YOLOv6-3.0 | https://docs.ultralytics.com/compare/rtdetr-vs-yolov6 | RT-DETR-s 5.03ms on T4 |
 | Ultralytics — RTDETRv2 vs YOLOv5 | https://docs.ultralytics.com/compare/rtdetr-vs-yolov5 | YOLOv5n 1.12ms on T4 |
 
-Decision: default **YOLOv8n / YOLOv10n** (anchor-free, small, ~3-6ms on RTX 30x0+ via DirectML or CUDA EP). RT-DETR-s for stable-jitter use. Models via `synapse-models`; download on first use with sha verification. ONNX Runtime via `ort` crate. DirectML EP for AMD/Intel; CUDA for NVIDIA.
+Decision updated by ADR-0010: default **RT-DETRv2-S COCO ONNX** (`rtdetr_v2_s_coco_onnx`) because the selected artifact is Apache-2.0 with a stable URL, SHA-256, and COCO class map. YOLOv10n/YOLOv8n remain optional operator-import models only when the supplied checkpoint is license-compliant and SHA-pinned. Models resolve through `synapse-models`; acquisition/import must verify SHA before ONNX Runtime loads the file. ONNX Runtime via `ort` crate. DirectML EP for AMD/Intel; CUDA for NVIDIA.
 
 ---
 
