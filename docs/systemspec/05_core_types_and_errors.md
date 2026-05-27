@@ -188,6 +188,7 @@ pub struct Profile {
     pub hud: Vec<HudFieldSpec>,
     pub keymap: BTreeMap<String, String>,
     pub backends: ProfileBackends,
+    pub metadata: BTreeMap<String, String>,
     pub event_extensions: Vec<EventExtension>,
 }
 ```

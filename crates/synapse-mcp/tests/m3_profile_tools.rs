@@ -103,6 +103,49 @@ async fn profile_tools_list_activate_and_report_health() -> anyhow::Result<()> {
     let logs_text = read_logs(logs.path())?;
     assert!(logs_text.contains("PROFILE_ACTIVATED"));
     assert!(logs_text.contains("beta"));
+    observe_reports_matching_profile_without_manual_activation().await?;
+    Ok(())
+}
+
+async fn observe_reports_matching_profile_without_manual_activation() -> anyhow::Result<()> {
+    let profiles = TempDir::new()?;
+    let logs = TempDir::new()?;
+    write_profile(
+        &profiles.path().join("synthetic-notepad.toml"),
+        "synthetic-notepad",
+        "Synthetic Notepad",
+        "notepad.exe",
+        None,
+    )?;
+
+    let profile_dir = profiles.path().to_string_lossy().to_string();
+    let mut client = StdioMcpClient::launch_and_init_with_env(
+        Some(logs.path()),
+        &[
+            ("SYNAPSE_PROFILE_DIR", profile_dir.as_str()),
+            ("SYNAPSE_MCP_SYNTHETIC_FIXTURE", "notepad"),
+        ],
+    )
+    .await?;
+
+    let response = client.tools_call("observe", json!({})).await?;
+    let observation = structured(&response)?;
+    assert_eq!(observation["foreground"]["profile_id"], "synthetic-notepad");
+    assert_eq!(observation["foreground"]["process_name"], "notepad.exe");
+
+    let response = client.tools_call("health", json!({})).await?;
+    let health = structured(&response)?;
+    assert_eq!(
+        health["subsystems"]["profiles"]["active_profile_id"],
+        Value::Null
+    );
+    assert_eq!(health["subsystems"]["profiles"]["profile_count"], 1);
+
+    let status = client.shutdown().await?;
+    assert!(status.success());
+    let logs_text = read_logs(logs.path())?;
+    assert!(logs_text.contains("PROFILE_FOREGROUND_MATCHED"));
+    assert!(logs_text.contains("synthetic-notepad"));
     Ok(())
 }
 
@@ -112,8 +155,18 @@ fn assert_initial_profile_list(list: &Value) -> anyhow::Result<()> {
         .context("profile_list did not return profiles array")?;
     assert_eq!(listed.len(), 2);
     assert_eq!(list["active_profile_id"], Value::Null);
-    assert!(listed.iter().any(|profile| profile["id"] == "alpha"));
-    assert!(listed.iter().any(|profile| profile["id"] == "beta"));
+    let alpha = listed
+        .iter()
+        .find(|profile| profile["id"] == "alpha")
+        .context("alpha profile missing")?;
+    let beta = listed
+        .iter()
+        .find(|profile| profile["id"] == "beta")
+        .context("beta profile missing")?;
+    assert_eq!(alpha["use_scope"], "productivity");
+    assert_eq!(alpha["metadata"]["test_profile_id"], "alpha");
+    assert_eq!(beta["use_scope"], "productivity");
+    assert_eq!(beta["metadata"]["test_profile_id"], "beta");
     assert!(
         listed
             .iter()
@@ -236,6 +289,9 @@ keyboard_dynamics_default = "natural"
 
 [[matches]]
 exe = "{exe}"
+
+[metadata]
+test_profile_id = "{id}"
 {backends}
 "#
         ),

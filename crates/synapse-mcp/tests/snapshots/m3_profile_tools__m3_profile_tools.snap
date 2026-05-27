@@ -100,20 +100,41 @@ expression: profile_tool_shapes
               },
               "type": "array"
             },
+            "metadata": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
             "schema_version": {
               "format": "uint32",
               "minimum": 0,
               "type": "integer"
+            },
+            "use_scope": {
+              "$ref": "#/$defs/ProfileUseScope"
             }
           },
           "required": [
             "id",
             "label",
+            "use_scope",
             "matches",
+            "metadata",
             "active",
             "schema_version"
           ],
           "type": "object"
+        },
+        "ProfileUseScope": {
+          "enum": [
+            "productivity",
+            "single_player",
+            "operator_owned_test",
+            "sanctioned_research",
+            "unknown"
+          ],
+          "type": "string"
         }
       },
       "$schema": "https://json-schema.org/draft/2020-12/schema",

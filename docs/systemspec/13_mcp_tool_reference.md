@@ -343,7 +343,7 @@ Default error response shape (all tools): `ErrorData { code: rmcp::ErrorCode(-32
 |---|---|---|---|---|
 | `include_inactive` | `bool` | no | `true` | When false, only the active profile is returned |
 
-**Returns:** `ProfileListResponse { profiles: Vec<ProfileStatus>, active_profile_id: Option<String> }`. Each `ProfileStatus` carries `id`, `label`, `matches: Vec<ProfileMatchStatus>`, `active: bool`, `schema_version: u32`.
+**Returns:** `ProfileListResponse { profiles: Vec<ProfileStatus>, active_profile_id: Option<String> }`. Each `ProfileStatus` carries `id`, `label`, `use_scope`, `matches: Vec<ProfileMatchStatus>`, `metadata: BTreeMap<String, String>`, `active: bool`, `schema_version: u32`.
 
 ## 23. `profile_activate`
 

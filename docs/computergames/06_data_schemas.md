@@ -717,6 +717,7 @@ pub struct Profile {
     pub hud: Vec<HudFieldSpec>,
     pub keymap: std::collections::BTreeMap<String, String>,   // alias -> key name
     pub backends: ProfileBackends,
+    pub metadata: std::collections::BTreeMap<String, String>, // registry/provenance/policy hints
     pub event_extensions: Vec<EventExtension>,
 }
 
@@ -842,6 +843,10 @@ Serialized `use_scope` values and policy behavior:
 | `unknown` | Unreviewed apps/games or profiles without a supported-use declaration. | Observation allowed; write/action tools refuse with `SAFETY_PROFILE_ACTION_DENIED` unless the operator explicitly permits the reviewed override path. |
 
 Bundled profiles must set `use_scope`; the loader rejects unknown enum strings.
+Profiles may also carry a string-valued `[metadata]` table for profile-registry
+provenance, benchmark IDs, supported-use declarations, launch hints, and local
+quality/audit signal names. Metadata is exposed through `profile_list` so FSV
+can read the loaded registry state directly.
 
 Profile TOML examples in `07_storage_and_profiles.md`.
 

@@ -89,6 +89,9 @@ expression: "round_trip(\"Profile\", \"snapshot\", full_profile())?"
     "mouse_default": "hardware",
     "pad_default": "vigem"
   },
+  "metadata": {
+    "benchmark_id": "minecraft.java"
+  },
   "event_extensions": [
     {
       "name": "creeper_nearby",

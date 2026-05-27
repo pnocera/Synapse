@@ -10,7 +10,7 @@ use std::{
 };
 
 use notify::{RecommendedWatcher, RecursiveMode, Watcher};
-use synapse_core::{Profile, ProfileId, ProfileMatch};
+use synapse_core::{Profile, ProfileId, ProfileMatch, ProfileUseScope};
 use tracing::{instrument, warn};
 
 use crate::{
@@ -25,9 +25,11 @@ const WATCH_DEBOUNCE: Duration = Duration::from_millis(200);
 pub struct ProfileStatus {
     pub id: ProfileId,
     pub label: String,
+    pub use_scope: ProfileUseScope,
     pub active: bool,
     pub schema_version: u32,
     pub matches: Vec<ProfileMatch>,
+    pub metadata: BTreeMap<String, String>,
     pub source_path: PathBuf,
 }
 
@@ -222,9 +224,11 @@ fn profile_statuses(state: &ProfileState, include_inactive: bool) -> Vec<Profile
             (active || include_inactive).then(|| ProfileStatus {
                 id: loaded.profile.id.clone(),
                 label: loaded.profile.label.clone(),
+                use_scope: loaded.profile.use_scope,
                 active,
                 schema_version: loaded.schema_version,
                 matches: loaded.profile.matches.clone(),
+                metadata: loaded.profile.metadata.clone(),
                 source_path: loaded.source_path.clone(),
             })
         })

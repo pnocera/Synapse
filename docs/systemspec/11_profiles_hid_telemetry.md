@@ -95,9 +95,11 @@ pub struct LoadedProfile {
 pub struct ProfileStatus {
     pub id: ProfileId,
     pub label: String,
+    pub use_scope: ProfileUseScope,
     pub active: bool,
     pub schema_version: u32,
     pub matches: Vec<ProfileMatch>,
+    pub metadata: BTreeMap<String, String>,
     pub source_path: PathBuf,
 }
 ```
@@ -111,6 +113,8 @@ Public methods on `ProfileRuntime`:
 | `active_profile_id() -> Result<Option<ProfileId>>` | reads the cached active id |
 | `profile(id) -> Result<Option<Profile>>` | look up a parsed profile by id |
 | `activate(id) -> Result<(), ProfileError>` | stamps the active id on the state (no FS writes) |
+| `resolve_foreground(foreground) -> Result<Option<ProfileMatchResolution>>` | resolves the best matching profile without activating it |
+| `activate_for_foreground(foreground) -> Result<Option<ProfileMatchResolution>>` | resolves and activates the best matching foreground profile |
 | `last_reload_at() -> Result<Option<String>>` | RFC3339 timestamp of the last successful refresh |
 
 ### 1.6 `resolve_active_profile`
@@ -124,20 +128,24 @@ Public methods on `ProfileRuntime`:
    - `steam_appid` — equal to `foreground.steam_appid`.
    - `window_class` — exact match on `foreground.window_class`.
    - `process_args` — each entry must be present in `foreground.process_args`.
-3. Profile with the highest specificity (most match fields satisfied) wins; ties broken by load order.
-4. Returns `ProfileMatchResolution { matched_profile: Option<ProfileId>, candidates: Vec<...> }`.
+3. A matching entry is ranked by its strongest matched field: `exe`, then `title_regex`, then `steam_appid`, then `window_class`.
+4. Same-rank ties are broken by newer profile mtime, then source path, profile id, and loaded index.
+5. Returns `ProfileMatchResolution { profile_id, rank_name }`.
 
 `ForegroundWindow` is the input contract:
 
 ```rust
 pub struct ForegroundWindow {
-    pub process_name: String,
-    pub window_title: String,
-    pub window_class: String,
+    pub exe: Option<String>,
+    pub title: Option<String>,
+    pub window_class: Option<String>,
     pub steam_appid: Option<u32>,
-    pub process_args: Vec<String>,
 }
 ```
+
+`observe` resolves the observed foreground through this runtime and populates
+`Observation.foreground.profile_id` when a profile matches. This read-only
+match does not activate the profile or overwrite a manual `profile_activate`.
 
 ### 1.7 Errors
 

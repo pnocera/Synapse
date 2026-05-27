@@ -23,6 +23,8 @@ pub struct Profile {
     #[serde(default)]
     pub keymap: BTreeMap<String, String>,
     pub backends: ProfileBackends,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub metadata: BTreeMap<String, String>,
     #[serde(default)]
     pub event_extensions: Vec<EventExtension>,
 }

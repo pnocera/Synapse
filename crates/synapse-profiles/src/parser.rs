@@ -232,6 +232,9 @@ fn canonical_key_name(raw_key: &str) -> Option<String> {
         "control" => "ctrl",
         "escape" => "esc",
         "return" => "enter",
+        "leftmouse" | "left_mouse" | "lmb" | "mouse_left" => "lmb",
+        "rightmouse" | "right_mouse" | "rmb" | "mouse_right" => "rmb",
+        "middlemouse" | "middle_mouse" | "mmb" | "mouse_middle" => "mmb",
         "arrowup" => "up",
         "arrowdown" => "down",
         "arrowleft" => "left",
@@ -254,8 +257,8 @@ fn canonical_key_name(raw_key: &str) -> Option<String> {
     }
     match key {
         "alt" | "backspace" | "ctrl" | "delete" | "down" | "end" | "enter" | "esc" | "home"
-        | "insert" | "left" | "pagedown" | "pageup" | "right" | "shift" | "space" | "super"
-        | "tab" | "up" => Some(key.to_owned()),
+        | "insert" | "left" | "lmb" | "mmb" | "pagedown" | "pageup" | "right" | "rmb" | "shift"
+        | "space" | "super" | "tab" | "up" | "x1" | "x2" => Some(key.to_owned()),
         _ => None,
     }
 }

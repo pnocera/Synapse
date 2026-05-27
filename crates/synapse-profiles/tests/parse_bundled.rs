@@ -31,7 +31,10 @@ fn bundled_profiles_parse_and_keep_natural_defaults() -> Result<(), Box<dyn std:
         ids.push(loaded.profile.id);
     }
     ids.sort();
-    assert_eq!(ids, ["chrome", "notepad", "terminal", "vscode"]);
+    assert_eq!(
+        ids,
+        ["chrome", "luanti.minetest", "notepad", "terminal", "vscode"]
+    );
     Ok(())
 }
 
@@ -167,6 +170,48 @@ default_backend = "hardware"
     println!(
         "readback=profile_backend_alias edge=default_backend before=default_backend after={:?} profile_id={}",
         loaded.profile.backends, loaded.profile.id
+    );
+}
+
+#[test]
+fn parser_accepts_mouse_button_keymap_aliases_and_metadata() {
+    let toml = r#"
+id = "mouse_aliases"
+label = "Mouse Aliases"
+schema_version = 1
+use_scope = "operator_owned_test"
+mouse_curve_default = "natural"
+keyboard_dynamics_default = "natural"
+
+[[matches]]
+exe = "luanti.exe"
+
+[keymap]
+dig = "lmb"
+place = "rmb"
+pan = "mmb"
+
+[metadata]
+benchmark_id = "luanti.minetest"
+"supported_use.local_world_only" = "true"
+"#;
+
+    let loaded = parse_profile_bytes(
+        "mouse_aliases.toml",
+        toml.as_bytes(),
+        UNIX_EPOCH,
+        ScreenBounds {
+            width: 1920,
+            height: 1080,
+        },
+    )
+    .unwrap_or_else(|error| panic!("mouse button keymap aliases should parse: {error}"));
+
+    assert_eq!(loaded.profile.keymap["dig"], "lmb");
+    assert_eq!(loaded.profile.metadata["benchmark_id"], "luanti.minetest");
+    assert_eq!(
+        loaded.profile.metadata["supported_use.local_world_only"],
+        "true"
     );
 }
 

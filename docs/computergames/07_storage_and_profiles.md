@@ -373,6 +373,11 @@ default = "software"
 keyboard_default = "software"
 mouse_default = "software"
 pad_default = "vigem"
+
+[metadata]
+benchmark_id = "minecraft.java"
+"supported_use.local_world_only" = "true"
+"supported_use.remote_server_allowed" = "false"
 ```
 
 Game example:
@@ -454,8 +459,12 @@ emits_kind = "creeper-imminent"
 ### 8.3 Match precedence
 
 On foreground window change, profile detection follows ADR-0006. Each profile
-may define multiple `[[matches]]`; the resolver uses the strongest matching
-field from that profile. Across profiles, precedence is:
+may define multiple `[[matches]]`; entries are ORed together, but every
+declared supported field inside one entry must match the foreground state. A
+compound Luanti entry with `exe = "luanti.exe"` and a Luanti title regex, for
+example, does not match a different `luanti.exe` window title. The resolver
+then ranks a matching entry by its strongest matched field. Across profiles,
+precedence is:
 
 1. `exe`
 2. `title_regex`
@@ -467,6 +476,9 @@ remaining exact tie is broken deterministically by source path, profile id, and
 loaded index. Agent/operator override is explicit through
 `profile_activate(profile_id=...)`.
 
+`process_args` is parsed in the profile schema but is not a runtime foreground
+match signal until Synapse has a process-argument source of truth.
+
 ### 8.4 Bundled profiles at v1
 
 | Profile | Use |
@@ -475,6 +487,7 @@ loaded index. Agent/operator override is explicit through
 | `vscode` | Visual Studio Code |
 | `chrome` | Google Chrome (CDP-enabled when remote debugging port present) |
 | `terminal` | Windows Terminal / PowerShell window |
+| `luanti.minetest` | Local Luanti / Minetest Game benchmark world (`operator_owned_test`) |
 | `file_explorer` | Windows File Explorer |
 | `slack` | Slack desktop |
 | `discord` | Discord desktop |

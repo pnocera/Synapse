@@ -29,6 +29,11 @@ Profiles declare a `use_scope`. The field is descriptive metadata for permission
 | `unknown` | New games/apps without a reviewed profile | Observation allowed; action defaults should be minimal until the profile is reviewed |
 
 The profile loader rejects unknown `use_scope` values. Bundled profiles must include `use_scope` and a short comment describing the intended environment.
+Bundled benchmark profiles must also expose metadata gates such as
+`supported_use.local_world_only`, `supported_use.approved_worlds`, and
+`supported_use.remote_server_allowed` through `profile_list`. Those metadata
+keys are the profile registry's source of truth until a runtime target-policy
+checker is added.
 
 ---
 
@@ -116,15 +121,23 @@ Notepad, VS Code, Chrome, Slack, Discord, Terminal, and File Explorer are `produ
 
 `single_player`. Recommended first game profile. HUD extraction, keymap, entity detection, and reflex demos target a local world.
 
-### 7.3 Factorio
+### 7.3 Luanti / Minetest Game Benchmark
+
+`operator_owned_test`. The bundled `luanti.minetest` profile is restricted to
+the local configured-host benchmark install and approved local benchmark worlds.
+Its metadata declares the launch target, benchmark world, and
+`supported_use.remote_server_allowed = "false"` so profile-registry/audit FSV
+can verify the intended boundary before actions run.
+
+### 7.4 Factorio
 
 `single_player` or `operator_owned_test` depending on setup. Headless support exists through Factorio's own interfaces; Synapse's GUI driving is supplementary.
 
-### 7.4 OpenTTD, BeamNG, KSP, RimWorld, Stardew Valley
+### 7.5 OpenTTD, BeamNG, KSP, RimWorld, Stardew Valley
 
 `single_player`. Suitable for bundled or community profiles after normal smoke tests.
 
-### 7.5 Browser games and Roblox Studio
+### 7.6 Browser games and Roblox Studio
 
 Browser games use the Chrome profile machinery. Roblox Studio is `operator_owned_test`. Runtime experiences should start as `unknown` until a profile states the intended environment.
 

@@ -254,6 +254,7 @@ pub fn profile_strategy() -> impl Strategy<Value = Profile> {
         prop::collection::vec(hud_field_spec_strategy(), 0..3),
         prop::collection::btree_map(small_string(), small_string(), 0..4),
         profile_backends_strategy(),
+        prop::collection::btree_map(small_string(), small_string(), 0..4),
         prop::collection::vec(event_extension_strategy(), 0..3),
     )
         .prop_map(
@@ -268,6 +269,7 @@ pub fn profile_strategy() -> impl Strategy<Value = Profile> {
                 hud,
                 keymap,
                 backends,
+                metadata,
                 event_extensions,
             )| Profile {
                 id,
@@ -282,6 +284,7 @@ pub fn profile_strategy() -> impl Strategy<Value = Profile> {
                 hud,
                 keymap,
                 backends,
+                metadata,
                 event_extensions,
             },
         )

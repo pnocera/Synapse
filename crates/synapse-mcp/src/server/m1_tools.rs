@@ -28,8 +28,13 @@ impl SynapseService {
             kind = "observe",
             "tool.invocation kind=observe"
         );
+        let state = self.m1_state()?;
+        let mut observation = assemble_observation(&state, &params.0)?;
+        drop(state);
+
+        self.resolve_observation_profile(&mut observation);
+
         let mut state = self.m1_state()?;
-        let observation = assemble_observation(&state, &params.0)?;
         state.last_observed_foreground = Some(observation.foreground.clone());
         drop(state);
         Ok(Json(observation))
@@ -90,4 +95,53 @@ impl SynapseService {
         let mut state = self.m1_state()?;
         set_perception_mode_in_state(&mut state, &params.0).map(Json)
     }
+}
+
+impl SynapseService {
+    fn resolve_observation_profile(&self, observation: &mut synapse_core::Observation) {
+        let foreground = synapse_profiles::ForegroundWindow {
+            exe: non_empty(&observation.foreground.process_name),
+            title: non_empty(&observation.foreground.window_title),
+            steam_appid: observation.foreground.steam_appid,
+            window_class: None,
+        };
+
+        let Ok(runtime) = self.profile_runtime() else {
+            tracing::warn!(
+                code = "PROFILE_FOREGROUND_RESOLUTION_SKIPPED",
+                "profile runtime unavailable while resolving observed foreground"
+            );
+            return;
+        };
+
+        match runtime.resolve_foreground(&foreground) {
+            Ok(Some(resolution)) => {
+                tracing::info!(
+                    code = "PROFILE_FOREGROUND_MATCHED",
+                    profile_id = %resolution.profile_id,
+                    rank = resolution.rank_name,
+                    "observed foreground matched profile"
+                );
+                observation.foreground.profile_id = Some(resolution.profile_id);
+            }
+            Ok(None) => {
+                tracing::debug!(
+                    code = "PROFILE_FOREGROUND_UNMATCHED",
+                    "observed foreground did not match a loaded profile"
+                );
+            }
+            Err(error) => {
+                tracing::warn!(
+                    code = "PROFILE_FOREGROUND_RESOLUTION_FAILED",
+                    error = %error,
+                    "profile resolver failed for observed foreground"
+                );
+            }
+        }
+    }
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }

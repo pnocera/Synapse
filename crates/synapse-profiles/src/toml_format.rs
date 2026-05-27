@@ -42,6 +42,8 @@ pub struct RawProfile {
     keymap: BTreeMap<String, String>,
     #[serde(default)]
     backends: RawBackends,
+    #[serde(default)]
+    metadata: BTreeMap<String, String>,
 }
 
 impl RawProfile {
@@ -93,6 +95,7 @@ impl RawProfile {
             hud,
             keymap: self.keymap,
             backends: self.backends.into_backends(&path)?,
+            metadata: self.metadata,
             event_extensions: Vec::new(),
         };
 

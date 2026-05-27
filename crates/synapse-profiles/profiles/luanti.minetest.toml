@@ -1,0 +1,72 @@
+id = "luanti.minetest"
+label = "Luanti / Minetest Game Benchmark"
+schema_version = 1
+use_scope = "operator_owned_test"
+mode = "pixel_only"
+mouse_curve_default = "natural"
+keyboard_dynamics_default = "natural"
+
+[[matches]]
+exe = "luanti.exe"
+title_regex = "^Luanti 5\\.16\\.[0-9]+ \\[(Singleplayer|Multiplayer)\\].*"
+
+[capture]
+target = "foreground_window"
+min_update_interval_ms = 16
+cursor_visible = false
+
+[detection]
+model_id = "minecraft_like_local_world_v0"
+classes_of_interest = ["hotbar", "crosshair", "block", "inventory", "chat", "health"]
+confidence_threshold = 0.45
+max_detections = 32
+
+[ocr]
+default_backend = "winrt"
+
+[keymap]
+forward = "w"
+back = "s"
+left = "a"
+right = "d"
+jump = "space"
+sneak = "shift"
+inventory = "i"
+drop = "q"
+chat = "t"
+console = "f10"
+menu = "esc"
+hotbar1 = "1"
+hotbar2 = "2"
+hotbar3 = "3"
+hotbar4 = "4"
+hotbar5 = "5"
+hotbar6 = "6"
+hotbar7 = "7"
+hotbar8 = "8"
+hotbar9 = "9"
+dig = "lmb"
+punch = "lmb"
+place = "rmb"
+use = "rmb"
+
+[backends]
+default = "auto"
+keyboard_default = "auto"
+mouse_default = "auto"
+pad_default = "auto"
+
+[metadata]
+benchmark_id = "luanti.minetest"
+benchmark_engine_version = "5.16.1"
+benchmark_game_commit = "95991f8dc4c97d3cc7945269bf2d5640c7fe6bc8"
+"launch.target" = "%LOCALAPPDATA%\\synapse\\benchmarks\\luanti\\engine\\5.16.1\\luanti-5.16.1-win64\\bin\\luanti.exe"
+"launch.working_dir" = "%LOCALAPPDATA%\\synapse\\benchmarks\\luanti\\engine\\5.16.1\\luanti-5.16.1-win64"
+"launch.path_override_env" = "SYNAPSE_LUANTI_EXE"
+"launch.world" = "%LOCALAPPDATA%\\synapse\\benchmarks\\luanti\\engine\\5.16.1\\luanti-5.16.1-win64\\worlds\\synapse_benchmark_mtg"
+"supported_use.local_world_only" = "true"
+"supported_use.approved_worlds" = "synapse_benchmark_mtg"
+"supported_use.remote_server_allowed" = "false"
+"registry.family" = "profile-registry/audit-data"
+"registry.quality_signal" = "profile_quality.luanti.minetest"
+"audit.tags" = "benchmark:luanti,game:minetest,moat:profile-audit"

@@ -20,6 +20,7 @@ pub fn empty_profile(id: &str) -> Profile {
         hud: Vec::new(),
         keymap: BTreeMap::new(),
         backends: software_backends(),
+        metadata: BTreeMap::new(),
         event_extensions: Vec::new(),
     }
 }
@@ -36,6 +37,8 @@ pub fn full_profile() -> Profile {
     let mut keymap = BTreeMap::new();
     keymap.insert("attack".to_owned(), "lmb".to_owned());
     keymap.insert("inventory".to_owned(), "e".to_owned());
+    let mut metadata = BTreeMap::new();
+    metadata.insert("benchmark_id".to_owned(), "minecraft.java".to_owned());
 
     Profile {
         id: "minecraft.java".to_owned(),
@@ -50,6 +53,7 @@ pub fn full_profile() -> Profile {
         hud: vec![full_hud_field()],
         keymap,
         backends: mixed_backends(),
+        metadata,
         event_extensions: vec![full_event_extension()],
     }
 }

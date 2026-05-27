@@ -1,6 +1,6 @@
 # Synapse Systemspec — Bundled Reference
 
-> Auto-generated 2026-05-26 by `docs/systemspec/bundle.ps1`. Source: the 16 individual `docs/systemspec/*.md` files, concatenated in order. In-bundle cross-references between systemspec files are rewritten to anchors; references to files outside the bundle (impplan, computergames, adr, source code) keep their original paths.
+> Auto-generated 2026-05-27 by `docs/systemspec/bundle.ps1`. Source: the 16 individual `docs/systemspec/*.md` files, concatenated in order. In-bundle cross-references between systemspec files are rewritten to anchors; references to files outside the bundle (impplan, computergames, adr, source code) keep their original paths.
 >
 > Re-run the script after editing any source file so the bundle stays in sync. The individual files remain the authoritative copies.
 
@@ -1247,7 +1247,7 @@ These are the `serde_json` payloads written into each CF. Source: `crates/synaps
 |---|---|---|---|
 | `CF_EVENTS` | `StoredEvent` | `schema_version: u32`, `event_id: String`, `ts_ns: u64`, `session_id: Option<String>`, `source: EventSource`, `kind: String`, `data: serde_json::Value`, `window_id: Option<i64>`, `element_id: Option<ElementId>`, `redacted: bool`, `redactions: Vec<StoredRedaction>` | — (no live writer in this build; PRD §7 calls for `ts_ns` big-endian prefix + `event_id`) |
 | `CF_OBSERVATIONS` | `StoredObservation` | `schema_version`, `observation_id`, `ts_ns`, `session_id`, `mode: PerceptionMode`, `foreground: ForegroundContext`, `focused: Option<FocusedElement>`, `elements: Vec<AccessibleNode>`, `entities: Vec<DetectedEntity>`, `hud: HudReadings`, `audio: AudioContext`, `recent_events: Vec<EventSummary>`, `clipboard_summary: Option<ClipboardSummary>`, `fs_recent: Vec<FsEvent>`, `diagnostics: ObservationDiagnostics`, `reason: String`, `redacted: bool`, `redactions: Vec<StoredRedaction>` | — (no live writer in this build; produced by future M3 replay backends. `replay_record` writes JSONL to disk, not to this CF.) |
-| `CF_PROFILES` | (per PRD) cached `Profile` rows | `Profile { id, label, version, use_scope, matches, mode, capture, detection, ocr, hud, keymap, backends, event_extensions }` | not written in current build; profiles read from TOML and held in `synapse-profiles::ProfileRuntime` memory |
+| `CF_PROFILES` | (per PRD) cached `Profile` rows | `Profile { id, label, version, use_scope, matches, mode, capture, detection, ocr, hud, keymap, backends, metadata, event_extensions }` | not written in current build; profiles read from TOML and held in `synapse-profiles::ProfileRuntime` memory |
 | `CF_MODEL_CACHE` | raw bytes + `ModelDescriptor` | binary ONNX blob behind a JSON-encoded descriptor key | not exercised in current build (no model auto-download yet) |
 | `CF_SESSIONS` | `StoredSession` | `schema_version`, `session_id`, `started_at`, `ended_at`, `transport`, `client`, `mode`, `active_profile`, `profile_history: Vec<StoredProfileHistoryEntry>`, `redacted`, `redactions` | not written in this build |
 | `CF_REFLEX_AUDIT` | `StoredReflexAudit` | `schema_version`, `audit_id`, `reflex_id`, `ts_ns`, `status: ReflexState`, `event_id: Option<String>`, `steps: Vec<StoredReflexStep>`, `error_code: Option<String>`, `details: serde_json::Value`, `redacted`, `redactions` | `format!("{reflex_id}:{audit_id}")` (see §4.2) |
@@ -1579,6 +1579,7 @@ pub struct Profile {
     pub hud: Vec<HudFieldSpec>,
     pub keymap: BTreeMap<String, String>,
     pub backends: ProfileBackends,
+    pub metadata: BTreeMap<String, String>,
     pub event_extensions: Vec<EventExtension>,
 }
 ```
@@ -3278,9 +3279,11 @@ pub struct LoadedProfile {
 pub struct ProfileStatus {
     pub id: ProfileId,
     pub label: String,
+    pub use_scope: ProfileUseScope,
     pub active: bool,
     pub schema_version: u32,
     pub matches: Vec<ProfileMatch>,
+    pub metadata: BTreeMap<String, String>,
     pub source_path: PathBuf,
 }
 ```
@@ -3294,6 +3297,8 @@ Public methods on `ProfileRuntime`:
 | `active_profile_id() -> Result<Option<ProfileId>>` | reads the cached active id |
 | `profile(id) -> Result<Option<Profile>>` | look up a parsed profile by id |
 | `activate(id) -> Result<(), ProfileError>` | stamps the active id on the state (no FS writes) |
+| `resolve_foreground(foreground) -> Result<Option<ProfileMatchResolution>>` | resolves the best matching profile without activating it |
+| `activate_for_foreground(foreground) -> Result<Option<ProfileMatchResolution>>` | resolves and activates the best matching foreground profile |
 | `last_reload_at() -> Result<Option<String>>` | RFC3339 timestamp of the last successful refresh |
 
 ### 1.6 `resolve_active_profile`
@@ -3307,20 +3312,24 @@ Public methods on `ProfileRuntime`:
    - `steam_appid` — equal to `foreground.steam_appid`.
    - `window_class` — exact match on `foreground.window_class`.
    - `process_args` — each entry must be present in `foreground.process_args`.
-3. Profile with the highest specificity (most match fields satisfied) wins; ties broken by load order.
-4. Returns `ProfileMatchResolution { matched_profile: Option<ProfileId>, candidates: Vec<...> }`.
+3. A matching entry is ranked by its strongest matched field: `exe`, then `title_regex`, then `steam_appid`, then `window_class`.
+4. Same-rank ties are broken by newer profile mtime, then source path, profile id, and loaded index.
+5. Returns `ProfileMatchResolution { profile_id, rank_name }`.
 
 `ForegroundWindow` is the input contract:
 
 ```rust
 pub struct ForegroundWindow {
-    pub process_name: String,
-    pub window_title: String,
-    pub window_class: String,
+    pub exe: Option<String>,
+    pub title: Option<String>,
+    pub window_class: Option<String>,
     pub steam_appid: Option<u32>,
-    pub process_args: Vec<String>,
 }
 ```
+
+`observe` resolves the observed foreground through this runtime and populates
+`Observation.foreground.profile_id` when a profile matches. This read-only
+match does not activate the profile or overwrite a manual `profile_activate`.
 
 ### 1.7 Errors
 
@@ -4109,7 +4118,7 @@ Default error response shape (all tools): `ErrorData { code: rmcp::ErrorCode(-32
 |---|---|---|---|---|
 | `include_inactive` | `bool` | no | `true` | When false, only the active profile is returned |
 
-**Returns:** `ProfileListResponse { profiles: Vec<ProfileStatus>, active_profile_id: Option<String> }`. Each `ProfileStatus` carries `id`, `label`, `matches: Vec<ProfileMatchStatus>`, `active: bool`, `schema_version: u32`.
+**Returns:** `ProfileListResponse { profiles: Vec<ProfileStatus>, active_profile_id: Option<String> }`. Each `ProfileStatus` carries `id`, `label`, `use_scope`, `matches: Vec<ProfileMatchStatus>`, `metadata: BTreeMap<String, String>`, `active: bool`, `schema_version: u32`.
 
 ## 23. `profile_activate`
 

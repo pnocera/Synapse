@@ -1,3 +1,5 @@
+use std::collections::BTreeMap;
+
 use super::{
     M3ToolStub,
     permissions::{Permission, RequiredPermissions, profile_scope_error, required},
@@ -39,7 +41,9 @@ pub struct ProfileListResponse {
 pub struct ProfileStatus {
     pub id: ProfileId,
     pub label: String,
+    pub use_scope: ProfileUseScope,
     pub matches: Vec<ProfileMatchStatus>,
+    pub metadata: BTreeMap<String, String>,
     pub active: bool,
     pub schema_version: u32,
 }
@@ -159,11 +163,13 @@ impl From<synapse_profiles::ProfileStatus> for ProfileStatus {
         Self {
             id: value.id,
             label: value.label,
+            use_scope: value.use_scope,
             matches: value
                 .matches
                 .into_iter()
                 .map(ProfileMatchStatus::from)
                 .collect(),
+            metadata: value.metadata,
             active: value.active,
             schema_version: value.schema_version,
         }

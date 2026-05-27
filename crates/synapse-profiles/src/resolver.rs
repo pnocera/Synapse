@@ -64,44 +64,50 @@ fn best_rank(matches: &[ProfileMatch], foreground: &ForegroundWindow) -> Option<
 }
 
 fn candidate_rank(candidate: &ProfileMatch, foreground: &ForegroundWindow) -> Option<MatchRank> {
-    if candidate
-        .exe
-        .as_deref()
-        .zip(foreground.exe.as_deref())
-        .is_some_and(|(expected, actual)| expected.eq_ignore_ascii_case(actual))
-    {
-        return Some(MatchRank::Exe);
+    let mut rank = if let Some(expected) = candidate.exe.as_deref() {
+        let actual = foreground.exe.as_deref()?;
+        if !expected.eq_ignore_ascii_case(actual) {
+            return None;
+        }
+        Some(MatchRank::Exe)
+    } else {
+        None
+    };
+
+    if let Some(pattern) = candidate.title_regex.as_deref() {
+        let title = foreground.title.as_deref()?;
+        let Ok(regex) = Regex::new(pattern) else {
+            return None;
+        };
+        if !regex.is_match(title) {
+            return None;
+        }
+        rank = Some(rank.map_or(MatchRank::TitleRegex, |value| {
+            value.max(MatchRank::TitleRegex)
+        }));
     }
 
-    if candidate
-        .title_regex
-        .as_deref()
-        .zip(foreground.title.as_deref())
-        .is_some_and(|(pattern, title)| {
-            Regex::new(pattern).is_ok_and(|regex| regex.is_match(title))
-        })
-    {
-        return Some(MatchRank::TitleRegex);
+    if let Some(expected) = candidate.steam_appid {
+        let actual = foreground.steam_appid?;
+        if expected != actual {
+            return None;
+        }
+        rank = Some(rank.map_or(MatchRank::SteamAppId, |value| {
+            value.max(MatchRank::SteamAppId)
+        }));
     }
 
-    if candidate
-        .steam_appid
-        .zip(foreground.steam_appid)
-        .is_some_and(|(expected, actual)| expected == actual)
-    {
-        return Some(MatchRank::SteamAppId);
+    if let Some(expected) = candidate.window_class.as_deref() {
+        let actual = foreground.window_class.as_deref()?;
+        if !expected.eq_ignore_ascii_case(actual) {
+            return None;
+        }
+        rank = Some(rank.map_or(MatchRank::WindowClass, |value| {
+            value.max(MatchRank::WindowClass)
+        }));
     }
 
-    if candidate
-        .window_class
-        .as_deref()
-        .zip(foreground.window_class.as_deref())
-        .is_some_and(|(expected, actual)| expected.eq_ignore_ascii_case(actual))
-    {
-        return Some(MatchRank::WindowClass);
-    }
-
-    None
+    rank
 }
 
 impl MatchRank {
@@ -218,6 +224,36 @@ mod tests {
     }
 
     #[test]
+    fn match_entry_requires_every_declared_field() {
+        let profiles = vec![loaded_profile(
+            "luanti",
+            vec![ProfileMatch {
+                exe: Some("luanti.exe".to_owned()),
+                title_regex: Some("^Luanti 5\\.16\\.[0-9]+".to_owned()),
+                steam_appid: None,
+                window_class: None,
+                process_args: Vec::new(),
+            }],
+            10,
+            "profiles/luanti.minetest.toml",
+        )];
+
+        let wrong_title = foreground()
+            .exe("luanti.exe")
+            .title("Unexpected Launcher Window");
+        let right_title = foreground()
+            .exe("luanti.exe")
+            .title("Luanti 5.16.1 [Multiplayer] [4.6.0 NVIDIA 610.47]");
+
+        assert_eq!(resolve_active_profile(&profiles, &wrong_title), None);
+        let Some(resolution) = resolve_active_profile(&profiles, &right_title) else {
+            panic!("Luanti profile should match when exe and title both match");
+        };
+        assert_eq!(resolution.profile_id, "luanti");
+        assert_eq!(resolution.rank_name, "exe");
+    }
+
+    #[test]
     fn adr_0006_ignores_invalid_title_regex_candidate() {
         let profiles = vec![
             loaded_profile(
@@ -284,6 +320,7 @@ mod tests {
                     pad_default: Backend::Software,
                 },
                 event_extensions: Vec::new(),
+                metadata: BTreeMap::new(),
             },
             schema_version: 1,
             defaults: ProfileDefaults {

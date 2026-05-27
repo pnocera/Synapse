@@ -15,10 +15,16 @@ Profile resolver precedence is based on the strongest matched field:
 3. `steam_appid`
 4. `window_class`
 
-Each profile may contain multiple `[[matches]]` entries; the resolver uses the
-strongest matching field from that profile. Across profiles with the same
-strongest field, the newer profile file mtime wins. Remaining exact ties are
-broken deterministically by source path, profile id, and loaded index.
+Each profile may contain multiple `[[matches]]` entries. Entries are ORed
+together, but every declared supported field inside one entry is conjunctive:
+if an entry declares both `exe` and `title_regex`, both must match the
+foreground state. The resolver then ranks the matching entry by its strongest
+matched field. Across profiles with the same strongest field, the newer
+profile file mtime wins. Remaining exact ties are broken deterministically by
+source path, profile id, and loaded index.
+
+`process_args` is schema-reserved in the M4 profile type and is not a runtime
+foreground-resolution signal until a process-argument source of truth is wired.
 
 Manual `profile_activate(profile_id=...)` is an explicit operator/agent
 override and sets the active profile directly. Automatic foreground resolution
