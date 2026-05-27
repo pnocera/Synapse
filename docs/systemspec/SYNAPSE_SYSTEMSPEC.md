@@ -4187,18 +4187,18 @@ Default error response shape (all tools): `ErrorData { code: rmcp::ErrorCode(-32
 **Side effects:** keystroke synthesis (foreground check enforced)
 **Pre-call check:** `SynapseService::ensure_act_type_foreground` compares `M1State.last_observed_foreground.hwnd` against `synapse_a11y::current_foreground_context().hwnd`. Mismatch → `ACTION_FOREGROUND_LOST` with a structured warn (`M2_ACT_TYPE_FOREGROUND_LOST`).
 
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `text` | `String` | yes | — | UTF-8; surrogate pairs split via `KeystrokeEvent` lowering |
-| `into_element` | `Option<ElementId>` | no | — | If set, the assembler is expected to have focused it first (currently advisory) |
-| `dynamics` | `TypeDynamics` | no | `Natural` | `Burst`/`Linear`/`Natural` |
-| `linear_ms_per_char` | `u32` | no | — | Only used when `dynamics = Linear` |
-| `use_scancodes` | `bool` | no | — | When true, keys emit with `use_scancode = true` |
-| `press_enter_after` | `bool` | no | `false` | Appends a `KeyPress { Key::Named("enter") }` |
-| `backend` | `TypeBackend` | no | `Auto` | `Software` / `Hardware` / `Auto` |
+| Parameter | Type | Required | Default | Range | Description |
+|---|---|---|---|---|---|
+| `text` | `String` | yes | — | — | UTF-8; surrogate pairs split via `KeystrokeEvent` lowering |
+| `into_element` | `Option<ElementId>` | no | — | — | If set, the assembler is expected to have focused it first (currently advisory) |
+| `dynamics` | `TypeDynamics` | no | `Natural` | `Burst`/`Linear`/`Natural` | |
+| `linear_ms_per_char` | `u32` | no | `30` | `>=20` | Only used when `dynamics = Linear`; lower values fail closed with `TOOL_PARAMS_INVALID` |
+| `use_scancodes` | `bool` | no | — | — | When true, keys emit with `use_scancode = true` |
+| `press_enter_after` | `bool` | no | `false` | — | Appends a `KeyPress { Key::Named("enter") }` |
+| `backend` | `TypeBackend` | no | `Auto` | `Software`/`Hardware`/`Auto` | |
 
-**Returns:** `ActTypeResponse { ok, chars_typed: u32, elapsed_ms: u32 }`.
-**Errors:** `ACTION_FOREGROUND_LOST`, `ACTION_RATE_LIMITED`, `ACTION_BACKEND_UNAVAILABLE`, `ACTION_UNSUPPORTED_KEY` (only when individual chars lower to unsupported keys).
+**Returns:** `ActTypeResponse { ok, chars_typed: u32, elapsed_ms: u32, target_text_integrity: "dispatch_only_requires_target_readback", target_readback_required: true, minimum_linear_ms_per_char: 20 }`. `ok=true` means Synapse dispatched text events; target text integrity must still be verified by reading the application/file source of truth.
+**Errors:** `ACTION_FOREGROUND_LOST`, `ACTION_RATE_LIMITED`, `ACTION_BACKEND_UNAVAILABLE`, `ACTION_UNSUPPORTED_KEY` (only when individual chars lower to unsupported keys), `TOOL_PARAMS_INVALID` with reason `linear_ms_per_char_below_text_integrity_minimum`.
 
 ## 9. `act_press`
 

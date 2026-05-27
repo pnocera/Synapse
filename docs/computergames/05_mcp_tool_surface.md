@@ -445,14 +445,36 @@ Coordinate targets (`x`, `y`) are physical pixels (DPI-aware), matching UI Autom
       "text": {"type": "string"},
       "into_element": {"type": "string", "description": "Optional element_id; focuses + clears + types"},
       "dynamics": {"enum": ["burst","linear","natural"], "default": "natural"},
-      "linear_ms_per_char": {"type": "integer", "default": 30},
+      "linear_ms_per_char": {"type": "integer", "minimum": 20, "default": 30, "description": "Applies to dynamics=linear; lower values fail closed because target text integrity must be verified at the app/file SoT"},
       "use_scancodes": {"type": "boolean", "default": false},
       "press_enter_after": {"type": "boolean", "default": false},
       "backend": {"enum": ["software","hardware","auto"], "default": "auto"}
     }
+  },
+  "output_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "ok": {"type": "boolean"},
+      "chars_typed": {"type": "integer"},
+      "elapsed_ms": {"type": "integer"},
+      "target_text_integrity": {"const": "dispatch_only_requires_target_readback"},
+      "target_readback_required": {"const": true},
+      "minimum_linear_ms_per_char": {"const": 20}
+    },
+    "required": ["ok", "chars_typed", "elapsed_ms", "target_text_integrity", "target_readback_required", "minimum_linear_ms_per_char"]
   }
 }
 ```
+
+`act_type` success means Synapse dispatched the requested text events. It is not
+proof that the foreground application accepted every character. Manual FSV for
+text entry must read the target source of truth after the trigger, such as the
+UI selection/clipboard readback plus a saved file/database row where the app
+persists content. For `dynamics=linear`, `linear_ms_per_char < 20` is rejected
+with `TOOL_PARAMS_INVALID` and reason
+`linear_ms_per_char_below_text_integrity_minimum`; the `CF_ACTION_LOG` row keeps
+that reason and the readback requirement visible.
 
 ### 3.13 `act_press`
 

@@ -1,14 +1,19 @@
 use std::{sync::Arc, time::Instant};
 
 use rmcp::ErrorData;
+use rmcp::model::ErrorCode;
 use rmcp::schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use synapse_action::{
     ActionBackend, ActionError, ActionHandle, EmitState, RecordedInput, RecordingBackend,
 };
 use synapse_core::{Action, Backend, ElementId, KeystrokeDynamics, KeystrokeNaturalParams};
 
 use crate::m1::mcp_error;
+
+const MIN_SAFE_LINEAR_MS_PER_CHAR: u32 = 20;
+const TEXT_INTEGRITY_DISPATCH_ONLY: &str = "dispatch_only_requires_target_readback";
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -20,7 +25,7 @@ pub struct ActTypeParams {
     #[schemars(default = "default_type_dynamics")]
     pub dynamics: TypeDynamics,
     #[serde(default = "default_linear_ms_per_char")]
-    #[schemars(default = "default_linear_ms_per_char")]
+    #[schemars(default = "default_linear_ms_per_char", range(min = 20))]
     pub linear_ms_per_char: u32,
     #[serde(default = "default_use_scancodes")]
     #[schemars(default = "default_use_scancodes")]
@@ -55,6 +60,9 @@ pub struct ActTypeResponse {
     pub ok: bool,
     pub chars_typed: u32,
     pub elapsed_ms: u32,
+    pub target_text_integrity: String,
+    pub target_readback_required: bool,
+    pub minimum_linear_ms_per_char: u32,
 }
 
 pub async fn act_type_with_handle(
@@ -82,6 +90,9 @@ pub async fn act_type_with_handle(
         ok: true,
         chars_typed,
         elapsed_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
+        target_text_integrity: TEXT_INTEGRITY_DISPATCH_ONLY.to_owned(),
+        target_readback_required: true,
+        minimum_linear_ms_per_char: MIN_SAFE_LINEAR_MS_PER_CHAR,
     })
 }
 
@@ -133,6 +144,17 @@ fn validate_type_params(params: &ActTypeParams) -> Result<(), ErrorData> {
             detail: "act_type use_scancodes=true is not wired for the M2 unicode typing path"
                 .to_owned(),
         }));
+    }
+    if params.dynamics == TypeDynamics::Linear
+        && params.linear_ms_per_char < MIN_SAFE_LINEAR_MS_PER_CHAR
+    {
+        return Err(type_params_error(
+            params.linear_ms_per_char,
+            format!(
+                "act_type linear_ms_per_char {} is below the text-integrity minimum {}; use slower pacing and verify target text via UI/file readback",
+                params.linear_ms_per_char, MIN_SAFE_LINEAR_MS_PER_CHAR
+            ),
+        ));
     }
     Ok(())
 }
@@ -193,6 +215,21 @@ fn action_error_to_mcp(error: &ActionError) -> ErrorData {
     mcp_error(error.code(), error.to_string())
 }
 
+fn type_params_error(requested_linear_ms_per_char: u32, message: impl Into<String>) -> ErrorData {
+    ErrorData::new(
+        ErrorCode(-32099),
+        message.into(),
+        Some(json!({
+            "code": synapse_core::error_codes::TOOL_PARAMS_INVALID,
+            "reason": "linear_ms_per_char_below_text_integrity_minimum",
+            "requested_linear_ms_per_char": requested_linear_ms_per_char,
+            "minimum_linear_ms_per_char": MIN_SAFE_LINEAR_MS_PER_CHAR,
+            "target_text_integrity": TEXT_INTEGRITY_DISPATCH_ONLY,
+            "target_readback_required": true,
+        })),
+    )
+}
+
 const fn default_type_dynamics() -> TypeDynamics {
     TypeDynamics::Natural
 }
@@ -221,7 +258,8 @@ mod tests {
     use synapse_core::KeystrokeNaturalParams;
 
     use super::{
-        ActTypeParams, TypeBackend, TypeDynamics, act_type_with_handle, default_linear_ms_per_char,
+        ActTypeParams, MIN_SAFE_LINEAR_MS_PER_CHAR, TEXT_INTEGRITY_DISPATCH_ONLY, TypeBackend,
+        TypeDynamics, act_type_with_handle, action_from_type_params, default_linear_ms_per_char,
         default_press_enter_after, default_type_backend, default_type_dynamics,
         default_use_scancodes, recorded_ikis,
     };
@@ -263,6 +301,12 @@ mod tests {
 
         assert!(response.ok);
         assert_eq!(response.chars_typed, 12);
+        assert_eq!(response.target_text_integrity, TEXT_INTEGRITY_DISPATCH_ONLY);
+        assert!(response.target_readback_required);
+        assert_eq!(
+            response.minimum_linear_ms_per_char,
+            MIN_SAFE_LINEAR_MS_PER_CHAR
+        );
         assert_eq!(actual_ikis, expected_ikis);
         assert_eq!(
             TypeDynamics::Natural.to_keystroke_dynamics(default_linear_ms_per_char()),
@@ -290,5 +334,70 @@ mod tests {
         let after = recorded_ikis(&before);
         println!("readback=act_type_recording edge=iki_readback before={before:?} after={after:?}");
         assert_eq!(after, [17, 0]);
+    }
+
+    #[test]
+    fn linear_typing_below_safe_minimum_fails_closed() {
+        let params = ActTypeParams {
+            text: "unsafe".to_owned(),
+            into_element: None,
+            dynamics: TypeDynamics::Linear,
+            linear_ms_per_char: MIN_SAFE_LINEAR_MS_PER_CHAR - 1,
+            use_scancodes: false,
+            press_enter_after: false,
+            backend: TypeBackend::Software,
+        };
+
+        let error = match action_from_type_params(&params) {
+            Ok(action) => panic!("low linear pacing dispatched unexpectedly: {action:?}"),
+            Err(error) => error,
+        };
+        let Some(data) = error.data else {
+            panic!("low linear pacing error had no structured data");
+        };
+
+        assert_eq!(data["code"], synapse_core::error_codes::TOOL_PARAMS_INVALID);
+        assert_eq!(
+            data["reason"],
+            "linear_ms_per_char_below_text_integrity_minimum"
+        );
+        assert_eq!(
+            data["minimum_linear_ms_per_char"],
+            MIN_SAFE_LINEAR_MS_PER_CHAR
+        );
+        assert_eq!(
+            data["requested_linear_ms_per_char"],
+            MIN_SAFE_LINEAR_MS_PER_CHAR - 1
+        );
+        assert_eq!(data["target_readback_required"], true);
+        assert_eq!(data["target_text_integrity"], TEXT_INTEGRITY_DISPATCH_ONLY);
+    }
+
+    #[test]
+    fn linear_typing_at_safe_minimum_is_allowed() {
+        let params = ActTypeParams {
+            text: "safe".to_owned(),
+            into_element: None,
+            dynamics: TypeDynamics::Linear,
+            linear_ms_per_char: MIN_SAFE_LINEAR_MS_PER_CHAR,
+            use_scancodes: false,
+            press_enter_after: false,
+            backend: TypeBackend::Software,
+        };
+
+        let action = match action_from_type_params(&params) {
+            Ok(action) => action,
+            Err(error) => panic!("linear pacing at safe minimum failed unexpectedly: {error}"),
+        };
+        assert_eq!(
+            action,
+            synapse_core::Action::TypeText {
+                text: "safe".to_owned(),
+                dynamics: synapse_core::KeystrokeDynamics::Linear {
+                    ms_per_char: MIN_SAFE_LINEAR_MS_PER_CHAR,
+                },
+                backend: synapse_core::Backend::Software,
+            }
+        );
     }
 }

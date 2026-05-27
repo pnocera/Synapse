@@ -215,7 +215,7 @@ Listed in `05_mcp_tool_surface.md`; aggregated here as the contract.
 | `set_capture_target` | 50 ms | 100 ms |
 | `set_perception_mode` | 30 ms | 60 ms |
 | `act_click` | 60 ms | 120 ms |
-| `act_type` | depends on dynamics; 10 chars in Burst = 5 ms | 10 ms |
+| `act_type` | dispatch latency depends on dynamics; `linear_ms_per_char` below 20 fails closed | target text integrity still requires app/file SoT readback |
 | `act_press` | 5 ms | 10 ms |
 | `act_aim` (non-track) | 100 ms (depends on duration) | duration + 30 ms |
 | `act_drag` | duration + 20 ms | duration + 50 ms |
