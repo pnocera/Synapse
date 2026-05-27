@@ -124,6 +124,23 @@ fn normalized_keys_are_modifier_ordered() {
 }
 
 #[test]
+fn normalized_keys_accept_vs_code_terminal_backtick_shortcut() {
+    let before = vec!["ctrl".to_owned(), "`".to_owned()];
+    println!("readback=act_press_keys edge=backtick_shortcut before={before:?}");
+    let after = normalized_keys(&before)
+        .unwrap_or_else(|error| panic!("backtick should normalize: {error}"));
+    let labels = after
+        .iter()
+        .map(|key| match &key.code {
+            synapse_core::KeyCode::Named { value } => value.as_str(),
+            _ => "",
+        })
+        .collect::<Vec<_>>();
+    println!("readback=act_press_keys edge=backtick_shortcut after={labels:?}");
+    assert_eq!(labels, ["ctrl", "`"]);
+}
+
+#[test]
 fn event_sequence_reads_recording_events() {
     let before = vec![
         RecordedInput::KeyDown { key: key("ctrl") },

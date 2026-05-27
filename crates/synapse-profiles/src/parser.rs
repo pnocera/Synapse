@@ -232,6 +232,7 @@ fn canonical_key_name(raw_key: &str) -> Option<String> {
         "control" => "ctrl",
         "escape" => "esc",
         "return" => "enter",
+        "backtick" | "grave" | "graveaccent" | "keyboardgraveaccent" => "`",
         "leftmouse" | "left_mouse" | "lmb" | "mouse_left" => "lmb",
         "rightmouse" | "right_mouse" | "rmb" | "mouse_right" => "rmb",
         "middlemouse" | "middle_mouse" | "mmb" | "mouse_middle" => "mmb",
@@ -256,9 +257,9 @@ fn canonical_key_name(raw_key: &str) -> Option<String> {
         return Some(key.to_owned());
     }
     match key {
-        "alt" | "backspace" | "ctrl" | "delete" | "down" | "end" | "enter" | "esc" | "home"
-        | "insert" | "left" | "lmb" | "mmb" | "pagedown" | "pageup" | "right" | "rmb" | "shift"
-        | "space" | "super" | "tab" | "up" | "x1" | "x2" => Some(key.to_owned()),
+        "`" | "alt" | "backspace" | "ctrl" | "delete" | "down" | "end" | "enter" | "esc"
+        | "home" | "insert" | "left" | "lmb" | "mmb" | "pagedown" | "pageup" | "right" | "rmb"
+        | "shift" | "space" | "super" | "tab" | "up" | "x1" | "x2" => Some(key.to_owned()),
         _ => None,
     }
 }

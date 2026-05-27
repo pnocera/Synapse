@@ -63,6 +63,31 @@ fn package_manifest_accepts_curated_notepad_fixture() -> TestResult {
 }
 
 #[test]
+fn package_manifest_accepts_curated_vscode_fixture() -> TestResult {
+    let path = curated_fixture("curated_vscode_package_manifest.toml");
+    let manifest = parse_package_manifest_file(&path)?;
+
+    assert_eq!(manifest.package_id, "profile.vscode.curated");
+    assert_eq!(manifest.profile_id, "vscode");
+    assert_eq!(
+        manifest.permissions.use_scope,
+        ProfileUseScope::Productivity
+    );
+    assert_eq!(manifest.targets[0].target_id, "vscode.windows");
+    assert_eq!(manifest.targets[1].target_id, "vscodium.windows");
+    assert_eq!(
+        manifest
+            .metadata
+            .get("curated.minimum_manual_fsv")
+            .map(String::as_str),
+        Some(
+            "profile_list,profile_registry_install,observe,act_press,act_type,storage_inspect,profile_quality_refresh,vscode_file_readback,vscode_command_palette_readback,vscode_integrated_terminal_readback"
+        )
+    );
+    Ok(())
+}
+
+#[test]
 fn package_manifest_accepts_signed_fixture_metadata() -> TestResult {
     let path = fixture("signed_good_package_manifest.toml");
     let manifest = parse_package_manifest_file(&path)?;

@@ -57,6 +57,7 @@ fn canonical_key_name(raw_key: &str) -> Result<String, ErrorData> {
         "control" => "ctrl",
         "escape" => "esc",
         "return" => "enter",
+        "backtick" | "grave" | "graveaccent" | "keyboardgraveaccent" => "`",
         "arrowup" => "up",
         "arrowdown" => "down",
         "arrowleft" => "left",
@@ -88,7 +89,7 @@ fn is_allowed_key_name(key: &str) -> bool {
     }
     matches!(
         key,
-        "alt"
+        "`" | "alt"
             | "backspace"
             | "ctrl"
             | "delete"
