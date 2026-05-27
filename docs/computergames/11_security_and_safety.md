@@ -114,7 +114,7 @@ enabled. Unknown permission names fail startup rather than being ignored.
 - `--allow-shell "^git (status|log|diff)( --[\\w-]+)*$"` allows narrow read-only git commands
 - omitting every `--allow-shell` entry denies all shell commands by default
 
-Multiple flags accumulate; the union is the allow list. Shell patterns must be full-command-line anchored and the daemon refuses to start if a pattern is suspiciously broad: empty pattern, matches empty, unanchored substring match, `.*`, `.+`, or equivalent any-character catch-all repetition.
+Multiple flags accumulate; the union is the allow list. Shell and launch patterns must be full-command-line anchored and the daemon refuses to start if a pattern is suspiciously broad: empty pattern, matches empty, unanchored substring match, `.*`, `.+`, or equivalent any-character catch-all repetition. On Windows, path-like launch targets are resolved through Win32 `GetLongPathNameW` before the launch allowlist regex is evaluated, so allowlists match the long path form instead of short-path aliases.
 
 ---
 

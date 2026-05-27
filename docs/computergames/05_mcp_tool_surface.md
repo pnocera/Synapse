@@ -764,6 +764,9 @@ Rules:
 - `env` defaults to `{}` and extends a restricted child environment containing
   only `PATH`, `USERPROFILE`, `TEMP`, `SystemRoot`.
 - `working_dir` defaults to the daemon's current directory if omitted.
+- On Windows, path-like `target` values are resolved through Win32
+  `GetLongPathNameW` before allowlist matching. Bare executable names such as
+  `javaw.exe` and URI targets such as `steam://run/...` match as provided.
 - `wait_for_window_title_regex` is optional. When present, the tool reads real
   window state until `timeout_ms` expires.
 - `reason` is `null` on full process/window success, `no_match_within_timeout`

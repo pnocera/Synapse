@@ -32,6 +32,7 @@ const ALLOW_PATTERN_SIZE_LIMIT_BYTES: usize = 256 * 1024;
 const PROCESS_BASE_ENV_KEYS: [&str; 4] = ["PATH", "USERPROFILE", "TEMP", "SystemRoot"];
 const LAUNCH_WINDOW_POLL_INTERVAL_MS: u64 = 20;
 pub const SHELL_PATTERN_TOO_BROAD: &str = "SHELL_PATTERN_TOO_BROAD";
+pub const LAUNCH_PATTERN_TOO_BROAD: &str = "LAUNCH_PATTERN_TOO_BROAD";
 
 #[derive(Clone, Debug, Default)]
 pub struct M4ServiceConfig {
@@ -48,6 +49,8 @@ struct AllowPattern {
 #[derive(Debug)]
 pub struct BroadAllowPatternError {
     source_name: &'static str,
+    tool_name: &'static str,
+    code: &'static str,
     raw: String,
     reason: &'static str,
 }
@@ -56,6 +59,16 @@ impl BroadAllowPatternError {
     #[must_use]
     pub const fn source_name(&self) -> &'static str {
         self.source_name
+    }
+
+    #[must_use]
+    pub const fn tool_name(&self) -> &'static str {
+        self.tool_name
+    }
+
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        self.code
     }
 
     #[must_use]
@@ -73,8 +86,8 @@ impl std::fmt::Display for BroadAllowPatternError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "{} pattern {:?} is too broad for act_run_shell: {}",
-            self.source_name, self.raw, self.reason
+            "{} pattern {:?} is too broad for {}: {}",
+            self.source_name, self.raw, self.tool_name, self.reason
         )
     }
 }
@@ -95,7 +108,7 @@ impl M4ServiceConfig {
             allow_launch: compile_allow_patterns(
                 ALLOW_LAUNCH_ENV,
                 allow_launch,
-                AllowPatternPolicy::CompileOnly,
+                AllowPatternPolicy::Launch,
             )?,
         })
     }
@@ -340,7 +353,7 @@ pub async fn launch(
     params: ActLaunchParams,
 ) -> Result<ActLaunchResponse, ErrorData> {
     validate_launch_params(&params)?;
-    let command_line = launch_command_line(&params);
+    let command_line = launch_command_line(&params)?;
     let Some(matched_pattern) = config.launch_match(&command_line) else {
         let reason = if config.allow_launch_count() == 0 {
             "no_allow_launch_policy"
@@ -945,12 +958,89 @@ fn shell_command_line(params: &ActRunShellParams) -> String {
         .join(" ")
 }
 
-fn launch_command_line(params: &ActLaunchParams) -> String {
-    std::iter::once(&params.target)
+fn launch_command_line(params: &ActLaunchParams) -> Result<String, ErrorData> {
+    let target = resolve_launch_target_for_policy(&params.target)?;
+    Ok(std::iter::once(&target)
         .chain(params.args.iter())
         .map(|part| quote_command_part(part))
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(" "))
+}
+
+#[cfg(windows)]
+fn resolve_launch_target_for_policy(target: &str) -> Result<String, ErrorData> {
+    if !is_path_like_launch_target(target) {
+        return Ok(target.to_owned());
+    }
+
+    win32_long_path_name(target).map_err(|error| {
+        launch_tool_error(
+            error_codes::ACTION_TARGET_INVALID,
+            format!("act_launch target path could not be resolved with GetLongPathNameW: {error}"),
+            json!({
+                "code": error_codes::ACTION_TARGET_INVALID,
+                "target": target,
+                "reason": "launch_target_path_resolution_failed",
+            }),
+        )
+    })
+}
+
+#[cfg(not(windows))]
+fn resolve_launch_target_for_policy(target: &str) -> Result<String, ErrorData> {
+    Ok(target.to_owned())
+}
+
+#[cfg(windows)]
+fn is_path_like_launch_target(target: &str) -> bool {
+    if target.contains("://") {
+        return false;
+    }
+    target.contains('\\')
+        || target.contains('/')
+        || target
+            .as_bytes()
+            .get(1)
+            .is_some_and(|second| *second == b':')
+}
+
+#[cfg(windows)]
+fn win32_long_path_name(target: &str) -> anyhow::Result<String> {
+    use std::{
+        ffi::{OsStr, OsString},
+        os::windows::ffi::{OsStrExt, OsStringExt},
+    };
+    use windows::{Win32::Storage::FileSystem::GetLongPathNameW, core::PCWSTR};
+
+    let wide_target = OsStr::new(target)
+        .encode_wide()
+        .chain(std::iter::once(0))
+        .collect::<Vec<_>>();
+
+    // SAFETY: `wide_target` is explicitly NUL-terminated and remains alive for the call.
+    let required = unsafe { GetLongPathNameW(PCWSTR(wide_target.as_ptr()), None) };
+    if required == 0 {
+        return Err(anyhow::Error::new(windows::core::Error::from_thread()))
+            .with_context(|| format!("resolve launch target {target:?}"));
+    }
+
+    let mut buffer = vec![0; required as usize + 1];
+    // SAFETY: the buffer is writable for its full length and the input pointer is valid.
+    let written = unsafe { GetLongPathNameW(PCWSTR(wide_target.as_ptr()), Some(&mut buffer)) };
+    if written == 0 {
+        return Err(anyhow::Error::new(windows::core::Error::from_thread()))
+            .with_context(|| format!("resolve launch target {target:?}"));
+    }
+    if written as usize >= buffer.len() {
+        anyhow::bail!(
+            "GetLongPathNameW returned {} characters for a {} character buffer",
+            written,
+            buffer.len()
+        );
+    }
+
+    buffer.truncate(written as usize);
+    Ok(OsString::from_wide(&buffer).to_string_lossy().into_owned())
 }
 
 fn quote_command_part(part: &str) -> String {
@@ -1014,7 +1104,30 @@ fn parse_env_list(name: &str) -> Vec<String> {
 #[derive(Copy, Clone)]
 enum AllowPatternPolicy {
     Shell,
-    CompileOnly,
+    Launch,
+}
+
+impl AllowPatternPolicy {
+    const fn tool_name(self) -> &'static str {
+        match self {
+            Self::Shell => "act_run_shell",
+            Self::Launch => "act_launch",
+        }
+    }
+
+    const fn broad_code(self) -> &'static str {
+        match self {
+            Self::Shell => SHELL_PATTERN_TOO_BROAD,
+            Self::Launch => LAUNCH_PATTERN_TOO_BROAD,
+        }
+    }
+
+    const fn unanchored_reason(self) -> &'static str {
+        match self {
+            Self::Shell => "shell_pattern_must_match_full_command_line",
+            Self::Launch => "launch_pattern_must_match_full_command_line",
+        }
+    }
 }
 
 fn compile_allow_patterns(
@@ -1043,24 +1156,28 @@ fn validate_allow_pattern_source(
     raw: &str,
     policy: AllowPatternPolicy,
 ) -> Result<(), BroadAllowPatternError> {
-    if !matches!(policy, AllowPatternPolicy::Shell) {
-        return Ok(());
-    }
     if raw.trim().is_empty() {
-        return Err(broad_shell_pattern(source_name, raw, "empty_pattern"));
+        return Err(broad_allow_pattern(
+            source_name,
+            raw,
+            "empty_pattern",
+            policy,
+        ));
     }
     if contains_unbounded_dot_repetition(raw) || contains_any_character_class_repetition(raw) {
-        return Err(broad_shell_pattern(
+        return Err(broad_allow_pattern(
             source_name,
             raw,
             "unbounded_any_character_repetition",
+            policy,
         ));
     }
     if !has_full_command_anchors(raw) {
-        return Err(broad_shell_pattern(
+        return Err(broad_allow_pattern(
             source_name,
             raw,
-            "shell_pattern_must_match_full_command_line",
+            policy.unanchored_reason(),
+            policy,
         ));
     }
     Ok(())
@@ -1072,20 +1189,23 @@ fn validate_compiled_allow_pattern(
     regex: &regex::Regex,
     policy: AllowPatternPolicy,
 ) -> Result<(), BroadAllowPatternError> {
-    if !matches!(policy, AllowPatternPolicy::Shell) {
-        return Ok(());
-    }
     if regex.is_match("") {
-        return Err(broad_shell_pattern(source_name, raw, "matches_empty"));
+        return Err(broad_allow_pattern(
+            source_name,
+            raw,
+            "matches_empty",
+            policy,
+        ));
     }
     if BROAD_COMMAND_PROBES
         .iter()
         .all(|probe| regex.is_match(probe))
     {
-        return Err(broad_shell_pattern(
+        return Err(broad_allow_pattern(
             source_name,
             raw,
             "matches_arbitrary_command_lines",
+            policy,
         ));
     }
     Ok(())
@@ -1098,13 +1218,16 @@ const BROAD_COMMAND_PROBES: [&str; 4] = [
     "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -EncodedCommand AAAA",
 ];
 
-fn broad_shell_pattern(
+fn broad_allow_pattern(
     source_name: &'static str,
     raw: &str,
     reason: &'static str,
+    policy: AllowPatternPolicy,
 ) -> BroadAllowPatternError {
     BroadAllowPatternError {
         source_name,
+        tool_name: policy.tool_name(),
+        code: policy.broad_code(),
         raw: raw.to_owned(),
         reason,
     }
@@ -1219,9 +1342,11 @@ mod tests {
     }
 
     fn launch_config_for(params: &ActLaunchParams) -> M4ServiceConfig {
+        let command_line = launch_command_line(params)
+            .unwrap_or_else(|error| panic!("synthetic launch command line should build: {error}"));
         match M4ServiceConfig::from_cli_parts(
             Vec::new(),
-            vec![format!("^{}$", regex::escape(&launch_command_line(params)))],
+            vec![format!("^{}$", regex::escape(&command_line))],
         ) {
             Ok(config) => config,
             Err(error) => panic!("synthetic launch allowlist should compile: {error:#}"),
@@ -1318,8 +1443,53 @@ mod tests {
         let params = launch_params("notepad.exe", vec!["C:\\tmp\\hello world.txt", ""], 10_000);
 
         assert_eq!(
-            launch_command_line(&params),
+            launch_command_line(&params).unwrap_or_else(|error| {
+                panic!("synthetic launch command line should build: {error}")
+            }),
             "notepad.exe \"C:\\tmp\\hello world.txt\" \"\""
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn launch_command_line_uses_win32_long_path_for_existing_path_target() {
+        let dir = tempfile::TempDir::new()
+            .unwrap_or_else(|error| panic!("create temp launch path dir: {error}"));
+        let target_path = dir.path().join("synapse launch target.exe");
+        std::fs::write(&target_path, b"synthetic")
+            .unwrap_or_else(|error| panic!("write temp target: {error}"));
+        let params = launch_params(&target_path.display().to_string(), vec!["--flag"], 10_000);
+
+        let command_line = launch_command_line(&params).unwrap_or_else(|error| {
+            panic!("existing path-like launch target should resolve: {error}")
+        });
+
+        assert!(
+            command_line.contains("synapse launch target.exe\" --flag"),
+            "{command_line}"
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn launch_command_line_rejects_unresolvable_path_target() {
+        let dir = tempfile::TempDir::new()
+            .unwrap_or_else(|error| panic!("create temp launch path dir: {error}"));
+        let target_path = dir.path().join("missing-launch-target.exe");
+        let params = launch_params(&target_path.display().to_string(), Vec::new(), 10_000);
+
+        let error = match launch_command_line(&params) {
+            Ok(command_line) => panic!("missing path should not resolve, got {command_line}"),
+            Err(error) => error,
+        };
+
+        assert_eq!(
+            error
+                .data
+                .as_ref()
+                .and_then(|data| data.get("reason"))
+                .and_then(|reason| reason.as_str()),
+            Some("launch_target_path_resolution_failed")
         );
     }
 

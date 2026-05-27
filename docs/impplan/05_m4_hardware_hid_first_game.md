@@ -682,9 +682,9 @@ code exists; it is done only when the issue is closed with manual FSV evidence.
 | #402 | open | D-03 `act_combo` schema snapshot and default-resolution row. |
 | #403 | open | D-04 `act_run_shell` allowlist parsing and dispatch. |
 | #404 | open | D-05 `act_run_shell` stdout/stderr caps and timeout. |
-| #405 | open | D-06 `act_run_shell` broad-pattern rejection. |
-| #406 | open | D-07 `act_launch` with working dir, env, and window wait. |
-| #407 | open | D-08 `act_launch` broad-pattern rejection. |
+| #405 | closed | D-06 `act_run_shell` broad-pattern rejection. |
+| #406 | closed | D-07 `act_launch` with working dir, env, and window wait. |
+| #407 | closed | D-08 `act_launch` broad-pattern rejection and Windows long-path policy readback. |
 | #408 | open | D-09 CLI args: `--allow-shell`, `--allow-launch`, `--hardware-hid`. |
 | #409 | open | D-10 shell/launch safety error codes. |
 

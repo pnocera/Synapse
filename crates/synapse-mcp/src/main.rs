@@ -161,11 +161,13 @@ async fn run() -> anyhow::Result<ExitCode> {
             if let Some(broad_pattern) = error.downcast_ref::<m4::BroadAllowPatternError>() {
                 tracing::error!(
                     event = "CONFIG_INVALID",
-                    code = m4::SHELL_PATTERN_TOO_BROAD,
+                    code = broad_pattern.code(),
+                    tool = broad_pattern.tool_name(),
                     source = broad_pattern.source_name(),
                     pattern = broad_pattern.raw(),
                     reason = broad_pattern.reason(),
-                    "CONFIG_INVALID code=SHELL_PATTERN_TOO_BROAD"
+                    "CONFIG_INVALID code={}",
+                    broad_pattern.code()
                 );
                 eprintln!("synapse-mcp error: {error:#}");
                 drop(telemetry_guard);
