@@ -111,10 +111,10 @@ enabled. Unknown permission names fail startup rather than being ignored.
 `--allow-launch <pattern>` and `--allow-shell <pattern>` accept regex against the candidate command line:
 
 - `--allow-launch "notepad\\.exe"` allows launching notepad
-- `--allow-shell "git (status|log|diff).*"` allows read-only git
-- `--allow-shell "^$"` (empty) — denies everything (default)
+- `--allow-shell "^git (status|log|diff)( --[\\w-]+)*$"` allows narrow read-only git commands
+- omitting every `--allow-shell` entry denies all shell commands by default
 
-Multiple flags accumulate; the union is the allow list. Refuses to start if a pattern is suspiciously broad (`.*`, `.+`, matches empty).
+Multiple flags accumulate; the union is the allow list. Shell patterns must be full-command-line anchored and the daemon refuses to start if a pattern is suspiciously broad: empty pattern, matches empty, unanchored substring match, `.*`, `.+`, or equivalent any-character catch-all repetition.
 
 ---
 

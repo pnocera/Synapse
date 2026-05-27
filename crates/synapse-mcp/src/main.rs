@@ -26,6 +26,9 @@ use tracing_subscriber::filter::LevelFilter;
 
 use crate::server::SynapseService;
 
+const ALLOW_SHELL_ENV: &str = "SYNAPSE_ALLOW_SHELL";
+const ALLOW_LAUNCH_ENV: &str = "SYNAPSE_ALLOW_LAUNCH";
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
 enum Mode {
     Stdio,
@@ -78,18 +81,16 @@ struct Cli {
     hardware_hid: Option<String>,
     #[arg(
         long,
-        env = "SYNAPSE_ALLOW_SHELL",
         value_name = "REGEX",
-        value_delimiter = ',',
-        action = ArgAction::Append
+        action = ArgAction::Append,
+        help = "Allow act_run_shell command-line regex; repeat for multiple entries. Env: SYNAPSE_ALLOW_SHELL comma-separated"
     )]
     allow_shell: Vec<String>,
     #[arg(
         long,
-        env = "SYNAPSE_ALLOW_LAUNCH",
         value_name = "REGEX",
-        value_delimiter = ',',
-        action = ArgAction::Append
+        action = ArgAction::Append,
+        help = "Allow act_launch target regex; repeat for multiple entries. Env: SYNAPSE_ALLOW_LAUNCH comma-separated"
     )]
     allow_launch: Vec<String>,
 }
@@ -115,8 +116,18 @@ impl Cli {
     }
 
     fn m4_config(&self) -> anyhow::Result<m4::M4ServiceConfig> {
-        m4::M4ServiceConfig::from_cli_parts(self.allow_shell.clone(), self.allow_launch.clone())
+        let mut allow_shell = parse_env_list(ALLOW_SHELL_ENV);
+        allow_shell.extend(self.allow_shell.clone());
+        let mut allow_launch = parse_env_list(ALLOW_LAUNCH_ENV);
+        allow_launch.extend(self.allow_launch.clone());
+        m4::M4ServiceConfig::from_cli_parts(allow_shell, allow_launch)
     }
+}
+
+fn parse_env_list(name: &str) -> Vec<String> {
+    std::env::var(name)
+        .map(|raw| raw.split(',').map(ToOwned::to_owned).collect())
+        .unwrap_or_default()
 }
 
 #[tokio::main]
@@ -144,7 +155,25 @@ async fn run() -> anyhow::Result<ExitCode> {
 
     let m2_config = cli.m2_config();
     let m3_config = cli.m3_config();
-    let m4_config = cli.m4_config()?;
+    let m4_config = match cli.m4_config() {
+        Ok(config) => config,
+        Err(error) => {
+            if let Some(broad_pattern) = error.downcast_ref::<m4::BroadAllowPatternError>() {
+                tracing::error!(
+                    event = "CONFIG_INVALID",
+                    code = m4::SHELL_PATTERN_TOO_BROAD,
+                    source = broad_pattern.source_name(),
+                    pattern = broad_pattern.raw(),
+                    reason = broad_pattern.reason(),
+                    "CONFIG_INVALID code=SHELL_PATTERN_TOO_BROAD"
+                );
+                eprintln!("synapse-mcp error: {error:#}");
+                drop(telemetry_guard);
+                return Ok(ExitCode::from(2));
+            }
+            return Err(error);
+        }
+    };
 
     match cli.mode {
         Mode::Stdio => run_stdio(telemetry_guard, &m2_config, m3_config, m4_config).await,

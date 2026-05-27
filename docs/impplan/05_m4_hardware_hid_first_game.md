@@ -454,7 +454,9 @@ Input shape:
 Rules:
 
 - Startup config must include `--allow-shell <regex>`.
-- Broad patterns such as `.*` are rejected at startup.
+- Shell patterns must be full-command-line anchored.
+- Empty patterns, patterns that match empty input, unanchored substring
+  patterns, and broad catch-alls such as `.*` / `.+` are rejected at startup.
 - The resolved command line must match an allowlist entry.
 - The child starts with restricted inherited env (`PATH`, `USERPROFILE`,
   `TEMP`, `SystemRoot`) plus request `env`; shell interpreters may synthesize

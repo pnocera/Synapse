@@ -643,7 +643,8 @@ Errors: `TOOL_PARAMS_INVALID`, `SAFETY_PERMISSION_DENIED`,
 
 Runs an allowlisted local shell command. Disabled unless `--allow-shell
 <regex>` was passed at startup. Broad allowlists such as `.*` are rejected at
-startup per `11_security_and_safety.md`.
+startup per `11_security_and_safety.md`; accepted shell patterns must be
+full-command-line anchored and must not match empty input.
 
 ```json
 {
@@ -686,6 +687,9 @@ allowlist is the required permission surface.
 Rules:
 
 - `command + args` are resolved into a command line before allowlist matching.
+- Shell allowlist patterns are validated at startup and rejected if empty,
+  unanchored, matching empty, or using catch-all any-character repetition such
+  as `.*` / `.+`.
 - `env` defaults to `{}` and extends a restricted child environment containing
   only `PATH`, `USERPROFILE`, `TEMP`, `SystemRoot`, plus any variables the child
   interpreter synthesizes after launch.

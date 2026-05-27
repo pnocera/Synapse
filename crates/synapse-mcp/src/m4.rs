@@ -26,7 +26,9 @@ const DEFAULT_LAUNCH_TIMEOUT_MS: u32 = 10_000;
 const ALLOW_SHELL_ENV: &str = "SYNAPSE_ALLOW_SHELL";
 const ALLOW_LAUNCH_ENV: &str = "SYNAPSE_ALLOW_LAUNCH";
 const SHELL_OUTPUT_CAP_BYTES: usize = 1024 * 1024;
+const ALLOW_PATTERN_SIZE_LIMIT_BYTES: usize = 256 * 1024;
 const SHELL_BASE_ENV_KEYS: [&str; 4] = ["PATH", "USERPROFILE", "TEMP", "SystemRoot"];
+pub const SHELL_PATTERN_TOO_BROAD: &str = "SHELL_PATTERN_TOO_BROAD";
 
 #[derive(Clone, Debug, Default)]
 pub struct M4ServiceConfig {
@@ -40,14 +42,58 @@ struct AllowPattern {
     regex: regex::Regex,
 }
 
+#[derive(Debug)]
+pub struct BroadAllowPatternError {
+    source_name: &'static str,
+    raw: String,
+    reason: &'static str,
+}
+
+impl BroadAllowPatternError {
+    #[must_use]
+    pub const fn source_name(&self) -> &'static str {
+        self.source_name
+    }
+
+    #[must_use]
+    pub fn raw(&self) -> &str {
+        &self.raw
+    }
+
+    #[must_use]
+    pub const fn reason(&self) -> &'static str {
+        self.reason
+    }
+}
+
+impl std::fmt::Display for BroadAllowPatternError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} pattern {:?} is too broad for act_run_shell: {}",
+            self.source_name, self.raw, self.reason
+        )
+    }
+}
+
+impl std::error::Error for BroadAllowPatternError {}
+
 impl M4ServiceConfig {
     pub fn from_cli_parts(
         allow_shell: Vec<String>,
         allow_launch: Vec<String>,
     ) -> anyhow::Result<Self> {
         Ok(Self {
-            allow_shell: compile_allow_patterns(ALLOW_SHELL_ENV, allow_shell)?,
-            allow_launch: compile_allow_patterns(ALLOW_LAUNCH_ENV, allow_launch)?,
+            allow_shell: compile_allow_patterns(
+                ALLOW_SHELL_ENV,
+                allow_shell,
+                AllowPatternPolicy::Shell,
+            )?,
+            allow_launch: compile_allow_patterns(
+                ALLOW_LAUNCH_ENV,
+                allow_launch,
+                AllowPatternPolicy::CompileOnly,
+            )?,
         })
     }
 
@@ -709,18 +755,186 @@ fn parse_env_list(name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
+#[derive(Copy, Clone)]
+enum AllowPatternPolicy {
+    Shell,
+    CompileOnly,
+}
+
 fn compile_allow_patterns(
     source_name: &'static str,
     patterns: Vec<String>,
+    policy: AllowPatternPolicy,
 ) -> anyhow::Result<Vec<AllowPattern>> {
     patterns
         .into_iter()
         .map(|raw| {
-            let regex = regex::Regex::new(&raw)
-                .with_context(|| format!("{source_name} pattern {raw:?} is not valid regex"))?;
+            validate_allow_pattern_source(source_name, &raw, policy)?;
+            let regex = regex::RegexBuilder::new(&raw)
+                .size_limit(ALLOW_PATTERN_SIZE_LIMIT_BYTES)
+                .build()
+                .with_context(|| {
+                    format!("{source_name} pattern {raw:?} is not valid regex or exceeds the compiled-size limit")
+                })?;
+            validate_compiled_allow_pattern(source_name, &raw, &regex, policy)?;
             Ok(AllowPattern { raw, regex })
         })
         .collect()
+}
+
+fn validate_allow_pattern_source(
+    source_name: &'static str,
+    raw: &str,
+    policy: AllowPatternPolicy,
+) -> Result<(), BroadAllowPatternError> {
+    if !matches!(policy, AllowPatternPolicy::Shell) {
+        return Ok(());
+    }
+    if raw.trim().is_empty() {
+        return Err(broad_shell_pattern(source_name, raw, "empty_pattern"));
+    }
+    if contains_unbounded_dot_repetition(raw) || contains_any_character_class_repetition(raw) {
+        return Err(broad_shell_pattern(
+            source_name,
+            raw,
+            "unbounded_any_character_repetition",
+        ));
+    }
+    if !has_full_command_anchors(raw) {
+        return Err(broad_shell_pattern(
+            source_name,
+            raw,
+            "shell_pattern_must_match_full_command_line",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_compiled_allow_pattern(
+    source_name: &'static str,
+    raw: &str,
+    regex: &regex::Regex,
+    policy: AllowPatternPolicy,
+) -> Result<(), BroadAllowPatternError> {
+    if !matches!(policy, AllowPatternPolicy::Shell) {
+        return Ok(());
+    }
+    if regex.is_match("") {
+        return Err(broad_shell_pattern(source_name, raw, "matches_empty"));
+    }
+    if BROAD_COMMAND_PROBES
+        .iter()
+        .all(|probe| regex.is_match(probe))
+    {
+        return Err(broad_shell_pattern(
+            source_name,
+            raw,
+            "matches_arbitrary_command_lines",
+        ));
+    }
+    Ok(())
+}
+
+const BROAD_COMMAND_PROBES: [&str; 4] = [
+    "cmd.exe /c \"echo synapse-broad-probe\"",
+    "powershell.exe -NoProfile -Command Get-Process",
+    "notepad.exe",
+    "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe -EncodedCommand AAAA",
+];
+
+fn broad_shell_pattern(
+    source_name: &'static str,
+    raw: &str,
+    reason: &'static str,
+) -> BroadAllowPatternError {
+    BroadAllowPatternError {
+        source_name,
+        raw: raw.to_owned(),
+        reason,
+    }
+}
+
+fn has_full_command_anchors(raw: &str) -> bool {
+    let pattern = strip_leading_global_flags(raw.trim());
+    pattern.starts_with('^') && (pattern.ends_with('$') || pattern.ends_with("\\z"))
+}
+
+fn strip_leading_global_flags(pattern: &str) -> &str {
+    let Some(rest) = pattern.strip_prefix("(?") else {
+        return pattern;
+    };
+    let Some(close_index) = rest.find(')') else {
+        return pattern;
+    };
+    let flags = &rest[..close_index];
+    if flags.is_empty()
+        || flags
+            .chars()
+            .any(|ch| !matches!(ch, 'i' | 'm' | 's' | 'R' | 'U' | 'u' | 'x' | '-'))
+    {
+        return pattern;
+    }
+    &rest[(close_index + 1)..]
+}
+
+fn contains_unbounded_dot_repetition(pattern: &str) -> bool {
+    let mut escaped = false;
+    let mut in_class = false;
+    let mut chars = pattern.chars().peekable();
+    while let Some(ch) = chars.next() {
+        if escaped {
+            escaped = false;
+            continue;
+        }
+        match ch {
+            '\\' => escaped = true,
+            '[' if !in_class => in_class = true,
+            ']' if in_class => in_class = false,
+            '.' if !in_class => {
+                let Some(next) = chars.peek().copied() else {
+                    continue;
+                };
+                if matches!(next, '*' | '+') {
+                    return true;
+                }
+                if next == '{' && following_counted_repetition_is_unbounded(chars.clone()) {
+                    return true;
+                }
+            }
+            _ => {}
+        }
+    }
+    false
+}
+
+fn following_counted_repetition_is_unbounded<I>(mut chars: I) -> bool
+where
+    I: Iterator<Item = char>,
+{
+    if chars.next() != Some('{') {
+        return false;
+    }
+    let mut body = String::new();
+    for ch in chars {
+        if ch == '}' {
+            return body.trim_end().ends_with(',');
+        }
+        body.push(ch);
+    }
+    false
+}
+
+fn contains_any_character_class_repetition(pattern: &str) -> bool {
+    let compact = pattern
+        .chars()
+        .filter(|ch| !ch.is_ascii_whitespace())
+        .collect::<String>();
+    [
+        r"[\s\S]*", r"[\S\s]*", r"[\d\D]*", r"[\D\d]*", r"[\w\W]*", r"[\W\w]*", r"[\s\S]+",
+        r"[\S\s]+", r"[\d\D]+", r"[\D\d]+", r"[\w\W]+", r"[\W\w]+",
+    ]
+    .iter()
+    .any(|needle| compact.contains(needle))
 }
 
 #[cfg(test)]
@@ -819,6 +1033,47 @@ mod tests {
             shell_command_line(&params),
             "cmd.exe /c \"echo hello\" \"\""
         );
+    }
+
+    #[test]
+    fn shell_allowlist_accepts_narrow_startup_patterns() {
+        let config = M4ServiceConfig::from_cli_parts(
+            vec![
+                r"^git \w+$".to_owned(),
+                r"^echo .{0,100}$".to_owned(),
+                r"^cargo (build|test)( --[\w-]+)*$".to_owned(),
+            ],
+            Vec::new(),
+        );
+
+        assert!(
+            config.is_ok(),
+            "narrow allow-shell examples should compile: {config:?}"
+        );
+    }
+
+    #[test]
+    fn shell_allowlist_rejects_broad_startup_patterns() {
+        let cases = [
+            ("", "empty_pattern"),
+            (".*", "unbounded_any_character_repetition"),
+            ("^.+$", "unbounded_any_character_repetition"),
+            ("^$", "matches_empty"),
+            ("git status", "shell_pattern_must_match_full_command_line"),
+            (r"^[\s\S]*$", "unbounded_any_character_repetition"),
+        ];
+
+        for (pattern, reason) in cases {
+            let error = match M4ServiceConfig::from_cli_parts(vec![pattern.to_owned()], Vec::new())
+            {
+                Ok(config) => panic!("pattern {pattern:?} should reject, got {config:?}"),
+                Err(error) => error,
+            };
+            let Some(broad) = error.downcast_ref::<BroadAllowPatternError>() else {
+                panic!("pattern {pattern:?} returned unexpected error: {error:#}");
+            };
+            assert_eq!(broad.reason(), reason);
+        }
     }
 
     #[tokio::test]
