@@ -71,6 +71,12 @@ readbacks (`profile_list`, `profile_quality_refresh`, `storage_inspect`, and
 future registry/audit tools). GitHub Actions/CI, scripts, tests, and benchmarks
 are supporting evidence only.
 
+The governance baseline for #470 is
+`docs/computergames/20_profile_registry_governance.md`. Profile packages and
+redacted audit contribution bundles fail closed unless their physical manifest
+SoTs carry license, attribution, provenance, revocation, redaction, and consent
+metadata.
+
 ---
 
 ## State-tracking — three sources, in order of authority

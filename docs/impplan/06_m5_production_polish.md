@@ -33,6 +33,12 @@ future registry index/package files, RocksDB `CF_ACTION_LOG`,
 `CF_PROFILES`, consent/export bundles, and MCP readbacks. CI, GitHub Actions,
 tests, scripts, and benchmarks are supporting evidence only.
 
+Contribution rights, attribution, provenance, license metadata, revocation, and
+deletion semantics are governed by
+`docs/computergames/20_profile_registry_governance.md`; no profile package or
+redacted audit bundle can be shared or promoted without those physical manifest
+fields.
+
 ## Demo gate
 
 Fresh Windows 11 VM (no Synapse pre-installed) → operator runs `synapse-mcp setup` wizard → Claude Desktop completes the multi-app scenario per `15 §7`:

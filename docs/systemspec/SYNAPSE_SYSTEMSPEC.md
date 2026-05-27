@@ -74,7 +74,7 @@ Comprehensive technical reference for the Synapse MCP server, produced by readin
   installs, model/file generation, firmware flashing, app launching, USB/COM
   inspection, and UI inspection are agent-owned work when reversible on this
   host.
-- For the contract-level PRD, see `docs/computergames/` (numbered 00–17).
+- For the contract-level PRD, see `docs/computergames/` (numbered 00-20).
 - For the per-milestone work-item ledger, see `docs/impplan/` (numbered 00–07).
 
 
@@ -777,7 +777,7 @@ crates/synapse-overlay/
 
 | Path | Description |
 |---|---|
-| `docs/computergames/` | Product Requirements Document (PRD) — 18 numbered files covering architecture, perception, action, reflex, MCP surface, schemas, storage, supported use, hardware HID, perf budget, security, observability, testing, build, roadmap, open questions, research appendix |
+| `docs/computergames/` | Product Requirements Document (PRD) — 21 numbered files covering architecture, perception, action, reflex, MCP surface, schemas, storage, supported use, hardware HID, perf budget, security, observability, testing, build, roadmap, open questions, research appendix, Luanti benchmark/runbook, and profile-registry governance |
 | `docs/impplan/` | Implementation plan — methodology + per-milestone work-item ledger (M0 through M5) + cross-cutting concerns |
 | `docs/adr/0001-current-rust-and-dependencies.md` | ADR: pinned to current stable Rust, no MSRV downgrade |
 | `docs/adr/0002-rocksdb-primary-storage.md` | ADR: RocksDB chosen over LMDB/sled for primary storage |
@@ -3578,6 +3578,9 @@ Source files covered:
 - `docs/impplan/07_cross_cutting.md`
 - `docs/computergames/15_roadmap_and_milestones.md`
 - `docs/computergames/16_open_questions.md`
+- `docs/computergames/18_luanti_benchmark.md`
+- `docs/computergames/19_luanti_manual_fsv_runbook.md`
+- `docs/computergames/20_profile_registry_governance.md`
 - `docs/adr/0001..0007*.md`
 
 ## 1. Authority order
@@ -3816,6 +3819,9 @@ Open items remaining (PRD §16): OQ-003 (detection model default — YOLOv10n vs
 | `docs/computergames/15_roadmap_and_milestones.md` | M0-M5 phases, scope per milestone, demo criteria |
 | `docs/computergames/16_open_questions.md` | Unresolved decisions, ADRs needed |
 | `docs/computergames/17_research_appendix.md` | Web research, comparable projects, references |
+| `docs/computergames/18_luanti_benchmark.md` | Local Luanti / Minetest Game benchmark install, world fixture, and provenance |
+| `docs/computergames/19_luanti_manual_fsv_runbook.md` | Manual whole-system FSV runbook for the Luanti benchmark |
+| `docs/computergames/20_profile_registry_governance.md` | Profile/audit contribution rights, licensing, attribution, provenance, and revocation governance |
 | `docs/impplan/00_methodology.md` | Dev discipline, FSV protocol, work-item shape |
 | `docs/impplan/0{1..6}_m{0..5}_*.md` | Per-milestone work-item ledger |
 | `docs/impplan/07_cross_cutting.md` | Perf gates, security, observability, release |

@@ -122,6 +122,7 @@ directly; scripts, tests, benchmarks, GitHub Actions, and CI are never FSV.
 | 17 | [`17_research_appendix.md`](17_research_appendix.md) | Web research, comparable projects, references. |
 | 18 | [`18_luanti_benchmark.md`](18_luanti_benchmark.md) | Local Luanti / Minetest Game benchmark install, world fixture, and provenance. |
 | 19 | [`19_luanti_manual_fsv_runbook.md`](19_luanti_manual_fsv_runbook.md) | Manual whole-system FSV runbook for the Luanti benchmark. |
+| 20 | [`20_profile_registry_governance.md`](20_profile_registry_governance.md) | Profile/audit contribution rights, licenses, attribution, provenance, and revocation governance. |
 
 ---
 

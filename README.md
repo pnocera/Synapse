@@ -42,6 +42,10 @@ The profile-registry / audit-data moat is the compounding loop: profile used -> 
 
 Physical sources of truth for that loop include profile TOML and future registry index/package files, RocksDB `CF_ACTION_LOG`, `CF_REFLEX_AUDIT`, `CF_EVENTS`, `CF_OBSERVATIONS`, `CF_SESSIONS`, and `CF_PROFILES` quality rows, consent/export bundles, and MCP readbacks such as `profile_list`, `profile_quality_refresh`, `storage_inspect`, and future registry/audit tools. Manual FSV must trigger the real runtime surface and then read those physical stores directly; GitHub Actions/CI and automated tests remain supporting evidence only.
 
+Contribution rights, attribution, provenance, licensing, consent, and
+revocation semantics for that loop are governed by
+[docs/computergames/20_profile_registry_governance.md](docs/computergames/20_profile_registry_governance.md).
+
 ## Tools
 
 The full current tool registry is documented in [docs/computergames/05_mcp_tool_surface.md](docs/computergames/05_mcp_tool_surface.md) and [docs/systemspec/13_mcp_tool_reference.md](docs/systemspec/13_mcp_tool_reference.md). The table below is the M1 starter surface retained for quick orientation.

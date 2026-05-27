@@ -331,7 +331,10 @@ bound score for foreground-profile `ok` vs `error` outcomes, compatibility
 signals, profile-schema-version recency/mixed-version counters, source row
 range, evidence hash, and a local-only contribution policy. It never exports or
 shares data; contribution bundles require a future
-operator-approved path.
+operator-approved path and the governance metadata defined in
+[`20_profile_registry_governance.md`](20_profile_registry_governance.md):
+license SPDX expression, attribution, provenance, revocation state, redaction
+policy, and operator consent id.
 
 ---
 

@@ -342,7 +342,7 @@ crates/synapse-overlay/
 
 | Path | Description |
 |---|---|
-| `docs/computergames/` | Product Requirements Document (PRD) — 18 numbered files covering architecture, perception, action, reflex, MCP surface, schemas, storage, supported use, hardware HID, perf budget, security, observability, testing, build, roadmap, open questions, research appendix |
+| `docs/computergames/` | Product Requirements Document (PRD) — 21 numbered files covering architecture, perception, action, reflex, MCP surface, schemas, storage, supported use, hardware HID, perf budget, security, observability, testing, build, roadmap, open questions, research appendix, Luanti benchmark/runbook, and profile-registry governance |
 | `docs/impplan/` | Implementation plan — methodology + per-milestone work-item ledger (M0 through M5) + cross-cutting concerns |
 | `docs/adr/0001-current-rust-and-dependencies.md` | ADR: pinned to current stable Rust, no MSRV downgrade |
 | `docs/adr/0002-rocksdb-primary-storage.md` | ADR: RocksDB chosen over LMDB/sled for primary storage |

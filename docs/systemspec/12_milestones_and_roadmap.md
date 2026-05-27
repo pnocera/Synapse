@@ -15,6 +15,9 @@ Source files covered:
 - `docs/impplan/07_cross_cutting.md`
 - `docs/computergames/15_roadmap_and_milestones.md`
 - `docs/computergames/16_open_questions.md`
+- `docs/computergames/18_luanti_benchmark.md`
+- `docs/computergames/19_luanti_manual_fsv_runbook.md`
+- `docs/computergames/20_profile_registry_governance.md`
 - `docs/adr/0001..0007*.md`
 
 ## 1. Authority order
@@ -253,6 +256,9 @@ Open items remaining (PRD §16): OQ-003 (detection model default — YOLOv10n vs
 | `docs/computergames/15_roadmap_and_milestones.md` | M0-M5 phases, scope per milestone, demo criteria |
 | `docs/computergames/16_open_questions.md` | Unresolved decisions, ADRs needed |
 | `docs/computergames/17_research_appendix.md` | Web research, comparable projects, references |
+| `docs/computergames/18_luanti_benchmark.md` | Local Luanti / Minetest Game benchmark install, world fixture, and provenance |
+| `docs/computergames/19_luanti_manual_fsv_runbook.md` | Manual whole-system FSV runbook for the Luanti benchmark |
+| `docs/computergames/20_profile_registry_governance.md` | Profile/audit contribution rights, licensing, attribution, provenance, and revocation governance |
 | `docs/impplan/00_methodology.md` | Dev discipline, FSV protocol, work-item shape |
 | `docs/impplan/0{1..6}_m{0..5}_*.md` | Per-milestone work-item ledger |
 | `docs/impplan/07_cross_cutting.md` | Perf gates, security, observability, release |

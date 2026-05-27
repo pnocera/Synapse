@@ -195,6 +195,9 @@ audit tools, signing/trust/rollback/quarantine, consent/redaction/export,
 profile-quality scoring, authoring from audit/replay evidence, retention and
 backfill, offline sync/contribution bundles, poisoning defenses, curated seed
 profiles, inspector UI, shared-registry moderation, and governance/licensing.
+The contribution-rights, attribution, provenance, and revocation baseline is
+the operator-visible governance doc in
+[`20_profile_registry_governance.md`](20_profile_registry_governance.md).
 
 Physical sources of truth for this track are registry index/package files,
 profile TOML files, RocksDB rows in `CF_ACTION_LOG`, `CF_REFLEX_AUDIT`,
