@@ -1,6 +1,8 @@
-use std::{error::Error, time::Duration};
-
-use std::sync::Arc;
+use std::{
+    error::Error,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 use synapse_action::{ActionHandle, ActionMessage};
 
 use synapse_core::{
@@ -9,8 +11,8 @@ use synapse_core::{
 };
 use synapse_reflex::{
     ComboContext, ComboController, ComboOutput, ComboParams, ComboPhase, EventBus,
-    REFLEX_COMBO_COMPLETED_KIND, REFLEX_LIFETIME_EXPIRED_KIND, ReflexScheduler, ScheduledReflex,
-    SchedulerConfig,
+    REFLEX_COMBO_COMPLETED_KIND, REFLEX_LIFETIME_EXPIRED_KIND, ReflexRuntime, ReflexScheduler,
+    ScheduledReflex, SchedulerConfig, install_action_combo_scheduler,
 };
 use synapse_storage::{Db, cf, decode_json};
 use tempfile::tempdir;
@@ -343,6 +345,68 @@ fn scheduler_combo_driver_expires_after_final_step_and_writes_audit() -> Result<
     Ok(())
 }
 
+#[test]
+fn action_handle_combo_bridge_schedules_reflex_and_audit() -> Result<(), Box<dyn Error>> {
+    let temp = tempdir()?;
+    let db_path = temp.path().join("db");
+    let db = Arc::new(Db::open(&db_path, SCHEMA_VERSION)?);
+    let bus = EventBus::default();
+    let (action_handle, mut action_rx) = ActionHandle::channel();
+    let runtime = Arc::new(Mutex::new(ReflexRuntime::spawn(
+        Arc::clone(&db),
+        action_handle.clone(),
+        bus,
+    )?));
+    install_action_combo_scheduler(&runtime)?;
+    let key = named_key("bridge");
+    let executor = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()?;
+
+    executor.block_on(action_handle.execute(Action::Combo {
+        steps: vec![
+            ComboStep {
+                at_ms: 0,
+                input: ComboInput::KeyDown { key: key.clone() },
+            },
+            ComboStep {
+                at_ms: 5,
+                input: ComboInput::KeyUp { key: key.clone() },
+            },
+        ],
+        backend: Backend::Software,
+    }))?;
+
+    wait_for_runtime_state(&runtime, ReflexState::Expired)?;
+
+    assert_eq!(
+        drain(&mut action_rx),
+        vec![
+            Action::KeyDown {
+                key: key.clone(),
+                backend: Backend::Software,
+            },
+            Action::KeyUp {
+                key,
+                backend: Backend::Software,
+            },
+        ]
+    );
+    db.flush()?;
+    let rows = db.scan_cf(cf::CF_REFLEX_AUDIT)?;
+    let audits = rows
+        .iter()
+        .map(|(_key, value)| decode_json::<StoredReflexAudit>(value))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert!(audits.iter().any(|audit| {
+        audit.status == ReflexState::Expired
+            && audit.error_code.as_deref() == Some(error_codes::REFLEX_LIFETIME_EXPIRED)
+            && audit.details["kind"] == REFLEX_LIFETIME_EXPIRED_KIND
+            && audit.details["reason"] == "completed"
+    }));
+    Ok(())
+}
+
 const fn context(tick_ms: u64) -> ComboContext {
     ComboContext {
         tick_elapsed: Duration::from_millis(tick_ms),
@@ -355,6 +419,26 @@ fn drain(rx: &mut mpsc::Receiver<ActionMessage>) -> Vec<Action> {
         actions.push(action);
     }
     actions
+}
+
+fn wait_for_runtime_state(
+    runtime: &Arc<Mutex<ReflexRuntime>>,
+    expected: ReflexState,
+) -> Result<(), Box<dyn Error>> {
+    let deadline = Instant::now() + Duration::from_secs(3);
+    loop {
+        let statuses = runtime
+            .lock()
+            .map_err(|_err| "runtime lock poisoned")?
+            .statuses();
+        if statuses.iter().any(|status| status.state == expected) {
+            return Ok(());
+        }
+        if Instant::now() >= deadline {
+            return Err(format!("timed out waiting for runtime state {expected:?}").into());
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    }
 }
 
 fn named_key(value: &str) -> Key {

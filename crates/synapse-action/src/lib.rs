@@ -37,7 +37,9 @@ pub use emitter::{
     Backends, EmitState, HELD_KEY_MAX_DURATION_MS, HardwareHidConfig,
 };
 pub use error::{ActionError, ActionResult};
-pub use handle::{ACTION_QUEUE_CAPACITY, ActionHandle, ActionMessage, RELEASE_ALL_HANDLE};
+pub use handle::{
+    ACTION_QUEUE_CAPACITY, ActionComboScheduler, ActionHandle, ActionMessage, RELEASE_ALL_HANDLE,
+};
 pub use hotkey::{
     OperatorHotkeyGuard, install_operator_hotkey, operator_release_epoch,
     operator_release_requested_since,

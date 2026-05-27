@@ -18,7 +18,10 @@ use synapse_action::ActionHandle;
 use synapse_audio::{AudioConfig, AudioError, AudioRuntime, DEFAULT_RING_SECONDS};
 use synapse_core::SCHEMA_VERSION;
 use synapse_profiles::{ProfileError, ProfileRuntime, bundled_profiles_dir};
-use synapse_reflex::{DEFAULT_MAX_SUBSCRIPTIONS_NONZERO, EventBus, ReflexError, ReflexRuntime};
+use synapse_reflex::{
+    DEFAULT_MAX_SUBSCRIPTIONS_NONZERO, EventBus, ReflexError, ReflexRuntime,
+    install_action_combo_scheduler,
+};
 use synapse_storage::Db;
 use tokio_util::sync::CancellationToken;
 
@@ -345,6 +348,8 @@ impl M3State {
                 return Err(error.into());
             }
         };
+        install_action_combo_scheduler(&runtime)
+            .context("install action combo scheduler bridge for reflex runtime")?;
         self.reflex_last_error = None;
         self.reflex_runtime = Some(Arc::clone(&runtime));
         Ok(runtime)

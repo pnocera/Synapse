@@ -1,3 +1,4 @@
+mod action_combo_bridge;
 pub mod audit;
 mod audit_state;
 pub mod bus;
@@ -13,6 +14,7 @@ mod storage;
 #[cfg(test)]
 mod tests;
 
+pub use action_combo_bridge::install_action_combo_scheduler;
 pub use audit::write_audit;
 pub use bus::{
     DEFAULT_MAX_SUBSCRIPTIONS, DEFAULT_MAX_SUBSCRIPTIONS_NONZERO, EVENTS_DROPPED_METRIC, EventBus,
