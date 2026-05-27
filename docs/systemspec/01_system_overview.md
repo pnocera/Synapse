@@ -217,7 +217,7 @@ Full parameter/return tables: [13_mcp_tool_reference.md](13_mcp_tool_reference.m
 
 ### 4.6 PRD-planned tools NOT live in this build
 
-`docs/computergames/05_mcp_tool_surface.md` defines the tool surface. Synapse's live build now has the M3 baseline, four operator storage diagnostics, M4 `act_combo`/`act_run_shell`/`act_launch`, and the M5 local registry/audit tools (`profile_quality_refresh`, `profile_registry_*` including rollback, `audit_intelligence_query`, `audit_export_consent_set`, and `audit_export_bundle`). The following PRD-planned entries remain unimplemented: `describe` (M5 VLM) and `read_hud` (M4 HUD pipeline).
+`docs/computergames/05_mcp_tool_surface.md` defines the tool surface. Synapse's live build now has the M3 baseline, four operator storage diagnostics, M4 `act_combo`/`act_run_shell`/`act_launch`, profile HUD extraction through `observe`, and the M5 local registry/audit tools (`profile_quality_refresh`, `profile_registry_*` including rollback, `audit_intelligence_query`, `audit_export_consent_set`, and `audit_export_bundle`). The following PRD-planned entries remain unimplemented: `describe` (M5 VLM) and standalone `read_hud`.
 
 ## 5. Entry points
 

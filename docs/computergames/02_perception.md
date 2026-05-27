@@ -257,7 +257,12 @@ Profile-driven extraction runs in `synapse-perception::hud`. Returns:
 
 ```rust
 pub struct HudReadings {
-    pub by_name: HashMap<String, HudReading>,    // e.g. "hp" -> 85
+    pub by_name: BTreeMap<String, HudReading>,   // e.g. "hp" -> 85
+    pub errors: BTreeMap<String, HudFieldError>, // field -> fail-closed diagnostic
+}
+pub struct HudFieldError {
+    pub code: String,
+    pub detail: String,
 }
 pub struct HudReading {
     pub raw_text: String,
@@ -289,10 +294,16 @@ profile parser when template confidence is lower. The default
 Windows). If OCR produces no parseable value or stays below the field threshold,
 the extractor fails closed with `HUD_EXTRACTION_FAILED`.
 
+The MCP `observe` path runs these profile HUD extractors when the foreground
+profile resolves and the request includes `hud`. It resolves profile regions
+against the foreground window, captures the crop, loads template assets when
+needed, and reports either `hud.by_name[field]` or
+`hud.errors[field] = HUD_EXTRACTION_FAILED`.
+
 Synthetic 180x16 regions with three 9x9 templates measure under the HUD budget
-locally; the synthetic OCR fallback path has a p99 under 30 ms with the local
-provider fixture. Live-frame wiring still needs to account for capture and
-window targeting costs separately.
+locally; real configured-host manual verification must still inspect the
+separate game/window/profile/storage sources of truth after an `observe`
+trigger.
 
 ### OCR cache
 

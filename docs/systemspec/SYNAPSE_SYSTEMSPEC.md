@@ -303,7 +303,7 @@ Full parameter/return tables: [13_mcp_tool_reference.md](#file-13).
 
 ### 4.6 PRD-planned tools NOT live in this build
 
-`docs/computergames/05_mcp_tool_surface.md` defines the tool surface. Synapse's live build now has the M3 baseline, four operator storage diagnostics, M4 `act_combo`/`act_run_shell`/`act_launch`, and the M5 local registry/audit tools (`profile_quality_refresh`, `profile_registry_*` including rollback, `audit_intelligence_query`, `audit_export_consent_set`, and `audit_export_bundle`). The following PRD-planned entries remain unimplemented: `describe` (M5 VLM) and `read_hud` (M4 HUD pipeline).
+`docs/computergames/05_mcp_tool_surface.md` defines the tool surface. Synapse's live build now has the M3 baseline, four operator storage diagnostics, M4 `act_combo`/`act_run_shell`/`act_launch`, profile HUD extraction through `observe`, and the M5 local registry/audit tools (`profile_quality_refresh`, `profile_registry_*` including rollback, `audit_intelligence_query`, `audit_export_consent_set`, and `audit_export_bundle`). The following PRD-planned entries remain unimplemented: `describe` (M5 VLM) and standalone `read_hud`.
 
 ## 5. Entry points
 
@@ -1740,7 +1740,8 @@ Sub-structs:
 | `DetectedEntity` | `entity_id`, `track_id: u64`, `class_label`, `bbox`, `confidence: f32`, `first_seen_at`, `last_seen_at`, `velocity_px_per_s: Option<(f32, f32)>` |
 | `Detection` | `class_label`, `bbox`, `confidence`, `track_id: Option<u64>` |
 | `DetectionBatch` | `model_id`, `frame_seq`, `inferred_at`, `items: Vec<Detection>` |
-| `HudReadings` | `{ by_name: BTreeMap<String, HudReading> }` |
+| `HudReadings` | `{ by_name: BTreeMap<String, HudReading>, errors: BTreeMap<String, HudFieldError> }` |
+| `HudFieldError` | `{ code, detail }` |
 | `HudReading` | `{ raw_text, parsed: HudValue, confidence, stale_ms }` |
 | `HudValue` | untagged `Number(f64)` \| `Text(String)` \| `Enum(String)` \| `Null` |
 | `AudioContext` | `rms_db: f32`, `vad_speech_recent: bool`, `recent_events: Vec<AudioEvent>`, `direction_estimate: Option<DirectionEstimate>` |
@@ -3049,6 +3050,16 @@ screen region, joins recognized words, applies the `HudParser`, and returns
 `ExtractionSource::OcrFallback`. If OCR is empty, below threshold, or
 unparseable, the field fails closed as `HUD_EXTRACTION_FAILED`.
 
+The live MCP `observe` path resolves the foreground profile before assembling
+the response. When the request includes the `hud` slot, `observe` loads that
+profile's `HudFieldSpec`s, resolves each region against the foreground window
+bounds, captures the cropped screen region, and dispatches the configured
+extractor. `ColorRatio` fields read the live pixels directly; `TemplateMatch`
+fields load profile template assets and use `SystemOcrProvider` for fallback;
+`WinrtOcr` fields use the same real platform OCR provider. Per-field failures
+are reported under `Observation.hud.errors[field_name]` with
+`HUD_EXTRACTION_FAILED` instead of silently inventing readings.
+
 ## 5. `synapse-mcp/src/m1` glue
 
 ### 5.1 `M1State`
@@ -3155,13 +3166,6 @@ The fixed JSON-RPC code `-32099` is the rmcp custom-error slot; the structured `
 ## 7. What is NOT covered
 
 - **CNN object detection.** `synapse-models` ships the `Detector` trait and ONNX session loader, but `M1State` does not invoke detectors in the current build; `entities: Vec<DetectedEntity>` is populated only by synthetic fixtures.
-- **Live HUD extraction wiring.** `Profile.hud` carries `HudFieldSpec`s and
-  `synapse-perception` exposes a client-rect anchor resolver, slotted
-  template-match extraction, and template-confidence to OCR/parser fallback for
-  cropped frame regions, but `observe()` does not yet run profile HUD
-  extractors against live captured frames. `hud:
-  HudReadings` is empty unless populated synthetically or by a caller that
-  invokes the extractor directly.
 - **Event extension runtime wiring.** `synapse-perception` exposes the
   `event_extensions` evaluator and validator, but the current `observe()` path
   does not yet automatically feed live detection/HUD events through profile
@@ -3877,7 +3881,7 @@ Open M4 work (per `docs/impplan/05_m4_hardware_hid_first_game.md`):
 - `synapse-hid-host` — serial driver with discovery, connect/IDENTIFY, CRC16 framing, pipeline/backpressure, and reconnect paths. `Backend::Hardware` uses `HardwareBackend` when `--hardware-hid <port|auto>` connects successfully, otherwise it fails closed through `HardwareUnavailableBackend`.
 - `act_combo`, `act_run_shell`, `act_launch` — three M4 tools that bring the live MCP tool count from 30 -> 33; M5 profile-registry/audit work adds `profile_quality_refresh`, six `profile_authoring_*` candidate tools, eight `profile_registry_*` tools including the report inspector and rollback, `audit_intelligence_query`, `audit_export_consent_set`, and `audit_export_bundle`, bringing the live surface to 51.
 - `minecraft.java` profile (the first game profile) — fifth bundled profile, validated against a single-player creative world per `15_roadmap_and_milestones.md` §6.
-- M3 hold-over items still open: per-subscriber `subscribe.buffer_size` (currently hard-pinned to 4096); persistent writers for `CF_EVENTS`/`CF_OBSERVATIONS`/`CF_SESSIONS`/`CF_TELEMETRY`/`CF_PROCESS_HISTORY`/`CF_KV` (`CF_REFLEX_AUDIT` and `CF_ACTION_LOG` have live writers); audio detector → SSE-bus sink integration; HUD extraction pipeline. VLM `describe` and Florence-2 remain M5.
+- M3 hold-over items still open: per-subscriber `subscribe.buffer_size` (currently hard-pinned to 4096); persistent writers for `CF_EVENTS`/`CF_OBSERVATIONS`/`CF_SESSIONS`/`CF_TELEMETRY`/`CF_PROCESS_HISTORY`/`CF_KV` (`CF_REFLEX_AUDIT` and `CF_ACTION_LOG` have live writers); audio detector → SSE-bus sink integration. Profile HUD fields now run through `observe`; standalone `read_hud` remains deferred. VLM `describe` and Florence-2 remain M5.
 
 ## 3. Tools delivered vs planned
 
@@ -3917,7 +3921,7 @@ expansion. Current build:
 | 28 | `storage_put_probe_rows` | M3 (operator) | live | manual storage write/readback support tool |
 | 29 | `storage_gc_once` | M3/M5 (operator) | live | synchronous GC pass; `AUDIT_RETENTION` mode writes #463 retention/dedupe/backfill report rows |
 | 30 | `storage_pressure_sample` | M3 (operator) | live | synthetic disk-pressure trigger |
-| — | `read_hud` | (deferred to M4) | not live | HUD extraction pipeline not yet wired |
+| — | `read_hud` | (deferred to M4) | not live | standalone tool deferred; profile HUD extraction is live through `observe` |
 | 31 | `act_combo` | M4 | live | one-shot timed action sequence |
 | 32 | `act_run_shell` | M4 (gated) | live | allowlisted local shell command |
 | 33 | `act_launch` | M4 (gated) | live | allowlisted local process launch |

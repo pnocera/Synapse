@@ -8,12 +8,8 @@ use rmcp::{ErrorData, handler::server::common, model::JsonObject, schemars::Json
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use synapse_capture::{CaptureBackend, CaptureConfig, CaptureTarget, resolve_capture_target};
-use synapse_core::{
-    ElementId, ForegroundContext, Observation, OcrBackend, PerceptionMode, Rect, error_codes,
-};
-use synapse_perception::{
-    ObservationAssembler, ObservationInput, ObserveInclude, parse_perception_mode,
-};
+use synapse_core::{ElementId, ForegroundContext, OcrBackend, PerceptionMode, Rect, error_codes};
+use synapse_perception::{ObservationInput, ObserveInclude, parse_perception_mode};
 
 pub use ocr::read_text_in_state;
 use search::{element_match, entity_match};
@@ -285,19 +281,6 @@ pub fn current_input(state: &M1State, depth: u32) -> Result<ObservationInput, Er
         return Ok(input);
     }
     platform_input(depth, state.perception_mode)
-}
-
-pub fn assemble_observation(
-    state: &M1State,
-    params: &ObserveParams,
-) -> Result<Observation, ErrorData> {
-    let mut input = current_input(state, params.depth.unwrap_or(2).min(6))?;
-    if let Some(since) = params.since_event_seq {
-        input.recent_events.retain(|event| event.seq > since);
-    }
-    ObservationAssembler::new()
-        .assemble(observe_include(params), input)
-        .map_err(|err| mcp_error(err.code(), err.to_string()))
 }
 
 pub fn find_in_state(state: &M1State, params: &FindParams) -> Result<FindResponse, ErrorData> {

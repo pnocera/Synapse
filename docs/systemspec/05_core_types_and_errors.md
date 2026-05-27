@@ -173,7 +173,8 @@ Sub-structs:
 | `DetectedEntity` | `entity_id`, `track_id: u64`, `class_label`, `bbox`, `confidence: f32`, `first_seen_at`, `last_seen_at`, `velocity_px_per_s: Option<(f32, f32)>` |
 | `Detection` | `class_label`, `bbox`, `confidence`, `track_id: Option<u64>` |
 | `DetectionBatch` | `model_id`, `frame_seq`, `inferred_at`, `items: Vec<Detection>` |
-| `HudReadings` | `{ by_name: BTreeMap<String, HudReading> }` |
+| `HudReadings` | `{ by_name: BTreeMap<String, HudReading>, errors: BTreeMap<String, HudFieldError> }` |
+| `HudFieldError` | `{ code, detail }` |
 | `HudReading` | `{ raw_text, parsed: HudValue, confidence, stale_ms }` |
 | `HudValue` | untagged `Number(f64)` \| `Text(String)` \| `Enum(String)` \| `Null` |
 | `AudioContext` | `rms_db: f32`, `vad_speech_recent: bool`, `recent_events: Vec<AudioEvent>`, `direction_estimate: Option<DirectionEstimate>` |

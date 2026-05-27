@@ -1279,6 +1279,136 @@ expression: shape
         ],
         "type": "string"
       },
+      "StoredAppContext": {
+        "additionalProperties": false,
+        "properties": {
+          "gameid": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "log_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "process_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "process_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "target_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "window_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "world_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "world_path": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "StoredAuditContext": {
+        "additionalProperties": false,
+        "properties": {
+          "app_context": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StoredAppContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "backend_policy": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StoredBackendPolicy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "profile_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "profile_schema_version": {
+            "format": "uint32",
+            "minimum": 0,
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "profile_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "session_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "type": "object"
+      },
+      "StoredBackendPolicy": {
+        "additionalProperties": false,
+        "properties": {
+          "default": {
+            "$ref": "#/$defs/Backend"
+          },
+          "keyboard_default": {
+            "$ref": "#/$defs/Backend"
+          },
+          "mouse_default": {
+            "$ref": "#/$defs/Backend"
+          },
+          "pad_default": {
+            "$ref": "#/$defs/Backend"
+          }
+        },
+        "required": [
+          "default",
+          "keyboard_default",
+          "mouse_default",
+          "pad_default"
+        ],
+        "type": "object"
+      },
       "StoredRedaction": {
         "additionalProperties": false,
         "properties": {
@@ -1306,6 +1436,16 @@ expression: shape
       "StoredReflexAudit": {
         "additionalProperties": false,
         "properties": {
+          "audit_context": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/StoredAuditContext"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "audit_id": {
             "type": "string"
           },

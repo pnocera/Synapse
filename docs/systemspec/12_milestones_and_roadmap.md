@@ -100,7 +100,7 @@ Open M4 work (per `docs/impplan/05_m4_hardware_hid_first_game.md`):
 - `synapse-hid-host` — serial driver with discovery, connect/IDENTIFY, CRC16 framing, pipeline/backpressure, and reconnect paths. `Backend::Hardware` uses `HardwareBackend` when `--hardware-hid <port|auto>` connects successfully, otherwise it fails closed through `HardwareUnavailableBackend`.
 - `act_combo`, `act_run_shell`, `act_launch` — three M4 tools that bring the live MCP tool count from 30 -> 33; M5 profile-registry/audit work adds `profile_quality_refresh`, six `profile_authoring_*` candidate tools, eight `profile_registry_*` tools including the report inspector and rollback, `audit_intelligence_query`, `audit_export_consent_set`, and `audit_export_bundle`, bringing the live surface to 51.
 - `minecraft.java` profile (the first game profile) — fifth bundled profile, validated against a single-player creative world per `15_roadmap_and_milestones.md` §6.
-- M3 hold-over items still open: per-subscriber `subscribe.buffer_size` (currently hard-pinned to 4096); persistent writers for `CF_EVENTS`/`CF_OBSERVATIONS`/`CF_SESSIONS`/`CF_TELEMETRY`/`CF_PROCESS_HISTORY`/`CF_KV` (`CF_REFLEX_AUDIT` and `CF_ACTION_LOG` have live writers); audio detector → SSE-bus sink integration; HUD extraction pipeline. VLM `describe` and Florence-2 remain M5.
+- M3 hold-over items still open: per-subscriber `subscribe.buffer_size` (currently hard-pinned to 4096); persistent writers for `CF_EVENTS`/`CF_OBSERVATIONS`/`CF_SESSIONS`/`CF_TELEMETRY`/`CF_PROCESS_HISTORY`/`CF_KV` (`CF_REFLEX_AUDIT` and `CF_ACTION_LOG` have live writers); audio detector → SSE-bus sink integration. Profile HUD fields now run through `observe`; standalone `read_hud` remains deferred. VLM `describe` and Florence-2 remain M5.
 
 ## 3. Tools delivered vs planned
 
@@ -140,7 +140,7 @@ expansion. Current build:
 | 28 | `storage_put_probe_rows` | M3 (operator) | live | manual storage write/readback support tool |
 | 29 | `storage_gc_once` | M3/M5 (operator) | live | synchronous GC pass; `AUDIT_RETENTION` mode writes #463 retention/dedupe/backfill report rows |
 | 30 | `storage_pressure_sample` | M3 (operator) | live | synthetic disk-pressure trigger |
-| — | `read_hud` | (deferred to M4) | not live | HUD extraction pipeline not yet wired |
+| — | `read_hud` | (deferred to M4) | not live | standalone tool deferred; profile HUD extraction is live through `observe` |
 | 31 | `act_combo` | M4 | live | one-shot timed action sequence |
 | 32 | `act_run_shell` | M4 (gated) | live | allowlisted local shell command |
 | 33 | `act_launch` | M4 (gated) | live | allowlisted local process launch |

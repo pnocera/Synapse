@@ -23,8 +23,9 @@ use crate::{
     m1::{
         FindParams, FindResponse, M1State, ObserveParams, ReadTextParams, SetCaptureTargetParams,
         SetCaptureTargetResponse, SetPerceptionModeParams, SetPerceptionModeResponse,
-        SharedM1State, assemble_observation, empty_input_schema, find_in_state, mcp_error,
-        read_text_in_state, set_capture_target_in_state, set_perception_mode_in_state,
+        SharedM1State, current_input, empty_input_schema, find_in_state, mcp_error,
+        observe_include, read_text_in_state, set_capture_target_in_state,
+        set_perception_mode_in_state,
     },
     m2::{
         ActAimParams, ActAimResponse, ActClickParams, ActClickResponse, ActClipboardParams,

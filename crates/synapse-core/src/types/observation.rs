@@ -174,9 +174,18 @@ pub struct DetectionBatch {
 pub struct HudReadings {
     #[serde(default)]
     pub by_name: BTreeMap<String, HudReading>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub errors: BTreeMap<String, HudFieldError>,
 }
 
 pub type HudField = HudReading;
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct HudFieldError {
+    pub code: String,
+    pub detail: String,
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

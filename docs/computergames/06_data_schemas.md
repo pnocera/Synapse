@@ -182,7 +182,13 @@ pub struct DetectedEntity {
 ```rust
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HudReadings {
-    pub by_name: std::collections::HashMap<String, HudReading>,
+    pub by_name: std::collections::BTreeMap<String, HudReading>,
+    pub errors: std::collections::BTreeMap<String, HudFieldError>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct HudFieldError {
+    pub code: String,
+    pub detail: String,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HudReading {

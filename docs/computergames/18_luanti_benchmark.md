@@ -55,10 +55,12 @@ on the TOML file alone.
 | Session/event/reflex audit linkage | `storage_inspect.cf_row_samples.CF_SESSIONS`, `CF_EVENTS`, and `CF_REFLEX_AUDIT` carrying the same session/profile context |
 | Profile quality | `profile_quality_refresh(profile_id="luanti.minetest")` writes/reads `CF_PROFILES` key `profile_quality/v1/luanti.minetest` |
 
-The HUD baseline is deliberately a minimal visible-state extractor, not the
-full HUD template matcher. It samples raw foreground-window pixels and reports
-a 0..1 luma-contrast score over fixed crosshair and hotbar regions. Full
-template matching remains tracked separately by #410.
+The Luanti HUD baseline is a profile-driven visible-state extractor. Its
+`ColorRatio` fields sample live foreground-window pixels and report a 0..1
+luma-contrast score over crosshair and hotbar regions through the same
+`observe` profile-HUD wiring used by template/OCR HUD fields. Asset-backed
+template profiles use the same runtime path and fail closed per field when
+their crop, template asset, OCR, or parser state is invalid.
 
 Profile event extensions declare the benchmark outcomes that the profile/audit
 loop should learn from as the event-extension evaluator matures: launched,

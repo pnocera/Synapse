@@ -190,6 +190,16 @@ screen region, joins recognized words, applies the `HudParser`, and returns
 `ExtractionSource::OcrFallback`. If OCR is empty, below threshold, or
 unparseable, the field fails closed as `HUD_EXTRACTION_FAILED`.
 
+The live MCP `observe` path resolves the foreground profile before assembling
+the response. When the request includes the `hud` slot, `observe` loads that
+profile's `HudFieldSpec`s, resolves each region against the foreground window
+bounds, captures the cropped screen region, and dispatches the configured
+extractor. `ColorRatio` fields read the live pixels directly; `TemplateMatch`
+fields load profile template assets and use `SystemOcrProvider` for fallback;
+`WinrtOcr` fields use the same real platform OCR provider. Per-field failures
+are reported under `Observation.hud.errors[field_name]` with
+`HUD_EXTRACTION_FAILED` instead of silently inventing readings.
+
 ## 5. `synapse-mcp/src/m1` glue
 
 ### 5.1 `M1State`
@@ -296,13 +306,6 @@ The fixed JSON-RPC code `-32099` is the rmcp custom-error slot; the structured `
 ## 7. What is NOT covered
 
 - **CNN object detection.** `synapse-models` ships the `Detector` trait and ONNX session loader, but `M1State` does not invoke detectors in the current build; `entities: Vec<DetectedEntity>` is populated only by synthetic fixtures.
-- **Live HUD extraction wiring.** `Profile.hud` carries `HudFieldSpec`s and
-  `synapse-perception` exposes a client-rect anchor resolver, slotted
-  template-match extraction, and template-confidence to OCR/parser fallback for
-  cropped frame regions, but `observe()` does not yet run profile HUD
-  extractors against live captured frames. `hud:
-  HudReadings` is empty unless populated synthetically or by a caller that
-  invokes the extractor directly.
 - **Event extension runtime wiring.** `synapse-perception` exposes the
   `event_extensions` evaluator and validator, but the current `observe()` path
   does not yet automatically feed live detection/HUD events through profile

@@ -1,9 +1,27 @@
 use super::{
     ErrorData, FindParams, FindResponse, Health, Json, ObserveParams, Parameters, ReadTextParams,
     SetCaptureTargetParams, SetCaptureTargetResponse, SetPerceptionModeParams,
-    SetPerceptionModeResponse, SynapseService, assemble_observation, empty_input_schema,
-    find_in_state, read_text_in_state, set_capture_target_in_state, set_perception_mode_in_state,
-    tool, tool_router,
+    SetPerceptionModeResponse, SynapseService, current_input, empty_input_schema, find_in_state,
+    mcp_error, observe_include, read_text_in_state, set_capture_target_in_state,
+    set_perception_mode_in_state, tool, tool_router,
+};
+
+#[cfg(windows)]
+use std::path::{Path, PathBuf};
+
+#[cfg(windows)]
+use image::{GrayImage, Luma};
+#[cfg(not(windows))]
+use synapse_core::error_codes;
+use synapse_core::{HudFieldError, HudReadings, Profile};
+use synapse_perception::ObservationAssembler;
+
+#[cfg(windows)]
+use synapse_core::{HudExtractor, HudFieldSpec, HudReading, Rect};
+#[cfg(windows)]
+use synapse_perception::{
+    FieldExtractionRequest, HudTemplate, PerceptionError, PerceptionResult, SystemOcrProvider,
+    extract_field, parse_hud_text, resolve_hud_region_rect,
 };
 
 #[tool_router(router = m1_tool_router, vis = "pub(super)")]
@@ -29,10 +47,17 @@ impl SynapseService {
             "tool.invocation kind=observe"
         );
         let state = self.m1_state()?;
-        let mut observation = assemble_observation(&state, &params.0)?;
+        let mut input = current_input(&state, params.0.depth.unwrap_or(2).min(6))?;
+        if let Some(since) = params.0.since_event_seq {
+            input.recent_events.retain(|event| event.seq > since);
+        }
         drop(state);
 
-        self.resolve_observation_profile(&mut observation);
+        let include = observe_include(&params.0);
+        self.resolve_input_profile_and_hud(&mut input, include.hud);
+        let observation = ObservationAssembler::new()
+            .assemble(include, input)
+            .map_err(|err| mcp_error(err.code(), err.to_string()))?;
 
         let mut state = self.m1_state()?;
         state.last_observed_foreground = Some(observation.foreground.clone());
@@ -98,11 +123,15 @@ impl SynapseService {
 }
 
 impl SynapseService {
-    fn resolve_observation_profile(&self, observation: &mut synapse_core::Observation) {
+    fn resolve_input_profile_and_hud(
+        &self,
+        input: &mut synapse_perception::ObservationInput,
+        include_hud: bool,
+    ) {
         let foreground = synapse_profiles::ForegroundWindow {
-            exe: non_empty(&observation.foreground.process_name),
-            title: non_empty(&observation.foreground.window_title),
-            steam_appid: observation.foreground.steam_appid,
+            exe: non_empty(&input.foreground.process_name),
+            title: non_empty(&input.foreground.window_title),
+            steam_appid: input.foreground.steam_appid,
             window_class: None,
         };
 
@@ -122,7 +151,30 @@ impl SynapseService {
                     rank = resolution.rank_name,
                     "observed foreground matched profile"
                 );
-                observation.foreground.profile_id = Some(resolution.profile_id);
+                input.foreground.profile_id = Some(resolution.profile_id.clone());
+                if !include_hud {
+                    return;
+                }
+                match runtime.profile(&resolution.profile_id) {
+                    Ok(Some(profile)) => {
+                        populate_profile_hud(input, &profile, runtime.profile_dir());
+                    }
+                    Ok(None) => {
+                        tracing::warn!(
+                            code = "PROFILE_HUD_PROFILE_MISSING",
+                            profile_id = %resolution.profile_id,
+                            "profile resolved but could not be loaded for HUD extraction"
+                        );
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            code = "PROFILE_HUD_PROFILE_LOAD_FAILED",
+                            profile_id = %resolution.profile_id,
+                            error = %error,
+                            "profile load failed for HUD extraction"
+                        );
+                    }
+                }
             }
             Ok(None) => {
                 tracing::debug!(
@@ -144,4 +196,265 @@ impl SynapseService {
 fn non_empty(value: &str) -> Option<String> {
     let trimmed = value.trim();
     (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+#[cfg(windows)]
+fn populate_profile_hud(
+    input: &mut synapse_perception::ObservationInput,
+    profile: &Profile,
+    profile_dir: &Path,
+) {
+    for field in &profile.hud {
+        input.hud.by_name.remove(&field.name);
+        input.hud.errors.remove(&field.name);
+        match extract_profile_hud_field(field, input.foreground.window_bounds, profile_dir) {
+            Ok(reading) => {
+                input.hud.by_name.insert(field.name.clone(), reading);
+            }
+            Err(error) => {
+                record_hud_error(&mut input.hud, &field.name, error.code(), error.to_string());
+            }
+        }
+    }
+}
+
+#[cfg(not(windows))]
+fn populate_profile_hud(
+    input: &mut synapse_perception::ObservationInput,
+    profile: &Profile,
+    _profile_dir: &std::path::Path,
+) {
+    for field in &profile.hud {
+        input.hud.by_name.remove(&field.name);
+        input.hud.errors.remove(&field.name);
+        record_hud_error(
+            &mut input.hud,
+            &field.name,
+            error_codes::HUD_EXTRACTION_FAILED,
+            "profile HUD extraction requires Windows screen capture",
+        );
+    }
+}
+
+#[cfg(windows)]
+fn extract_profile_hud_field(
+    field: &HudFieldSpec,
+    window_bounds: Rect,
+    profile_dir: &Path,
+) -> PerceptionResult<HudReading> {
+    let screen_region = resolve_hud_region_rect(&field.region, window_bounds)?;
+    let region_image = capture_region_gray(screen_region)?;
+    match &field.extractor {
+        HudExtractor::ColorRatio {
+            sample_points: _,
+            mapping,
+        } => color_ratio_reading(field, screen_region, &region_image, mapping),
+        HudExtractor::TemplateMatch { templates } => {
+            let loaded_templates = load_templates(templates, profile_dir)?;
+            let provider = SystemOcrProvider;
+            extract_field(&FieldExtractionRequest {
+                field,
+                screen_region,
+                region_image: &region_image,
+                templates: &loaded_templates,
+                ocr_provider: &provider,
+                stale_ms: 0,
+            })
+            .map(|extraction| extraction.reading)
+        }
+        HudExtractor::WinrtOcr | HudExtractor::Crnn { .. } => {
+            let provider = SystemOcrProvider;
+            extract_field(&FieldExtractionRequest {
+                field,
+                screen_region,
+                region_image: &region_image,
+                templates: &[],
+                ocr_provider: &provider,
+                stale_ms: 0,
+            })
+            .map(|extraction| extraction.reading)
+        }
+    }
+}
+
+#[cfg(windows)]
+fn capture_region_gray(region: Rect) -> PerceptionResult<GrayImage> {
+    let captured = synapse_capture::screen_region_to_bgra_bitmap(region).map_err(|error| {
+        hud_error(format!(
+            "HUD screen capture failed for region {region:?}: {error}"
+        ))
+    })?;
+    bgra_to_gray(captured.width, captured.height, &captured.bytes)
+}
+
+#[cfg(windows)]
+fn bgra_to_gray(width: u32, height: u32, bytes: &[u8]) -> PerceptionResult<GrayImage> {
+    let expected_len = u64::from(width)
+        .checked_mul(u64::from(height))
+        .and_then(|pixels| pixels.checked_mul(4))
+        .ok_or_else(|| hud_error("HUD BGRA dimensions overflow"))?;
+    let actual_len = u64::try_from(bytes.len())
+        .map_err(|_err| hud_error("HUD BGRA byte length does not fit u64"))?;
+    if actual_len < expected_len {
+        return Err(hud_error(format!(
+            "HUD BGRA buffer too short: expected at least {expected_len} bytes, got {actual_len}"
+        )));
+    }
+
+    let mut image = GrayImage::new(width, height);
+    for y in 0..height {
+        for x in 0..width {
+            let idx = usize::try_from((u64::from(y) * u64::from(width) + u64::from(x)) * 4)
+                .map_err(|_err| hud_error("HUD BGRA pixel offset does not fit usize"))?;
+            image.put_pixel(
+                x,
+                y,
+                Luma([bgra_luma(bytes[idx], bytes[idx + 1], bytes[idx + 2])]),
+            );
+        }
+    }
+    Ok(image)
+}
+
+#[cfg(windows)]
+fn color_ratio_reading(
+    field: &HudFieldSpec,
+    screen_region: Rect,
+    region_image: &GrayImage,
+    mapping: &str,
+) -> PerceptionResult<HudReading> {
+    if mapping != "luma_stddev_0_1" {
+        return Err(hud_error(format!(
+            "unsupported color_ratio mapping {mapping:?} for HUD field {:?}",
+            field.name
+        )));
+    }
+    let score = gray_luma_stddev_0_1(region_image);
+    let raw_text = format!("{score:.6}");
+    let parsed = parse_hud_text(&field.parser, &raw_text)?;
+    Ok(HudReading {
+        raw_text: format!(
+            "{raw_text} region={}x{}@{},{}",
+            screen_region.w, screen_region.h, screen_region.x, screen_region.y
+        ),
+        parsed,
+        confidence: score,
+        stale_ms: 0,
+    })
+}
+
+#[cfg(windows)]
+fn load_templates(paths: &[String], profile_dir: &Path) -> PerceptionResult<Vec<HudTemplate>> {
+    paths
+        .iter()
+        .enumerate()
+        .map(|(index, path)| {
+            let label = template_label(path, index);
+            let value = template_value(path, index)?;
+            let resolved = resolve_template_path(path, profile_dir);
+            HudTemplate::load(label, value, resolved)
+        })
+        .collect()
+}
+
+#[cfg(windows)]
+fn resolve_template_path(path: &str, profile_dir: &Path) -> PathBuf {
+    let raw = Path::new(path);
+    if raw.is_absolute() {
+        return raw.to_path_buf();
+    }
+
+    let mut candidates = vec![PathBuf::from(path), profile_dir.join(path)];
+    candidates.push(profile_dir.join("assets").join(path));
+    if let Some(parent) = profile_dir.parent() {
+        candidates.push(parent.join(path));
+    }
+
+    candidates
+        .iter()
+        .find(|candidate| candidate.exists())
+        .cloned()
+        .unwrap_or_else(|| profile_dir.join(path))
+}
+
+#[cfg(windows)]
+fn template_label(path: &str, index: usize) -> String {
+    Path::new(path)
+        .file_stem()
+        .and_then(|stem| stem.to_str())
+        .filter(|stem| !stem.trim().is_empty())
+        .map_or_else(|| format!("template_{index}"), str::to_owned)
+}
+
+#[cfg(windows)]
+fn template_value(path: &str, index: usize) -> PerceptionResult<u32> {
+    let lower = path.to_ascii_lowercase();
+    if lower.contains("full") {
+        return Ok(2);
+    }
+    if lower.contains("half") {
+        return Ok(1);
+    }
+    if lower.contains("empty") {
+        return Ok(0);
+    }
+    match index {
+        0 => Ok(2),
+        1 => Ok(1),
+        2 => Ok(0),
+        _ => Err(hud_error(format!(
+            "cannot infer HUD template value for path {path:?}"
+        ))),
+    }
+}
+
+#[cfg(windows)]
+fn gray_luma_stddev_0_1(region_image: &GrayImage) -> f32 {
+    let mut count = 0.0_f32;
+    let mut sum = 0.0_f32;
+    let mut sum_sq = 0.0_f32;
+    for pixel in region_image.pixels() {
+        let luma = f32::from(pixel.0[0]);
+        count += 1.0;
+        sum += luma;
+        sum_sq += luma * luma;
+    }
+    if count <= 0.0 {
+        return 0.0;
+    }
+    let mean = sum / count;
+    let variance = mean.mul_add(-mean, sum_sq / count).max(0.0);
+    (variance.sqrt() / 128.0).clamp(0.0, 1.0)
+}
+
+#[cfg(windows)]
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+fn bgra_luma(b: u8, g: u8, r: u8) -> u8 {
+    let luma = 0.0722_f32.mul_add(
+        f32::from(b),
+        0.7152_f32.mul_add(f32::from(g), 0.2126_f32 * f32::from(r)),
+    );
+    luma.round().clamp(0.0, 255.0) as u8
+}
+
+#[cfg(windows)]
+fn hud_error(detail: impl Into<String>) -> PerceptionError {
+    PerceptionError::HudExtractionFailed {
+        detail: detail.into(),
+    }
+}
+
+fn record_hud_error(
+    hud: &mut HudReadings,
+    field_name: &str,
+    code: &'static str,
+    detail: impl Into<String>,
+) {
+    hud.errors.insert(
+        field_name.to_owned(),
+        HudFieldError {
+            code: code.to_owned(),
+            detail: detail.into(),
+        },
+    );
 }
