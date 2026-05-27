@@ -85,6 +85,18 @@ fn event_extensions_do_not_emit_at_bbox_threshold() -> Result<(), Box<dyn std::e
         serde_json::to_string(&derived)?
     );
     assert!(derived.is_empty());
+
+    let trigger = creeper_event(46, "creeper", 79);
+    println!(
+        "readback=event_extensions edge=bbox_below_threshold before=trigger:{}",
+        trigger.data
+    );
+    let derived = evaluate_event_extensions(&extensions, &trigger, 1_003)?;
+    println!(
+        "readback=event_extensions edge=bbox_below_threshold after={}",
+        serde_json::to_string(&derived)?
+    );
+    assert!(derived.is_empty());
     Ok(())
 }
 
