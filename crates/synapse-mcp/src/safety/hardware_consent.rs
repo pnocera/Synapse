@@ -119,7 +119,10 @@ mod tests {
             "i authorize hardware input",
             "I understand Synapse hardware HID can generate real keyboard, mouse, and gamepad input on this computer.",
         ] {
-            let error = verify_hardware_hid_consent(value).unwrap_err();
+            let error = match verify_hardware_hid_consent(value) {
+                Ok(()) => panic!("consent value must be rejected: {value:?}"),
+                Err(error) => error,
+            };
             assert!(
                 error.downcast_ref::<HardwareConsentRefused>().is_some(),
                 "{error:#}"

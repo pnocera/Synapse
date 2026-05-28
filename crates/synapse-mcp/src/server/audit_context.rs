@@ -7,9 +7,9 @@ use chrono::Utc;
 use rmcp::ErrorData;
 use serde_json::{Value, json};
 use synapse_core::{
-    EventSource, Profile, ProfileBackends, ProfileId, SCHEMA_VERSION, SessionId, StoredAppContext,
-    StoredAuditContext, StoredBackendPolicy, StoredEvent, StoredProfileHistoryEntry, StoredSession,
-    error_codes, new_session_id,
+    EventSource, Observation, Profile, ProfileBackends, ProfileId, SCHEMA_VERSION, SessionId,
+    StoredAppContext, StoredAuditContext, StoredBackendPolicy, StoredEvent, StoredObservation,
+    StoredProfileHistoryEntry, StoredSession, error_codes, new_session_id,
 };
 
 use super::SynapseService;
@@ -19,6 +19,7 @@ use crate::{
 };
 
 static EVENT_AUDIT_SEQ: AtomicU32 = AtomicU32::new(0);
+static OBSERVATION_AUDIT_SEQ: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Clone, Debug)]
 struct ProfileAuditInfo {
@@ -146,6 +147,79 @@ impl SynapseService {
         }
     }
 
+    pub(super) fn persist_observation(
+        &self,
+        observation: &Observation,
+        reason: &'static str,
+    ) -> Result<(), ErrorData> {
+        let (ts_ns, seq) = next_observation_key_parts();
+        let observation_id = format!("observe-{ts_ns:020}-{seq:010}");
+        let session_id = self.ensure_audit_session_started()?;
+        let profile_info = match observation.foreground.profile_id.as_deref() {
+            Some(profile_id) => Some(self.profile_audit_info(profile_id)?),
+            None => None,
+        };
+        let audit_context = profile_info.as_ref().map_or_else(
+            || StoredAuditContext {
+                session_id: Some(session_id.clone()),
+                profile_id: None,
+                profile_version: None,
+                profile_schema_version: None,
+                backend_policy: None,
+                app_context: Some(app_context_for_foreground(None, &observation.foreground)),
+            },
+            |info| {
+                audit_context_for_profile_and_foreground(
+                    info,
+                    Some(session_id.clone()),
+                    &observation.foreground,
+                )
+            },
+        );
+
+        let profile_history = self.update_observation_session_history(
+            &session_id,
+            profile_info.as_ref(),
+            observation.at,
+        )?;
+        let session = StoredSession {
+            schema_version: SCHEMA_VERSION,
+            session_id: session_id.clone(),
+            started_at: self.audit_session_started_at()?,
+            ended_at: None,
+            transport: "mcp".to_owned(),
+            client: Some("synapse-mcp".to_owned()),
+            mode: observation.mode,
+            active_profile: observation.foreground.profile_id.clone(),
+            audit_context: Some(audit_context.clone()),
+            profile_history,
+            redacted: false,
+            redactions: Vec::new(),
+        };
+        self.write_session_row(&session)?;
+
+        let stored = stored_observation(observation, &observation_id, ts_ns, &session_id, reason);
+        self.write_observation_row(ts_ns, seq, &stored)?;
+
+        let event = observation_recorded_event(
+            observation,
+            &observation_id,
+            ts_ns,
+            session_id,
+            audit_context,
+            reason,
+        );
+        self.write_event_row(&event)?;
+        tracing::info!(
+            code = "OBSERVATION_AUDIT_RECORDED",
+            ts_ns,
+            seq,
+            observation_id,
+            "observation audit row written"
+        );
+        Ok(())
+    }
+
     pub(super) fn current_action_audit_context(&self) -> Result<StoredAuditContext, ErrorData> {
         let session_id = self.current_audit_session_id()?;
         let profile_id = self
@@ -244,13 +318,19 @@ impl SynapseService {
         info: &ProfileAuditInfo,
         session_id: Option<SessionId>,
     ) -> StoredAuditContext {
+        let app_context = self
+            .m1_state()
+            .ok()
+            .and_then(|state| current_input(&state, 1).ok())
+            .map(|input| app_context_for_foreground(Some(&info.profile), &input.foreground))
+            .or_else(|| Some(app_context_from_metadata(Some(&info.profile))));
         StoredAuditContext {
             session_id,
             profile_id: Some(info.profile.id.clone()),
             profile_version: Some(info.profile.version.clone()),
             profile_schema_version: Some(info.schema_version),
             backend_policy: Some(backend_policy(info.profile.backends)),
-            app_context: self.current_app_context(Some(&info.profile)),
+            app_context,
         }
     }
 
@@ -266,32 +346,80 @@ impl SynapseService {
     }
 
     fn current_app_context(&self, profile: Option<&Profile>) -> Option<StoredAppContext> {
-        let foreground = self
-            .m1_state()
+        self.m1_state()
             .ok()
             .and_then(|state| current_input(&state, 1).ok())
-            .map(|input| input.foreground);
-        let metadata = profile.map(|profile| &profile.metadata);
-        let has_metadata = metadata.is_some();
-        let has_foreground = foreground.is_some();
-        if !has_metadata && !has_foreground {
-            return None;
-        }
-        Some(StoredAppContext {
-            process_name: foreground.as_ref().map(|value| value.process_name.clone()),
-            process_path: foreground.as_ref().map(|value| value.process_path.clone()),
-            window_title: foreground.as_ref().map(|value| value.window_title.clone()),
-            target_id: metadata.and_then(|value| {
-                value
-                    .get("benchmark_id")
-                    .or_else(|| value.get("registry.family"))
-                    .cloned()
-            }),
-            gameid: metadata.and_then(|value| value.get("benchmark_world_gameid").cloned()),
-            world_name: metadata.and_then(|value| value.get("benchmark_world_name").cloned()),
-            world_path: metadata.and_then(|value| value.get("launch.world").cloned()),
-            log_path: metadata.and_then(|value| value.get("launch.logfile").cloned()),
-        })
+            .map(|input| app_context_for_foreground(profile, &input.foreground))
+            .or_else(|| profile.map(|profile| app_context_from_metadata(Some(profile))))
+    }
+
+    fn audit_session_started_at(&self) -> Result<chrono::DateTime<Utc>, ErrorData> {
+        self.m3_state
+            .lock()
+            .map_err(|_err| {
+                mcp_error(
+                    error_codes::TOOL_INTERNAL_ERROR,
+                    "M3 service state lock poisoned while reading audit session",
+                )
+            })?
+            .audit_session
+            .as_ref()
+            .map(|session| session.started_at)
+            .ok_or_else(|| {
+                mcp_error(
+                    error_codes::TOOL_INTERNAL_ERROR,
+                    "audit session did not initialize",
+                )
+            })
+    }
+
+    fn update_observation_session_history(
+        &self,
+        session_id: &SessionId,
+        profile_info: Option<&ProfileAuditInfo>,
+        observed_at: chrono::DateTime<Utc>,
+    ) -> Result<Vec<StoredProfileHistoryEntry>, ErrorData> {
+        let profile_history = {
+            let mut state = self.m3_state.lock().map_err(|_err| {
+                mcp_error(
+                    error_codes::TOOL_INTERNAL_ERROR,
+                    "M3 service state lock poisoned while updating observation audit session",
+                )
+            })?;
+            let audit_session = state.audit_session.as_mut().ok_or_else(|| {
+                mcp_error(
+                    error_codes::TOOL_INTERNAL_ERROR,
+                    "audit session disappeared while persisting observation",
+                )
+            })?;
+            if audit_session.session_id != *session_id {
+                return Err(mcp_error(
+                    error_codes::TOOL_INTERNAL_ERROR,
+                    "audit session id changed while persisting observation",
+                ));
+            }
+            if let Some(info) = profile_info {
+                let should_append = audit_session
+                    .profile_history
+                    .last()
+                    .is_none_or(|last| last.profile_id != info.profile.id);
+                if should_append {
+                    audit_session
+                        .profile_history
+                        .push(StoredProfileHistoryEntry {
+                            profile_id: info.profile.id.clone(),
+                            profile_version: Some(info.profile.version.clone()),
+                            profile_schema_version: Some(info.schema_version),
+                            activated_at: observed_at,
+                            reason: "observe".to_owned(),
+                        });
+                }
+            }
+            let profile_history = audit_session.profile_history.clone();
+            drop(state);
+            profile_history
+        };
+        Ok(profile_history)
     }
 
     fn write_session_row(&self, session: &StoredSession) -> Result<(), ErrorData> {
@@ -332,6 +460,30 @@ impl SynapseService {
             .map_err(|error| mcp_error(error.code(), error.to_string()))
     }
 
+    fn write_observation_row(
+        &self,
+        ts_ns: u64,
+        seq: u32,
+        observation: &StoredObservation,
+    ) -> Result<(), ErrorData> {
+        let encoded = synapse_storage::encode_json(observation).map_err(|error| {
+            mcp_error(
+                error_codes::TOOL_INTERNAL_ERROR,
+                format!("observation audit row encode failed: {error}"),
+            )
+        })?;
+        let runtime = self.reflex_runtime()?;
+        let runtime = runtime.lock().map_err(|_error| {
+            mcp_error(
+                error_codes::TOOL_INTERNAL_ERROR,
+                "reflex runtime lock poisoned while writing observation audit",
+            )
+        })?;
+        runtime
+            .storage_put_observation_rows(vec![(observation_key(ts_ns, seq), encoded)])
+            .map_err(|error| mcp_error(error.code(), error.to_string()))
+    }
+
     fn set_reflex_runtime_audit_context(
         &self,
         context: Option<StoredAuditContext>,
@@ -347,6 +499,119 @@ impl SynapseService {
             })?
             .set_audit_context(context);
         Ok(())
+    }
+}
+
+fn app_context_for_foreground(
+    profile: Option<&Profile>,
+    foreground: &synapse_core::ForegroundContext,
+) -> StoredAppContext {
+    let mut context = app_context_from_metadata(profile);
+    context.process_name = Some(foreground.process_name.clone());
+    context.process_path = Some(foreground.process_path.clone());
+    context.window_title = Some(foreground.window_title.clone());
+    context
+}
+
+fn audit_context_for_profile_and_foreground(
+    info: &ProfileAuditInfo,
+    session_id: Option<SessionId>,
+    foreground: &synapse_core::ForegroundContext,
+) -> StoredAuditContext {
+    StoredAuditContext {
+        session_id,
+        profile_id: Some(info.profile.id.clone()),
+        profile_version: Some(info.profile.version.clone()),
+        profile_schema_version: Some(info.schema_version),
+        backend_policy: Some(backend_policy(info.profile.backends)),
+        app_context: Some(app_context_for_foreground(Some(&info.profile), foreground)),
+    }
+}
+
+fn stored_observation(
+    observation: &Observation,
+    observation_id: &str,
+    ts_ns: u64,
+    session_id: &SessionId,
+    reason: &'static str,
+) -> StoredObservation {
+    StoredObservation {
+        schema_version: SCHEMA_VERSION,
+        observation_id: observation_id.to_owned(),
+        ts_ns,
+        session_id: Some(session_id.clone()),
+        mode: observation.mode,
+        foreground: observation.foreground.clone(),
+        focused: observation.focused.clone(),
+        elements: observation.elements.clone(),
+        entities: observation.entities.clone(),
+        hud: observation.hud.clone(),
+        audio: observation.audio.clone(),
+        recent_events: observation.recent_events.clone(),
+        clipboard_summary: observation.clipboard_summary.clone(),
+        fs_recent: observation.fs_recent.clone(),
+        diagnostics: observation.diagnostics.clone(),
+        reason: reason.to_owned(),
+        redacted: false,
+        redactions: Vec::new(),
+    }
+}
+
+fn observation_recorded_event(
+    observation: &Observation,
+    observation_id: &str,
+    ts_ns: u64,
+    session_id: SessionId,
+    audit_context: StoredAuditContext,
+    reason: &'static str,
+) -> StoredEvent {
+    StoredEvent {
+        schema_version: SCHEMA_VERSION,
+        event_id: format!("observation-recorded-{}", event_id_suffix()),
+        ts_ns,
+        session_id: Some(session_id),
+        audit_context: Some(audit_context),
+        source: EventSource::Perception,
+        kind: "perception.observed".to_owned(),
+        data: json!({
+            "observation_id": observation_id,
+            "reason": reason,
+            "profile_id": observation.foreground.profile_id,
+            "process_name": observation.foreground.process_name,
+            "hud_field_count": observation.hud.by_name.len(),
+            "hud_error_count": observation.hud.errors.len(),
+            "entity_count": observation.entities.len(),
+            "element_count": observation.elements.len(),
+            "capture_status": observation.diagnostics.capture_status,
+            "detection_status": observation.diagnostics.detection_status,
+            "a11y_status": observation.diagnostics.a11y_status,
+        }),
+        window_id: Some(observation.foreground.hwnd),
+        element_id: observation
+            .focused
+            .as_ref()
+            .map(|focused| focused.element_id.clone()),
+        redacted: false,
+        redactions: Vec::new(),
+    }
+}
+
+fn app_context_from_metadata(profile: Option<&Profile>) -> StoredAppContext {
+    let metadata = profile.map(|profile| &profile.metadata);
+    StoredAppContext {
+        process_name: None,
+        process_path: None,
+        window_title: None,
+        target_id: metadata.and_then(|value| {
+            value
+                .get("benchmark_id")
+                .or_else(|| value.get("registry.family"))
+                .cloned()
+        }),
+        gameid: metadata.and_then(|value| value.get("benchmark_world_gameid").cloned()),
+        world_name: metadata.and_then(|value| value.get("benchmark_world_name").cloned()),
+        world_path: metadata.and_then(|value| value.get("launch.world").cloned()),
+        log_path: metadata.and_then(|value| value.get("launch.logfile").cloned()),
     }
 }
 
@@ -369,6 +634,19 @@ fn event_key(ts_ns: u64) -> Vec<u8> {
     key.extend_from_slice(&ts_ns.to_be_bytes());
     key.extend_from_slice(&seq.to_be_bytes());
     key
+}
+
+fn observation_key(ts_ns: u64, seq: u32) -> Vec<u8> {
+    let mut key = Vec::with_capacity(12);
+    key.extend_from_slice(&ts_ns.to_be_bytes());
+    key.extend_from_slice(&seq.to_be_bytes());
+    key
+}
+
+fn next_observation_key_parts() -> (u64, u32) {
+    let ts_ns = now_ts_ns();
+    let seq = OBSERVATION_AUDIT_SEQ.fetch_add(1, Ordering::Relaxed);
+    (ts_ns, seq)
 }
 
 fn event_id_suffix() -> String {

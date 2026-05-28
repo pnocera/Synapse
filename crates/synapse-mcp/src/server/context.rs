@@ -680,12 +680,13 @@ mod scope_gate_tests {
     use std::{fs, num::NonZeroUsize, path::Path, time::Duration};
 
     use rmcp::handler::server::wrapper::Parameters;
-    use serde_json::json;
+    use serde_json::{Value, json};
     use synapse_core::{
         AccessibleNode, Action, EventFilter, FocusedElement, ForegroundContext, Rect, SensorStatus,
         UiaPattern, element_id,
     };
     use synapse_perception::ObservationInput;
+    use synapse_storage::cf;
     use tempfile::TempDir;
     use tokio_util::sync::CancellationToken;
 
@@ -797,6 +798,71 @@ mod scope_gate_tests {
         for tool in ACTION_WRITE_TOOLS {
             service.ensure_supported_use_allows_action(tool)?;
         }
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observe_persists_audit_session_observation_and_event_rows() -> anyhow::Result<()> {
+        let profiles = TempDir::new()?;
+        write_profile(
+            &profiles.path().join("notepad.toml"),
+            "notepad",
+            "productivity",
+        )?;
+        let service = service_with_profiles(profiles.path(), false)?;
+        let runtime = service.reflex_runtime()?;
+        let before_counts = runtime
+            .lock()
+            .map_err(|_err| anyhow::anyhow!("reflex runtime lock poisoned"))?
+            .storage_cf_row_counts()?;
+        assert_eq!(cf_count(&before_counts, cf::CF_EVENTS), 0);
+        assert_eq!(cf_count(&before_counts, cf::CF_OBSERVATIONS), 0);
+        assert_eq!(cf_count(&before_counts, cf::CF_SESSIONS), 0);
+
+        install_synthetic_notepad_input(&service)?;
+        let observation = service
+            .observe(Parameters(ObserveParams::default()))
+            .await?;
+        assert_eq!(
+            observation.0.foreground.profile_id.as_deref(),
+            Some("notepad")
+        );
+
+        let runtime = service.reflex_runtime()?;
+        let runtime = runtime
+            .lock()
+            .map_err(|_err| anyhow::anyhow!("reflex runtime lock poisoned"))?;
+        let after_counts = runtime.storage_cf_row_counts()?;
+        assert_eq!(cf_count(&after_counts, cf::CF_EVENTS), 1);
+        assert_eq!(cf_count(&after_counts, cf::CF_OBSERVATIONS), 1);
+        assert_eq!(cf_count(&after_counts, cf::CF_SESSIONS), 1);
+
+        let observation_rows = runtime.storage_cf_tail_rows(cf::CF_OBSERVATIONS, 1)?;
+        let stored_observation: Value = serde_json::from_slice(&observation_rows[0].1)?;
+        assert_eq!(stored_observation["reason"], "observe");
+        assert_eq!(stored_observation["foreground"]["profile_id"], "notepad");
+        assert_eq!(
+            stored_observation["foreground"]["process_name"],
+            "notepad.exe"
+        );
+
+        let event_rows = runtime.storage_cf_tail_rows(cf::CF_EVENTS, 1)?;
+        let stored_event: Value = serde_json::from_slice(&event_rows[0].1)?;
+        assert_eq!(stored_event["kind"], "perception.observed");
+        assert_eq!(stored_event["source"], "perception");
+        assert_eq!(
+            stored_event["data"]["observation_id"],
+            stored_observation["observation_id"]
+        );
+
+        let session_rows = runtime.storage_cf_tail_rows(cf::CF_SESSIONS, 1)?;
+        let stored_session: Value = serde_json::from_slice(&session_rows[0].1)?;
+        assert_eq!(
+            stored_session["session_id"],
+            stored_observation["session_id"]
+        );
+        assert_eq!(stored_session["active_profile"], "notepad");
+        drop(runtime);
         Ok(())
     }
 
@@ -1036,9 +1102,9 @@ mod scope_gate_tests {
             connection_closed_cancel,
             &M2ServiceConfig::default(),
             M3ServiceConfig::from_cli_parts(
-                None,
+                Some(profile_dir.join("db")),
                 Some(profile_dir.to_path_buf()),
-                true,
+                false,
                 "127.0.0.1:0".to_owned(),
                 NonZeroUsize::new(4)
                     .ok_or_else(|| anyhow::anyhow!("max subscriptions must be nonzero"))?,
@@ -1050,6 +1116,10 @@ mod scope_gate_tests {
             ),
             M4ServiceConfig::default(),
         )
+    }
+
+    fn cf_count(counts: &std::collections::BTreeMap<String, u64>, cf_name: &str) -> u64 {
+        counts.get(cf_name).copied().unwrap_or(0)
     }
 
     fn write_profile(path: &Path, id: &str, use_scope: &str) -> anyhow::Result<()> {

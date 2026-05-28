@@ -157,6 +157,16 @@ impl ReflexRuntime {
         self.storage_put_rows(cf::CF_EVENTS, rows)
     }
 
+    /// Writes observation rows and flushes them immediately.
+    ///
+    /// # Errors
+    ///
+    /// Returns a storage error when the write or flush fails.
+    #[tracing::instrument(skip_all, fields(component = "reflex_runtime", row_count = rows.len()))]
+    pub fn storage_put_observation_rows(&self, rows: Vec<(Vec<u8>, Vec<u8>)>) -> StorageResult<()> {
+        self.storage_put_rows(cf::CF_OBSERVATIONS, rows)
+    }
+
     /// Writes session rows and flushes them immediately.
     ///
     /// # Errors

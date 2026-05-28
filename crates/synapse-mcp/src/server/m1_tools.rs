@@ -62,6 +62,7 @@ impl SynapseService {
         let mut state = self.m1_state()?;
         state.last_observed_foreground = Some(observation.foreground.clone());
         drop(state);
+        self.persist_observation(&observation, "observe")?;
         Ok(Json(observation))
     }
 
