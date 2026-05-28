@@ -8,10 +8,10 @@
    tool `profile_quality_refresh` plus the #458 local registry/intelligence
    tool set, #460 adds local audit-export consent/bundle tools, and #462 adds
    six local profile-authoring candidate tools, and #468 adds the read-only
-   registry/audit inspector, and #499 adds a profile-keymap action alias tool,
-   bringing the live surface to 52. Any further agent-facing tools require an
-   ADR-approved cap change. Overlapping tools merge. Profile and parameter
-   knobs are the escape hatches.
+   registry/audit inspector, #499 adds a profile-keymap action alias tool, and
+   #508 adds the narrow EverQuest `/loc` probe, bringing the live surface to
+   53. Any further agent-facing tools require an ADR-approved cap change.
+   Overlapping tools merge. Profile and parameter knobs are the escape hatches.
 2. **One tool, one verb.** No `do_everything(action_kind, ...)` mega-tools.
 3. **Structured input, structured output.** Every tool defines a JSON Schema with `additionalProperties: false`. Every response carries explicit fields, no free-form text.
 4. **No silent success.** If a tool did not do the work, it returns an MCP error with `code: SCREAMING_SNAKE_CASE`, never `success: true` with a partial result.
@@ -20,7 +20,8 @@
 7. **Stable identifiers.** `element_id`, `entity_id`, `track_id`, `reflex_id`, `session_id` are returned by tools and accepted unchanged by subsequent calls. Agent never invents these.
 
 The first 30 tools below are the live M3 baseline. #499 adds `act_keymap` as a
-profile-keymap action alias. M4 adds `act_combo`, `act_run_shell`, and
+profile-keymap action alias and #508 adds `everquest_loc_probe` as a literal
+EverQuest `/loc` readback tool. M4 adds `act_combo`, `act_run_shell`, and
 `act_launch`; M5 adds local profile-registry/audit quality scoring, authoring
 candidates, registry row operations, import/export, audit intelligence, and
 consented redacted audit export bundles.
@@ -87,14 +88,16 @@ future `tools/list` snapshots in #447/#448.
 | 50 | `audit_intelligence_query` | read | summarizes profile-linked audit outcomes |
 | 51 | `audit_export_consent_set` | write/read | writes local consent state to `CF_KV` and reads it back |
 | 52 | `audit_export_bundle` | read/write | writes a local redacted audit bundle after consent verification |
+| 53 | `everquest_loc_probe` | write/read | sends literal `/loc` to `everquest.live` and verifies the EQ log coordinate line |
 
-M3 live count: 30 tools. Current live count: 52
+M3 live count: 30 tools. Current live count: 53
 tools.
 
 Deferred ideas from earlier drafts (`describe` and `read_hud`) are still not
 live M3/M4 agent-facing tools. `act_keymap` is the #499 profile-keymap alias
-addition; `act_combo`, `act_run_shell`, and `act_launch` remain the M4 phase
-plan additions.
+addition; `everquest_loc_probe` is the #508 literal `/loc` readback tool;
+`act_combo`, `act_run_shell`, and `act_launch` remain the M4 phase plan
+additions.
 
 ---
 
@@ -524,6 +527,31 @@ resolved binding/key list so manual FSV can read both the command intent and
 the physical input that was emitted. Unknown aliases, empty aliases, invalid
 bindings, unsupported foreground, and excessive holds fail closed and still
 write policy/error audit rows when the action gate is reached.
+
+### 3.13b `everquest_loc_probe`
+
+```json
+{
+  "name": "everquest_loc_probe",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false
+  }
+}
+```
+
+`everquest_loc_probe` is deliberately not a general chat or command surface. It
+accepts no command text or parameters, emits only the literal `/loc` key
+sequence for the active `everquest.live` foreground profile, then tails the
+physical EverQuest log from the pre-trigger byte offset. Success requires a
+new `Your Location is Y, X, Z` line and `you_say_count=0`; otherwise the tool
+fails closed and writes the deny/error row to `CF_ACTION_LOG`.
+
+Manual FSV must read the EQ log path, byte offset, location count, and `You
+say` count before and after the trigger, plus the `CF_ACTION_LOG` started/ok or
+denied rows through `storage_inspect`. Disabled logging, non-EQ foreground,
+unknown parameters, malformed or absent location output, and any player-say
+output are failure cases, not fallbacks.
 
 ### 3.14 `act_aim`
 

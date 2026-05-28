@@ -25,6 +25,8 @@ pub enum EverQuestLogError {
     },
     #[error("EverQuest log line timestamp {timestamp:?} could not be parsed")]
     Timestamp { timestamp: String },
+    #[error("EverQuest location log line could not be parsed: {message}")]
+    Location { message: String },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -44,6 +46,7 @@ pub struct EverQuestLogFile {
 #[serde(rename_all = "snake_case")]
 pub enum EverQuestLogKind {
     LoggingEnabled,
+    Location,
     TargetNpc,
     TargetPlayer,
     TargetCleared,
@@ -56,7 +59,14 @@ pub enum EverQuestLogKind {
     Other,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EverQuestLocation {
+    pub display_y: f64,
+    pub display_x: f64,
+    pub display_z: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EverQuestLogEvent {
     pub timestamp: NaiveDateTime,
     pub kind: EverQuestLogKind,
@@ -64,10 +74,12 @@ pub struct EverQuestLogEvent {
     pub target: Option<String>,
     pub channel: Option<String>,
     pub level: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub location: Option<EverQuestLocation>,
     pub summary: String,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct EverQuestLogTailBatch {
     pub path: PathBuf,
     pub start_offset: u64,
@@ -166,6 +178,9 @@ pub fn parse_log_line(line: &str) -> Result<Option<EverQuestLogEvent>, EverQuest
         .map(|value| value.as_str())
         .unwrap_or_default()
         .trim();
+    if message.starts_with(location_prefix()) {
+        return parse_location_message(timestamp, message).map(Some);
+    }
     Ok(Some(classify_event(timestamp, message)))
 }
 
@@ -271,6 +286,66 @@ fn classify_event(timestamp: NaiveDateTime, message: &str) -> EverQuestLogEvent 
         None,
         compact_text(message),
     )
+}
+
+fn parse_location_message(
+    timestamp: NaiveDateTime,
+    message: &str,
+) -> Result<EverQuestLogEvent, EverQuestLogError> {
+    let rest = message
+        .strip_prefix(location_prefix())
+        .ok_or_else(|| EverQuestLogError::Location {
+            message: message.to_owned(),
+        })?
+        .trim();
+    let mut values = rest.split(',').map(str::trim);
+    let display_y = parse_location_coord(values.next(), message)?;
+    let display_x = parse_location_coord(values.next(), message)?;
+    let display_z = parse_location_coord(values.next(), message)?;
+    if values.next().is_some() {
+        return Err(EverQuestLogError::Location {
+            message: message.to_owned(),
+        });
+    }
+    if !(display_y.is_finite() && display_x.is_finite() && display_z.is_finite()) {
+        return Err(EverQuestLogError::Location {
+            message: message.to_owned(),
+        });
+    }
+    let location = EverQuestLocation {
+        display_y,
+        display_x,
+        display_z,
+    };
+    Ok(EverQuestLogEvent {
+        timestamp,
+        kind: EverQuestLogKind::Location,
+        actor: None,
+        target: None,
+        channel: None,
+        level: None,
+        summary: format!(
+            "location y={} x={} z={}",
+            compact_coord(location.display_y),
+            compact_coord(location.display_x),
+            compact_coord(location.display_z)
+        ),
+        location: Some(location),
+    })
+}
+
+fn parse_location_coord(value: Option<&str>, message: &str) -> Result<f64, EverQuestLogError> {
+    let value =
+        value
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| EverQuestLogError::Location {
+                message: message.to_owned(),
+            })?;
+    value
+        .parse::<f64>()
+        .map_err(|_| EverQuestLogError::Location {
+            message: message.to_owned(),
+        })
 }
 
 fn classify_logging_or_target(
@@ -439,8 +514,18 @@ fn event(
         target: target.map(ToOwned::to_owned),
         channel: channel.map(ToOwned::to_owned),
         level,
+        location: None,
         summary: summary.into(),
     }
+}
+
+const fn location_prefix() -> &'static str {
+    "Your Location is"
+}
+
+fn compact_coord(value: f64) -> String {
+    let text = format!("{value:.4}");
+    text.trim_end_matches('0').trim_end_matches('.').to_owned()
 }
 
 fn compact_text(text: &str) -> String {
@@ -487,7 +572,7 @@ fn begins_casting_regex() -> &'static Regex {
 fn says_regex() -> &'static Regex {
     static REGEX: OnceLock<Regex> = OnceLock::new();
     REGEX.get_or_init(|| {
-        Regex::new(r"^(?P<actor>.+) says, '.*'$")
+        Regex::new(r"^(?P<actor>.+) say(?:s)?, '.*'$")
             .unwrap_or_else(|error| panic!("EverQuest say regex invalid: {error}"))
     })
 }
@@ -530,6 +615,32 @@ mod tests {
     }
 
     #[test]
+    fn parses_location_event_in_display_order() -> Result<(), EverQuestLogError> {
+        let event =
+            parse_log_line("[Thu May 28 11:00:00 2026] Your Location is -14.50, 23.25, 7.00")?
+                .unwrap_or_else(|| panic!("expected location event"));
+        assert_eq!(event.kind, EverQuestLogKind::Location);
+        let location = event
+            .location
+            .unwrap_or_else(|| panic!("expected location payload"));
+        assert!((location.display_y - -14.5).abs() < f64::EPSILON);
+        assert!((location.display_x - 23.25).abs() < f64::EPSILON);
+        assert!((location.display_z - 7.0).abs() < f64::EPSILON);
+        assert_eq!(event.summary, "location y=-14.5 x=23.25 z=7");
+        Ok(())
+    }
+
+    #[test]
+    fn malformed_location_event_fails_closed() {
+        let error =
+            match parse_log_line("[Thu May 28 11:00:00 2026] Your Location is 1.0, nope, 3.0") {
+                Ok(value) => panic!("malformed location parsed unexpectedly: {value:?}"),
+                Err(error) => error,
+            };
+        assert!(matches!(error, EverQuestLogError::Location { .. }));
+    }
+
+    #[test]
     fn token_summary_suppresses_chat_body() -> Result<(), EverQuestLogError> {
         let event = parse_log_line(
             "[Thu May 28 06:48:08 2026] Mikaylah tells general3:2, 'long player chat text that should not be copied into the compact summary'",
@@ -539,6 +650,16 @@ mod tests {
         assert_eq!(event.actor.as_deref(), Some("Mikaylah"));
         assert_eq!(event.channel.as_deref(), Some("general3:2"));
         assert_eq!(event.summary, "Mikaylah tells general3:2");
+        Ok(())
+    }
+
+    #[test]
+    fn player_say_variant_is_redacted_chat() -> Result<(), EverQuestLogError> {
+        let event = parse_log_line("[Thu May 28 11:00:00 2026] You say, '/loc'")?
+            .unwrap_or_else(|| panic!("expected player say event"));
+        assert_eq!(event.kind, EverQuestLogKind::Say);
+        assert_eq!(event.actor.as_deref(), Some("You"));
+        assert_eq!(event.summary, "You says");
         Ok(())
     }
 }

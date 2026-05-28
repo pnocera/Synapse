@@ -4150,12 +4150,13 @@ The M4 demo gate is defined in `docs/impplan/05_m4_hardware_hid_first_game.md` a
 
 Source files covered:
 - `crates/synapse-mcp/src/server.rs`
+- `crates/synapse-mcp/src/server/everquest_tools.rs`
 - `crates/synapse-mcp/src/m1.rs` (+ `m1/{ocr, search, sources}.rs`)
 - `crates/synapse-mcp/src/m2/{aim, click, clipboard, drag, pad, press, release_all, scroll, type_text}.rs`
 - `crates/synapse-mcp/src/m3/{audio, audit_export, permissions, profile, profile_authoring, profile_quality, profile_registry, reflex, replay, subscribe}.rs`
 - `crates/synapse-core/src/types.rs`
 
-All 52 live tools are registered on `SynapseService` via `#[tool(description=...)]` in `server.rs`. Tool descriptions are taken verbatim from the source. Every tool returns through `Json<T>` so the response shape exactly matches the deserialized response struct.
+All 53 live tools are registered on `SynapseService` via `#[tool(description=...)]` in `server.rs`. Tool descriptions are taken verbatim from the source. Every tool returns through `Json<T>` so the response shape exactly matches the deserialized response struct.
 
 Default error response shape (all tools): `ErrorData { code: rmcp::ErrorCode(-32099), message, data: { "code": <SCREAMING_SNAKE_CASE> } }` via `crates/synapse-mcp/src/m1.rs::mcp_error`.
 
@@ -4316,6 +4317,20 @@ Default error response shape (all tools): `ErrorData { code: rmcp::ErrorCode(-32
 
 **Returns:** `ActKeymapResponse { ok, alias, resolved_binding, resolved_keys, hold_ms, keys_pressed, elapsed_ms, backend_used }`.
 **Errors:** `PROFILE_NOT_FOUND`, `PROFILE_KEYMAP_INVALID`, `TOOL_PARAMS_INVALID`, `ACTION_UNSUPPORTED_KEY`, `ACTION_HOLD_EXCEEDED_MAX`, `ACTION_RATE_LIMITED`, `ACTION_BACKEND_UNAVAILABLE`, and supported-use foreground/policy denial errors. Action audit rows keep the requested alias plus result/error details so FSV can read the stored intent and resolved key/chord.
+
+## 9b. `everquest_loc_probe`
+
+**Description:** "Send the literal EverQuest /loc command to the foreground everquest.live window and verify the appended EQ log coordinate line"
+**Side effects:** Emits only the fixed `/`, `l`, `o`, `c`, `enter` keyboard sequence when `eqgame.exe` is foreground under `everquest.live`, then reads the physical EQ log tail.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| (none) | `{}` | no | `{}` | `deny_unknown_fields`; any parameter is `TOOL_PARAMS_INVALID` |
+
+**Returns:** `EverQuestLocProbeResponse { ok, command, coordinate_order, log_path, start_offset, next_offset, file_len_bytes, bytes_read, event_count, you_say_count, location, elapsed_ms }`, where `location` carries `display_y`, `display_x`, `display_z`, `log_timestamp`, and `summary`.
+**Errors:** `SAFETY_PROFILE_ACTION_DENIED`, `ACTION_TARGET_INVALID` with reasons such as `active_profile_mismatch`, `focused_text_entry_not_empty`, `active_log_unavailable`, `log_tail_failed`, `chat_pollution_detected`, or `location_log_line_absent`.
+
+Manual FSV must read the physical EQ log byte offset, location count, and `You say` count before and after the trigger, then read `CF_ACTION_LOG` through `storage_inspect` for the started/ok or denied rows. Automated tests are only supporting evidence.
 
 ## 10. `act_aim`
 

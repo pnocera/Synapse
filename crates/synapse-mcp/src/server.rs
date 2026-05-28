@@ -110,6 +110,7 @@ mod action_audit;
 mod audit_context;
 mod context;
 mod everquest_log;
+mod everquest_tools;
 mod handler;
 mod health;
 mod m1_tools;
@@ -224,6 +225,7 @@ impl SynapseService {
     fn tool_router() -> ToolRouter<Self> {
         Self::m1_tool_router()
             + Self::m2_tool_router()
+            + Self::everquest_tool_router()
             + Self::m3_tool_router()
             + Self::m4_tool_router()
     }

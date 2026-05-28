@@ -120,6 +120,16 @@ buffer is expected empty, then `inventory` readback; the EQ log `You say` count
 and timestamp must be read before and after to prove no chat was submitted.
 Do not expose this as `open_chat` or any general chat/recovery alias.
 
+`everquest_loc_probe` is the only reviewed live text-like EverQuest command
+surface. It takes no command string and no free-text parameters; it emits only
+the literal `/loc` key sequence after foreground/profile/logging preconditions,
+then proves the result by reading the physical EQ log tail. The coordinate
+payload is stored in EverQuest display order as `display_y`, `display_x`, and
+`display_z`. A successful probe must add a `Your Location is ...` log line and
+must not add a new `You say` line. Unknown parameters, disabled `Log=0`, non-EQ
+foreground, missing/malformed location output, or any player-say output are
+hard failures.
+
 Before claiming an alias effect, manually read the visible UI/log/storage SoT
 before the trigger, call the real MCP `act_keymap` tool while `eqgame.exe` is
 foreground, then separately read the visible UI/log/storage state again. The
@@ -141,10 +151,11 @@ EverQuest already creates local activity logs on this host. Current readback:
 The `synapse-everquest` crate owns EverQuest-specific log discovery, parsing,
 cursor-based tailing, and token-efficient summaries. It must turn noisy raw log
 lines into compact events such as `target_npc`, `consider`, `cast_begins`,
-`tell`, `say`, and `system` while suppressing long chat bodies unless a later
-operator-approved feature explicitly needs them. Runtime integration should feed
-these compact events into `observe`, event streams, profile quality, and audit
-storage without dumping full raw logs into the model context.
+`location`, `tell`, `say`, and `system` while suppressing long chat bodies
+unless a later operator-approved feature explicitly needs them. Runtime
+integration should feed these compact events into `observe`, event streams,
+profile quality, and audit storage without dumping full raw logs into the model
+context.
 
 The MCP runtime log feed is exposed through `observe(include=["events"])` when
 the foreground profile resolves to `everquest.live`. The first observation for

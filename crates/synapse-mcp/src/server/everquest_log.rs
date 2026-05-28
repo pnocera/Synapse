@@ -17,7 +17,7 @@ use crate::m1::EverQuestLogCursorState;
 
 use super::SynapseService;
 
-const EVERQUEST_PROFILE_ID: &str = "everquest.live";
+pub(super) const EVERQUEST_PROFILE_ID: &str = "everquest.live";
 const EVERQUEST_INSTALL_PATH_KEY: &str = "runtime.everquest.install_path";
 const EVERQUEST_SERVER_KEY: &str = "runtime.everquest.server";
 const EQCLIENT_FILE: &str = "eqclient.ini";
@@ -142,7 +142,7 @@ impl SynapseService {
         Ok(summaries)
     }
 
-    fn resolve_active_everquest_log(&self) -> Result<ActiveEverQuestLog, String> {
+    pub(super) fn resolve_active_everquest_log(&self) -> Result<ActiveEverQuestLog, String> {
         let runtime = self
             .profile_runtime()
             .map_err(|error| format!("load profile runtime: {}", error.message))?;
@@ -205,12 +205,12 @@ impl SynapseService {
 }
 
 #[derive(Clone, Debug)]
-struct ActiveEverQuestLog {
-    log: EverQuestLogFile,
-    install_root: PathBuf,
-    active_character: Option<String>,
-    expected_server: Option<String>,
-    log_enabled: Option<bool>,
+pub(super) struct ActiveEverQuestLog {
+    pub(super) log: EverQuestLogFile,
+    pub(super) install_root: PathBuf,
+    pub(super) active_character: Option<String>,
+    pub(super) expected_server: Option<String>,
+    pub(super) log_enabled: Option<bool>,
 }
 
 fn choose_active_log(
@@ -424,6 +424,7 @@ fn log_event_summary(
                 "target": event.target,
                 "channel": event.channel,
                 "level": event.level,
+                "location": event.location,
                 "summary": safe_event_summary(event),
                 "redacted": event_body_redacted(&event.kind),
             }
@@ -434,6 +435,7 @@ fn log_event_summary(
 const fn kind_name(kind: &EverQuestLogKind) -> &'static str {
     match kind {
         EverQuestLogKind::LoggingEnabled => "logging_enabled",
+        EverQuestLogKind::Location => "location",
         EverQuestLogKind::TargetNpc => "target_npc",
         EverQuestLogKind::TargetPlayer => "target_player",
         EverQuestLogKind::TargetCleared => "target_cleared",
@@ -482,6 +484,7 @@ mod tests {
             target: None,
             channel: Some("general3:2".to_owned()),
             level: None,
+            location: None,
             summary: "Mikaylah tells general3:2".to_owned(),
         };
         assert_eq!(safe_event_summary(&event), "Mikaylah tells general3:2");
