@@ -3621,6 +3621,7 @@ dependencies = [
  "synapse-audio",
  "synapse-capture",
  "synapse-core",
+ "synapse-hid-host",
  "synapse-perception",
  "synapse-profiles",
  "synapse-reflex",

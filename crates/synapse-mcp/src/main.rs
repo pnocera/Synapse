@@ -1,3 +1,4 @@
+mod cli;
 mod http;
 mod m1;
 mod m2;
@@ -17,7 +18,7 @@ use std::{
 };
 
 use anyhow::Context;
-use clap::{ArgAction, Parser, ValueEnum};
+use clap::{ArgAction, Parser, Subcommand, ValueEnum};
 use rmcp::ServiceExt;
 use synapse_telemetry::{TelemetryConfig, TelemetryGuard, init_tracing};
 use tokio::io::{AsyncRead, ReadBuf};
@@ -42,6 +43,8 @@ enum Mode {
     reason = "CLI flags intentionally mirror independent operator startup gates"
 )]
 struct Cli {
+    #[command(subcommand)]
+    command: Option<CliCommand>,
     #[arg(long, value_enum, default_value_t = Mode::Stdio, env = "SYNAPSE_MODE")]
     mode: Mode,
     #[arg(long, default_value = "127.0.0.1:7700", env = "SYNAPSE_BIND")]
@@ -95,6 +98,19 @@ struct Cli {
     allow_launch: Vec<String>,
 }
 
+#[derive(Debug, Subcommand)]
+enum CliCommand {
+    Hid(cli::hid::HidCli),
+}
+
+impl CliCommand {
+    fn run(self) -> anyhow::Result<ExitCode> {
+        match self {
+            Self::Hid(command) => command.run(),
+        }
+    }
+}
+
 impl Cli {
     fn m2_config(&self) -> m2::M2ServiceConfig {
         m2::M2ServiceConfig::from_cli_parts(self.hardware_hid.clone())
@@ -143,6 +159,10 @@ async fn main() -> ExitCode {
 
 async fn run() -> anyhow::Result<ExitCode> {
     let cli = Cli::parse();
+    if let Some(command) = cli.command {
+        return command.run();
+    }
+
     let telemetry_guard = configure_telemetry(&cli)?;
     let dpi_awareness = synapse_capture::init_process_dpi_awareness()
         .context("initialize per-monitor DPI awareness")?;

@@ -23,11 +23,13 @@ pub const CAPABILITY_KEYBOARD: u32 = 1 << 1;
 pub const CAPABILITY_GAMEPAD: u32 = 1 << 2;
 pub const CAPABILITY_TELEMETRY: u32 = 1 << 3;
 pub const CAPABILITY_WATCHDOG: u32 = 1 << 4;
+pub const CAPABILITY_BOOTLOADER: u32 = 1 << 5;
 pub const DEFAULT_CAPABILITIES: u32 = CAPABILITY_MOUSE
     | CAPABILITY_KEYBOARD
     | CAPABILITY_GAMEPAD
     | CAPABILITY_TELEMETRY
-    | CAPABILITY_WATCHDOG;
+    | CAPABILITY_WATCHDOG
+    | CAPABILITY_BOOTLOADER;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct IdentifyInfo {

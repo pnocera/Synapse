@@ -29,7 +29,9 @@ use pico_hid::runtime::RuntimeState;
 #[cfg(not(feature = "loopback"))]
 use pico_hid::{
     dispatch::IdentifyInfo,
-    protocol::{MAX_FRAME_LEN, ParseResult, encode_device_frame, encode_nak, parse_host_frame},
+    protocol::{
+        HostCommand, MAX_FRAME_LEN, ParseResult, encode_device_frame, encode_nak, parse_host_frame,
+    },
 };
 
 const CDC_MAX_PACKET_SIZE: u16 = 64;
@@ -339,6 +341,8 @@ async fn serial_until_disconnect(
         loop {
             let consumed = match parse_host_frame(&rx[..rx_len]) {
                 ParseResult::Frame { frame, consumed } => {
+                    let reset_to_bootloader =
+                        frame.command == HostCommand::ResetToBootloader as u8;
                     let outcome = runtime.lock(|runtime| {
                         runtime
                             .borrow_mut()
@@ -352,6 +356,10 @@ async fn serial_until_disconnect(
                     )
                     .expect("dispatch responses always fit in a device frame");
                     write_serial_bytes(serial_class, &tx[..tx_len]).await?;
+                    if reset_to_bootloader {
+                        Timer::after_millis(50).await;
+                        embassy_rp::rom_data::reset_to_usb_boot(0, 0);
+                    }
                     consumed
                 }
                 ParseResult::Nak { nak, consumed } => {
