@@ -4,7 +4,10 @@ use synapse_action::ActionHandle;
 use synapse_core::{ReflexId, ReflexState, ReflexStatus, StoredAuditContext};
 use synapse_storage::Db;
 
-use crate::{EventBus, ReflexResult, ScheduledReflex, SchedulerConfig, SchedulerHandle};
+use crate::{
+    EventBus, ReflexActionGateHandle, ReflexResult, ScheduledReflex, SchedulerConfig,
+    SchedulerHandle,
+};
 
 /// Runtime handle for the M3 reflex subsystem.
 ///
@@ -19,6 +22,7 @@ pub struct ReflexRuntime {
     pub(crate) event_bus: EventBus,
     pub(crate) scheduler_config: SchedulerConfig,
     pub(crate) audit_context: Option<StoredAuditContext>,
+    pub(crate) action_gate: Option<ReflexActionGateHandle>,
     pub(crate) reflexes: Vec<ScheduledReflex>,
     pub(crate) disabled_reflex_ids: HashSet<ReflexId>,
     pub(crate) scheduler: Option<SchedulerHandle>,
@@ -71,6 +75,7 @@ impl ReflexRuntime {
             event_bus,
             scheduler_config,
             audit_context: None,
+            action_gate: None,
             reflexes: Vec::new(),
             disabled_reflex_ids: HashSet::new(),
             scheduler: None,
@@ -132,7 +137,12 @@ impl ReflexRuntime {
     pub(crate) fn terminal_runtime_reflex_ids(&self) -> HashSet<ReflexId> {
         self.statuses()
             .into_iter()
-            .filter(|status| matches!(status.state, ReflexState::Cancelled | ReflexState::Expired))
+            .filter(|status| {
+                matches!(
+                    status.state,
+                    ReflexState::ActionDenied | ReflexState::Cancelled | ReflexState::Expired
+                )
+            })
             .map(|status| status.id)
             .collect()
     }
@@ -140,6 +150,11 @@ impl ReflexRuntime {
     #[tracing::instrument(skip_all, fields(component = "reflex_runtime"))]
     pub fn set_audit_context(&mut self, audit_context: Option<StoredAuditContext>) {
         self.audit_context = audit_context;
+    }
+
+    #[tracing::instrument(skip_all, fields(component = "reflex_runtime"))]
+    pub fn set_action_gate(&mut self, action_gate: Option<ReflexActionGateHandle>) {
+        self.action_gate = action_gate;
     }
 
     #[must_use]

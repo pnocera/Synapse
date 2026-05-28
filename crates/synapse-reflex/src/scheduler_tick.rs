@@ -111,6 +111,7 @@ fn dispatch_triggered_reflexes(
                 }
                 Err(error) => {
                     *dispatch_blocked = true;
+                    mark_dispatch_error(runtime, trigger.reflex_index, &error);
                     warn_dispatch_blocked(&trigger.reflex_id, &error);
                     break;
                 }
@@ -145,6 +146,7 @@ fn dispatch_triggered_reflexes(
                     }
                     Err(error) => {
                         *dispatch_blocked = true;
+                        mark_dispatch_error(runtime, trigger.reflex_index, &error);
                         warn_dispatch_blocked(&trigger.reflex_id, &error);
                         break;
                     }
@@ -388,6 +390,14 @@ fn warn_dispatch_blocked(reflex_id: &ReflexId, error: &ReflexError) {
         detail = %error,
         "reflex action dispatch blocked"
     );
+}
+
+fn mark_dispatch_error(runtime: &RuntimeState, index: usize, error: &ReflexError) {
+    if error.code() == error_codes::REFLEX_ACTION_PERMISSION_DENIED {
+        super::mark_reflex_action_denied(runtime, index);
+    } else {
+        super::mark_reflex_error(runtime, index, error.code());
+    }
 }
 
 fn push_sample(

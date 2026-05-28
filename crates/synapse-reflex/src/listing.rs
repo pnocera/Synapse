@@ -140,7 +140,10 @@ impl ReflexRuntime {
 }
 
 const fn is_non_terminal(state: ReflexState) -> bool {
-    !matches!(state, ReflexState::Cancelled | ReflexState::Expired)
+    !matches!(
+        state,
+        ReflexState::ActionDenied | ReflexState::Cancelled | ReflexState::Expired
+    )
 }
 
 #[derive(Clone, Debug)]
@@ -186,7 +189,10 @@ impl AuditStatusAccumulator {
             self.fire_count = self.fire_count.saturating_add(1);
         }
 
-        if matches!(audit.status, ReflexState::Cancelled | ReflexState::Expired) {
+        if matches!(
+            audit.status,
+            ReflexState::ActionDenied | ReflexState::Cancelled | ReflexState::Expired
+        ) {
             self.update_common_fields(&audit);
             self.terminal = Some(audit);
         }

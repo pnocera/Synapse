@@ -5,7 +5,8 @@ use super::{
 };
 use rmcp::model::ErrorCode;
 use serde_json::json;
-use synapse_core::ProfileUseScope;
+use synapse_core::{Action, ProfileUseScope, ReflexId};
+use synapse_reflex::{ReflexActionGate, ReflexActionGateHandle, ReflexActionPermissionDenied};
 
 type M2ActionContext = (
     synapse_action::ActionHandle,
@@ -126,7 +127,7 @@ impl SynapseService {
         tool: &'static str,
     ) -> Result<(), ErrorData> {
         let runtime = self.profile_runtime()?;
-        self.ensure_profile_scope_allows_action(&runtime, tool)?;
+        ensure_profile_scope_allows_action(&runtime, tool, self.allow_unknown_profile()?)?;
         let foreground = {
             let state = self.m1_state()?;
             let input = crate::m1::current_input(&state, 1)?;
@@ -134,53 +135,6 @@ impl SynapseService {
             input.foreground
         };
         super::target_policy::ensure_supported_use_allows(&runtime, &foreground, tool)
-    }
-
-    fn ensure_profile_scope_allows_action(
-        &self,
-        runtime: &synapse_profiles::ProfileRuntime,
-        tool: &'static str,
-    ) -> Result<(), ErrorData> {
-        let active_profile_id = runtime
-            .active_profile_id()
-            .map_err(|error| mcp_error(error.code(), error.to_string()))?;
-        let Some(active_profile_id) = active_profile_id else {
-            return Err(profile_action_scope_denied_error(
-                tool,
-                "no_profile",
-                None,
-                None,
-                "action tools require an active profile before dispatch",
-            ));
-        };
-
-        let profile = runtime
-            .profile(&active_profile_id)
-            .map_err(|error| mcp_error(error.code(), error.to_string()))?
-            .ok_or_else(|| {
-                profile_action_scope_denied_error(
-                    tool,
-                    "active_profile_missing",
-                    Some(&active_profile_id),
-                    None,
-                    "active profile id does not resolve to a loaded profile",
-                )
-            })?;
-
-        match profile.use_scope {
-            ProfileUseScope::Productivity
-            | ProfileUseScope::SinglePlayer
-            | ProfileUseScope::OperatorOwnedTest
-            | ProfileUseScope::SanctionedResearch => Ok(()),
-            ProfileUseScope::Unknown if self.allow_unknown_profile()? => Ok(()),
-            ProfileUseScope::Unknown => Err(profile_action_scope_denied_error(
-                tool,
-                "unknown_scope",
-                Some(&profile.id),
-                Some(profile.use_scope),
-                "active profile has use_scope=\"unknown\"; start with --allow-unknown-profile to dispatch action tools",
-            )),
-        }
     }
 
     pub(super) fn m2_release_all_context(
@@ -246,6 +200,31 @@ impl SynapseService {
             .map_err(|error| m3_state_error(&error))?;
         drop(state);
         Ok(runtime)
+    }
+
+    pub(super) fn install_reflex_action_gate(
+        &self,
+        runtime: &Arc<Mutex<synapse_reflex::ReflexRuntime>>,
+    ) -> Result<(), ErrorData> {
+        let gate = self.reflex_action_gate()?;
+        runtime
+            .lock()
+            .map_err(|_error| {
+                mcp_error(
+                    error_codes::TOOL_INTERNAL_ERROR,
+                    "reflex runtime lock poisoned while setting action gate",
+                )
+            })?
+            .set_action_gate(Some(gate));
+        Ok(())
+    }
+
+    pub(super) fn reflex_action_gate(&self) -> Result<ReflexActionGateHandle, ErrorData> {
+        Ok(Arc::new(ReflexScopeActionGate {
+            profile_runtime: self.profile_runtime()?,
+            m1_state: Arc::clone(&self.m1_state),
+            allow_unknown_profile: self.allow_unknown_profile()?,
+        }))
     }
 
     pub(super) fn ensure_a11y_event_bridge(&self) -> Result<(), ErrorData> {
@@ -415,6 +394,115 @@ fn profile_action_scope_denied_error(
     )
 }
 
+fn ensure_profile_scope_allows_action(
+    runtime: &synapse_profiles::ProfileRuntime,
+    tool: &'static str,
+    allow_unknown_profile: bool,
+) -> Result<(), ErrorData> {
+    let active_profile_id = runtime
+        .active_profile_id()
+        .map_err(|error| mcp_error(error.code(), error.to_string()))?;
+    let Some(active_profile_id) = active_profile_id else {
+        return Err(profile_action_scope_denied_error(
+            tool,
+            "no_profile",
+            None,
+            None,
+            "action tools require an active profile before dispatch",
+        ));
+    };
+
+    let profile = runtime
+        .profile(&active_profile_id)
+        .map_err(|error| mcp_error(error.code(), error.to_string()))?
+        .ok_or_else(|| {
+            profile_action_scope_denied_error(
+                tool,
+                "active_profile_missing",
+                Some(&active_profile_id),
+                None,
+                "active profile id does not resolve to a loaded profile",
+            )
+        })?;
+
+    match profile.use_scope {
+        ProfileUseScope::Productivity
+        | ProfileUseScope::SinglePlayer
+        | ProfileUseScope::OperatorOwnedTest
+        | ProfileUseScope::SanctionedResearch => Ok(()),
+        ProfileUseScope::Unknown if allow_unknown_profile => Ok(()),
+        ProfileUseScope::Unknown => Err(profile_action_scope_denied_error(
+            tool,
+            "unknown_scope",
+            Some(&profile.id),
+            Some(profile.use_scope),
+            "active profile has use_scope=\"unknown\"; start with --allow-unknown-profile to dispatch action tools",
+        )),
+    }
+}
+
+struct ReflexScopeActionGate {
+    profile_runtime: Arc<synapse_profiles::ProfileRuntime>,
+    m1_state: super::SharedM1State,
+    allow_unknown_profile: bool,
+}
+
+impl ReflexActionGate for ReflexScopeActionGate {
+    fn ensure_action_allowed(
+        &self,
+        _reflex_id: &ReflexId,
+        _action: &Action,
+    ) -> Result<(), ReflexActionPermissionDenied> {
+        const TOOL: &str = "reflex_dispatch";
+        ensure_profile_scope_allows_action(&self.profile_runtime, TOOL, self.allow_unknown_profile)
+            .and_then(|()| {
+                let foreground = {
+                    let state = self.m1_state.lock().map_err(|_err| {
+                        mcp_error(
+                            error_codes::OBSERVE_INTERNAL,
+                            "M1 service state lock poisoned while checking reflex dispatch scope",
+                        )
+                    })?;
+                    let input = crate::m1::current_input(&state, 1)?;
+                    drop(state);
+                    input.foreground
+                };
+                super::target_policy::ensure_supported_use_allows(
+                    &self.profile_runtime,
+                    &foreground,
+                    TOOL,
+                )
+            })
+            .map_err(|error| reflex_denial_from_error(&error))
+    }
+}
+
+fn reflex_denial_from_error(error: &ErrorData) -> ReflexActionPermissionDenied {
+    let data = error.data.as_ref();
+    ReflexActionPermissionDenied {
+        policy_code: data
+            .and_then(|value| value.get("code"))
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        policy_reason: data
+            .and_then(|value| value.get("reason"))
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        profile_id: data
+            .and_then(|value| value.get("profile_id"))
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        use_scope: data
+            .and_then(|value| value.get("use_scope"))
+            .and_then(serde_json::Value::as_str)
+            .map(ToOwned::to_owned),
+        detail: data
+            .and_then(|value| value.get("detail"))
+            .and_then(serde_json::Value::as_str)
+            .map_or_else(|| error.message.to_string(), ToOwned::to_owned),
+    }
+}
+
 const fn profile_use_scope_label(scope: ProfileUseScope) -> &'static str {
     match scope {
         ProfileUseScope::Productivity => "productivity",
@@ -452,7 +540,7 @@ mod scope_gate_tests {
     use rmcp::handler::server::wrapper::Parameters;
     use serde_json::json;
     use synapse_core::{
-        AccessibleNode, EventFilter, FocusedElement, ForegroundContext, Rect, SensorStatus,
+        AccessibleNode, Action, EventFilter, FocusedElement, ForegroundContext, Rect, SensorStatus,
         UiaPattern, element_id,
     };
     use synapse_perception::ObservationInput;
@@ -627,6 +715,37 @@ mod scope_gate_tests {
             }))
             .await?;
         assert!(!subscription.0.subscription_id.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn reflex_action_gate_rechecks_active_profile_scope_on_dispatch() -> anyhow::Result<()> {
+        let profiles = TempDir::new()?;
+        write_profile(
+            &profiles.path().join("single-player.toml"),
+            "single-player",
+            "single_player",
+        )?;
+        write_profile(&profiles.path().join("unknown.toml"), "unknown", "unknown")?;
+        let service = service_with_profiles(profiles.path(), false)?;
+        install_synthetic_notepad_input(&service)?;
+        let runtime = service.profile_runtime()?;
+        runtime.activate("single-player")?;
+        let gate = service.reflex_action_gate()?;
+        let reflex_id = "reflex-profile-transition".to_owned();
+        let action = Action::ReleaseAll;
+
+        gate.ensure_action_allowed(&reflex_id, &action)
+            .map_err(|denial| anyhow::anyhow!("single-player dispatch denied: {denial:?}"))?;
+
+        runtime.activate("unknown")?;
+        let denial = match gate.ensure_action_allowed(&reflex_id, &action) {
+            Ok(()) => anyhow::bail!("unknown active profile must deny reflex dispatch"),
+            Err(denial) => denial,
+        };
+        assert_eq!(denial.policy_reason.as_deref(), Some("unknown_scope"));
+        assert_eq!(denial.profile_id.as_deref(), Some("unknown"));
+        assert_eq!(denial.use_scope.as_deref(), Some("unknown"));
         Ok(())
     }
 

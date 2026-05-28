@@ -100,6 +100,7 @@ impl SynapseService {
             self.ensure_a11y_event_bridge()?;
         }
         let runtime = self.reflex_runtime()?;
+        self.install_reflex_action_gate(&runtime)?;
         register_reflex(&runtime, params.0).map(Json)
     }
 

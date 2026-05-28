@@ -24,6 +24,8 @@ pub enum ReflexError {
     TrackLost { reflex_id: ReflexId },
     #[error("reflex starved: {reflex_id}")]
     Starved { reflex_id: ReflexId },
+    #[error("reflex action permission denied: {reflex_id}: {detail}")]
+    ActionPermissionDenied { reflex_id: ReflexId, detail: String },
     #[error("reflex disabled by operator: {detail}")]
     DisabledByOperator { detail: String },
     #[error("reflex lifetime expired: {reflex_id}")]
@@ -47,6 +49,7 @@ impl ReflexError {
             Self::TickLate { .. } => error_codes::REFLEX_TICK_LATE,
             Self::TrackLost { .. } => error_codes::REFLEX_TRACK_LOST,
             Self::Starved { .. } => error_codes::REFLEX_STARVED,
+            Self::ActionPermissionDenied { .. } => error_codes::REFLEX_ACTION_PERMISSION_DENIED,
             Self::DisabledByOperator { .. } => error_codes::REFLEX_DISABLED_BY_OPERATOR,
             Self::LifetimeExpired { .. } => error_codes::REFLEX_LIFETIME_EXPIRED,
             Self::RecursionLimit { .. } => error_codes::REFLEX_RECURSION_LIMIT,
@@ -112,6 +115,13 @@ mod tests {
                     reflex_id: "reflex-starved".to_owned(),
                 },
                 error_codes::REFLEX_STARVED,
+            ),
+            (
+                ReflexError::ActionPermissionDenied {
+                    reflex_id: "reflex-denied".to_owned(),
+                    detail: "unknown scope".to_owned(),
+                },
+                error_codes::REFLEX_ACTION_PERMISSION_DENIED,
             ),
             (
                 ReflexError::DisabledByOperator {

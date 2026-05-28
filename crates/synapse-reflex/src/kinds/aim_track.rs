@@ -149,6 +149,24 @@ impl AimTrackController {
         action_handle: &ActionHandle,
         event_bus: &EventBus,
     ) -> ReflexResult<AimTrackOutput> {
+        self.step_dispatch_with(context, event_bus, |action| {
+            action_handle
+                .try_execute(action.clone())
+                .map_err(|error| ReflexError::ParamsInvalid {
+                    detail: format!("aim_track action dispatch failed: {error}"),
+                })
+        })
+    }
+
+    pub(crate) fn step_dispatch_with<F>(
+        &mut self,
+        context: &AimTrackContext<'_>,
+        event_bus: &EventBus,
+        dispatch_action: F,
+    ) -> ReflexResult<AimTrackOutput>
+    where
+        F: FnOnce(&Action) -> ReflexResult<()>,
+    {
         let action = match self.step_action(context) {
             Ok(Some(action)) => action,
             Ok(None) => {
@@ -165,11 +183,7 @@ impl AimTrackController {
             }
             Err(error) => return Err(error),
         };
-        action_handle
-            .try_execute(action.clone())
-            .map_err(|error| ReflexError::ParamsInvalid {
-                detail: format!("aim_track action dispatch failed: {error}"),
-            })?;
+        dispatch_action(&action)?;
         let Action::MouseMoveRelative { dx, dy, .. } = action else {
             return Err(ReflexError::ParamsInvalid {
                 detail: "aim_track generated non-relative-mouse action".to_owned(),

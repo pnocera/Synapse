@@ -128,9 +128,19 @@ impl HoldMoveController {
         &mut self,
         action_handle: &ActionHandle,
     ) -> ReflexResult<HoldMoveOutput> {
+        self.register_dispatch_with(|action| dispatch(action_handle, action.clone()))
+    }
+
+    pub(crate) fn register_dispatch_with<F>(
+        &mut self,
+        mut dispatch_action: F,
+    ) -> ReflexResult<HoldMoveOutput>
+    where
+        F: FnMut(&Action) -> ReflexResult<()>,
+    {
         match self.phase {
             HoldMovePhase::Pending => {
-                let actions = self.dispatch_down(action_handle)?;
+                let actions = self.dispatch_down_with(&mut dispatch_action)?;
                 self.phase = HoldMovePhase::Holding;
                 Ok(HoldMoveOutput::Registered { actions })
             }
@@ -155,6 +165,20 @@ impl HoldMoveController {
         action_handle: &ActionHandle,
         event_bus: &EventBus,
     ) -> ReflexResult<HoldMoveOutput> {
+        self.step_dispatch_with(context, event_bus, |action| {
+            dispatch(action_handle, action.clone())
+        })
+    }
+
+    pub(crate) fn step_dispatch_with<F>(
+        &mut self,
+        context: &HoldLifetimeContext<'_>,
+        event_bus: &EventBus,
+        mut dispatch_action: F,
+    ) -> ReflexResult<HoldMoveOutput>
+    where
+        F: FnMut(&Action) -> ReflexResult<()>,
+    {
         if !matches!(self.phase, HoldMovePhase::Holding) {
             return Ok(HoldMoveOutput::Idle {
                 reason: "not_holding",
@@ -165,7 +189,7 @@ impl HoldMoveController {
                 elapsed_ms: self.elapsed().as_millis(),
             });
         };
-        let _output = self.release(action_handle, event_bus, reason)?;
+        let _output = self.release_with(event_bus, reason, &mut dispatch_action)?;
         Err(lifetime_expired(&self.reflex_id))
     }
 
@@ -179,48 +203,66 @@ impl HoldMoveController {
         action_handle: &ActionHandle,
         event_bus: &EventBus,
     ) -> ReflexResult<HoldMoveOutput> {
-        self.release(action_handle, event_bus, HoldReleaseReason::Cancelled)
+        self.cancel_dispatch_with(event_bus, |action| dispatch(action_handle, action.clone()))
     }
 
-    fn release(
+    pub(crate) fn cancel_dispatch_with<F>(
         &mut self,
-        action_handle: &ActionHandle,
+        event_bus: &EventBus,
+        mut dispatch_action: F,
+    ) -> ReflexResult<HoldMoveOutput>
+    where
+        F: FnMut(&Action) -> ReflexResult<()>,
+    {
+        self.release_with(
+            event_bus,
+            HoldReleaseReason::Cancelled,
+            &mut dispatch_action,
+        )
+    }
+
+    fn release_with<F>(
+        &mut self,
         event_bus: &EventBus,
         reason: HoldReleaseReason,
-    ) -> ReflexResult<HoldMoveOutput> {
+        dispatch_action: &mut F,
+    ) -> ReflexResult<HoldMoveOutput>
+    where
+        F: FnMut(&Action) -> ReflexResult<()>,
+    {
         if !matches!(self.phase, HoldMovePhase::Holding) {
             return Ok(HoldMoveOutput::Idle {
                 reason: "not_holding",
             });
         }
-        let actions = self.dispatch_up(action_handle)?;
+        let actions = self.dispatch_up_with(dispatch_action)?;
         self.phase = HoldMovePhase::Released;
         emit_lifetime_expired(event_bus, &self.reflex_id, reason, self.elapsed());
         Ok(HoldMoveOutput::Released { reason, actions })
     }
 
-    fn dispatch_down(&self, action_handle: &ActionHandle) -> ReflexResult<usize> {
+    fn dispatch_down_with<F>(&self, dispatch_action: &mut F) -> ReflexResult<usize>
+    where
+        F: FnMut(&Action) -> ReflexResult<()>,
+    {
         for key in &self.params.keys {
-            dispatch(
-                action_handle,
-                Action::KeyDown {
-                    key: key.clone(),
-                    backend: self.params.backend,
-                },
-            )?;
+            dispatch_action(&Action::KeyDown {
+                key: key.clone(),
+                backend: self.params.backend,
+            })?;
         }
         Ok(self.params.keys.len())
     }
 
-    fn dispatch_up(&self, action_handle: &ActionHandle) -> ReflexResult<usize> {
+    fn dispatch_up_with<F>(&self, dispatch_action: &mut F) -> ReflexResult<usize>
+    where
+        F: FnMut(&Action) -> ReflexResult<()>,
+    {
         for key in self.params.keys.iter().rev() {
-            dispatch(
-                action_handle,
-                Action::KeyUp {
-                    key: key.clone(),
-                    backend: self.params.backend,
-                },
-            )?;
+            dispatch_action(&Action::KeyUp {
+                key: key.clone(),
+                backend: self.params.backend,
+            })?;
         }
         Ok(self.params.keys.len())
     }

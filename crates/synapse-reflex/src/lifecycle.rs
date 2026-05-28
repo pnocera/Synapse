@@ -35,14 +35,27 @@ impl ReflexRuntime {
         next.push(reflex.clone());
         scheduler::validate_reflexes(&next)?;
 
-        let new_scheduler = scheduler::ReflexScheduler::spawn_with_audit_db_and_context(
-            self.event_bus.clone(),
-            self.action_handle.clone(),
-            next.clone(),
-            self.scheduler_config.clone(),
-            Arc::clone(&self.db),
-            self.audit_context.clone(),
-        )?;
+        let new_scheduler = match self.action_gate.clone() {
+            Some(action_gate) => {
+                scheduler::ReflexScheduler::spawn_with_audit_db_context_and_action_gate(
+                    self.event_bus.clone(),
+                    self.action_handle.clone(),
+                    next.clone(),
+                    self.scheduler_config.clone(),
+                    Arc::clone(&self.db),
+                    self.audit_context.clone(),
+                    action_gate,
+                )?
+            }
+            None => scheduler::ReflexScheduler::spawn_with_audit_db_and_context(
+                self.event_bus.clone(),
+                self.action_handle.clone(),
+                next.clone(),
+                self.scheduler_config.clone(),
+                Arc::clone(&self.db),
+                self.audit_context.clone(),
+            )?,
+        };
         if !self.disabled_reflex_ids.is_empty() {
             let disabled_reflex_ids = self.disabled_reflex_ids.iter().cloned().collect::<Vec<_>>();
             let _disabled_statuses = new_scheduler.disable_reflexes(&disabled_reflex_ids);
@@ -85,7 +98,7 @@ impl ReflexRuntime {
         };
 
         match status.state {
-            ReflexState::Expired => {
+            ReflexState::ActionDenied | ReflexState::Expired => {
                 return Ok(ReflexCancelOutcome::AlreadyExpired { status });
             }
             ReflexState::Cancelled => {

@@ -410,6 +410,7 @@ pub fn stored_reflex_step_strategy() -> impl Strategy<Value = StoredReflexStep> 
 pub fn reflex_state_strategy() -> impl Strategy<Value = ReflexState> {
     prop_oneof![
         Just(ReflexState::Active),
+        Just(ReflexState::ActionDenied),
         Just(ReflexState::Paused),
         Just(ReflexState::Cancelled),
         Just(ReflexState::Expired),

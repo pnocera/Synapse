@@ -22,7 +22,7 @@ use super::{
     scheduler_tick::tick,
 };
 use crate::{
-    EventBus, REFLEX_LIFETIME_EXPIRED_KIND, SubscriberHandle,
+    EventBus, REFLEX_LIFETIME_EXPIRED_KIND, ReflexActionGateHandle, SubscriberHandle,
     error::ReflexResult,
     kinds::{
         aim_track::AimTrackController, combo::ComboController, hold_button::HoldButtonController,
@@ -62,6 +62,7 @@ pub(super) struct RuntimeState {
     pub(super) config: SchedulerConfig,
     pub(super) audit_db: Option<Arc<Db>>,
     pub(super) audit_context: Option<StoredAuditContext>,
+    pub(super) action_gate: Option<ReflexActionGateHandle>,
     pub(super) tick_index: u64,
 }
 
@@ -329,6 +330,17 @@ pub(super) fn mark_reflex_lifetime_expired(runtime: &RuntimeState, index: usize,
 pub(super) fn mark_reflex_error(runtime: &RuntimeState, index: usize, code: &str) {
     if let Some(status) = lock_statuses(&runtime.statuses).get_mut(index) {
         status.last_error_code = Some(code.to_owned());
+    }
+}
+
+pub(super) fn mark_reflex_action_denied(runtime: &RuntimeState, index: usize) {
+    if let Some(control) = lock_controls(&runtime.controls).get_mut(index) {
+        control.active = false;
+    }
+    if let Some(status) = lock_statuses(&runtime.statuses).get_mut(index) {
+        status.state = ReflexState::ActionDenied;
+        status.last_error_code =
+            Some(synapse_core::error_codes::REFLEX_ACTION_PERMISSION_DENIED.to_owned());
     }
 }
 

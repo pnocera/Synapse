@@ -109,6 +109,7 @@ pub enum ReflexLifetime {
 #[serde(rename_all = "snake_case")]
 pub enum ReflexState {
     Active,
+    ActionDenied,
     Paused,
     Cancelled,
     Expired,

@@ -11,7 +11,7 @@ use synapse_core::{Action, EventFilter, ReflexId, ReflexLifetime, StoredAuditCon
 use synapse_storage::Db;
 
 use crate::{
-    EventBus,
+    EventBus, ReflexActionGateHandle,
     error::{ReflexError, ReflexResult},
     kinds::on_event::OnEventState,
     kinds::{
@@ -22,9 +22,9 @@ use crate::{
 pub use scheduler_handle::SchedulerHandle;
 use scheduler_loop::{
     ReflexControl, RuntimeReflex, RuntimeState, aim_track_states, combo_states, hold_button_states,
-    hold_move_states, lock_controls, mark_reflex_active_if_starved, mark_reflex_error,
-    mark_reflex_fired, mark_reflex_lifetime_expired, mark_reflex_starved, run_scheduler_thread,
-    status_for_reflex,
+    hold_move_states, lock_controls, mark_reflex_action_denied, mark_reflex_active_if_starved,
+    mark_reflex_error, mark_reflex_fired, mark_reflex_lifetime_expired, mark_reflex_starved,
+    run_scheduler_thread, status_for_reflex,
 };
 
 pub const MAX_SCHEDULED_REFLEXES: usize = 32;
@@ -280,7 +280,30 @@ impl ReflexScheduler {
         reflexes: Vec<ScheduledReflex>,
         config: SchedulerConfig,
     ) -> ReflexResult<SchedulerHandle> {
-        Self::spawn_inner(event_bus, action_handle, reflexes, config, None, None)
+        Self::spawn_inner(event_bus, action_handle, reflexes, config, None, None, None)
+    }
+
+    /// Spawns the scheduler with an action permission gate.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same setup errors as [`Self::spawn`].
+    pub fn spawn_with_action_gate(
+        event_bus: EventBus,
+        action_handle: ActionHandle,
+        reflexes: Vec<ScheduledReflex>,
+        config: SchedulerConfig,
+        action_gate: ReflexActionGateHandle,
+    ) -> ReflexResult<SchedulerHandle> {
+        Self::spawn_inner(
+            event_bus,
+            action_handle,
+            reflexes,
+            config,
+            None,
+            None,
+            Some(action_gate),
+        )
     }
 
     /// Spawns the scheduler and writes reflex audit rows into `audit_db`.
@@ -301,6 +324,7 @@ impl ReflexScheduler {
             reflexes,
             config,
             Some(audit_db),
+            None,
             None,
         )
     }
@@ -325,6 +349,32 @@ impl ReflexScheduler {
             config,
             Some(audit_db),
             audit_context,
+            None,
+        )
+    }
+
+    /// Spawns the scheduler with audit persistence, context, and an action permission gate.
+    ///
+    /// # Errors
+    ///
+    /// Returns the same setup errors as [`Self::spawn`].
+    pub fn spawn_with_audit_db_context_and_action_gate(
+        event_bus: EventBus,
+        action_handle: ActionHandle,
+        reflexes: Vec<ScheduledReflex>,
+        config: SchedulerConfig,
+        audit_db: Arc<Db>,
+        audit_context: Option<StoredAuditContext>,
+        action_gate: ReflexActionGateHandle,
+    ) -> ReflexResult<SchedulerHandle> {
+        Self::spawn_inner(
+            event_bus,
+            action_handle,
+            reflexes,
+            config,
+            Some(audit_db),
+            audit_context,
+            Some(action_gate),
         )
     }
 
@@ -335,6 +385,7 @@ impl ReflexScheduler {
         config: SchedulerConfig,
         audit_db: Option<Arc<Db>>,
         audit_context: Option<StoredAuditContext>,
+        action_gate: Option<ReflexActionGateHandle>,
     ) -> ReflexResult<SchedulerHandle> {
         config.validate()?;
         validate_reflexes(&reflexes)?;
@@ -401,6 +452,7 @@ impl ReflexScheduler {
             config,
             audit_db,
             audit_context,
+            action_gate,
             tick_index: 0,
         };
 

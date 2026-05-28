@@ -2384,6 +2384,7 @@ expression: shape
       "ReflexState": {
         "enum": [
           "active",
+          "action_denied",
           "paused",
           "cancelled",
           "expired",

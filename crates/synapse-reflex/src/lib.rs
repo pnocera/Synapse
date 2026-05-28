@@ -3,6 +3,7 @@ pub mod audit;
 mod audit_state;
 pub mod bus;
 pub mod conflict;
+mod dispatch;
 pub mod error;
 pub mod kinds;
 mod lifecycle;
@@ -21,6 +22,10 @@ pub use bus::{
     EventBusError, EventBusResult, PublishReport, SUBSCRIBER_QUEUE_CAPACITY, SubscriberHandle,
 };
 pub use conflict::{REFLEX_STARVED_KIND, STARVATION_AFTER};
+pub use dispatch::{
+    REFLEX_ACTION_DENIED_STEP_STATUS, REFLEX_ACTION_PERMISSION_DENIED_KIND, ReflexActionGate,
+    ReflexActionGateHandle, ReflexActionPermissionDenied,
+};
 pub use error::{ReflexError, ReflexResult};
 pub use kinds::aim_track::{
     AimTrackContext, AimTrackController, AimTrackOutput, AimTrackParams, AimTrackTarget,

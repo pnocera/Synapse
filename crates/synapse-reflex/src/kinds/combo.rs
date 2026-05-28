@@ -118,6 +118,11 @@ impl ComboController {
         matches!(self.phase, ComboPhase::Completed)
     }
 
+    #[must_use]
+    pub const fn reflex_id(&self) -> &ReflexId {
+        &self.reflex_id
+    }
+
     /// Starts a combo and dispatches all actions due at trigger offset `0`.
     ///
     /// # Errors
@@ -129,10 +134,27 @@ impl ComboController {
         action_handle: &ActionHandle,
         event_bus: &EventBus,
     ) -> ReflexResult<ComboOutput> {
+        self.start_dispatch_with(event_bus, |action| {
+            action_handle
+                .try_execute(action.clone())
+                .map_err(|error| ReflexError::ParamsInvalid {
+                    detail: format!("combo action dispatch failed: {error}"),
+                })
+        })
+    }
+
+    pub(crate) fn start_dispatch_with<F>(
+        &mut self,
+        event_bus: &EventBus,
+        mut dispatch_action: F,
+    ) -> ReflexResult<ComboOutput>
+    where
+        F: FnMut(&Action) -> ReflexResult<()>,
+    {
         match self.phase {
             ComboPhase::Pending => {
                 self.phase = ComboPhase::Running;
-                let actions = self.dispatch_due(action_handle)?;
+                let actions = self.dispatch_due_with(&mut dispatch_action)?;
                 if self.finish_if_complete(event_bus) {
                     return Ok(self.completed_output(actions));
                 }
@@ -162,11 +184,29 @@ impl ComboController {
         action_handle: &ActionHandle,
         event_bus: &EventBus,
     ) -> ReflexResult<ComboOutput> {
+        self.step_dispatch_with(context, event_bus, |action| {
+            action_handle
+                .try_execute(action.clone())
+                .map_err(|error| ReflexError::ParamsInvalid {
+                    detail: format!("combo action dispatch failed: {error}"),
+                })
+        })
+    }
+
+    pub(crate) fn step_dispatch_with<F>(
+        &mut self,
+        context: &ComboContext,
+        event_bus: &EventBus,
+        mut dispatch_action: F,
+    ) -> ReflexResult<ComboOutput>
+    where
+        F: FnMut(&Action) -> ReflexResult<()>,
+    {
         match self.phase {
-            ComboPhase::Pending => self.start_dispatch(action_handle, event_bus),
+            ComboPhase::Pending => self.start_dispatch_with(event_bus, dispatch_action),
             ComboPhase::Running => {
                 self.elapsed = self.elapsed.saturating_add(context.tick_elapsed);
-                let actions = self.dispatch_due(action_handle)?;
+                let actions = self.dispatch_due_with(&mut dispatch_action)?;
                 if self.finish_if_complete(event_bus) {
                     return Ok(self.completed_output(actions));
                 }
@@ -182,7 +222,10 @@ impl ComboController {
         }
     }
 
-    fn dispatch_due(&mut self, action_handle: &ActionHandle) -> ReflexResult<usize> {
+    fn dispatch_due_with<F>(&mut self, dispatch_action: &mut F) -> ReflexResult<usize>
+    where
+        F: FnMut(&Action) -> ReflexResult<()>,
+    {
         let mut dispatched = 0_usize;
         while self
             .scheduled
@@ -190,14 +233,15 @@ impl ComboController {
             .is_some_and(|action| u128::from(action.due_ms) <= self.elapsed.as_millis())
         {
             let scheduled = &self.scheduled[self.cursor];
-            action_handle
-                .try_execute(scheduled.action.clone())
-                .map_err(|error| ReflexError::ParamsInvalid {
+            dispatch_action(&scheduled.action).map_err(|error| match error {
+                ReflexError::ParamsInvalid { detail } => ReflexError::ParamsInvalid {
                     detail: format!(
-                        "combo action dispatch failed at due_ms={} sequence={}: {error}",
+                        "combo action dispatch failed at due_ms={} sequence={}: {detail}",
                         scheduled.due_ms, scheduled.sequence
                     ),
-                })?;
+                },
+                other => other,
+            })?;
             self.dispatched.push(ComboDispatchRecord {
                 due_ms: scheduled.due_ms,
                 sequence: scheduled.sequence,

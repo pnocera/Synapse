@@ -1,4 +1,4 @@
-use std::{error::Error, io, time::Duration};
+use std::{error::Error, io, sync::Arc, time::Duration};
 
 use serde_json::json;
 use synapse_action::{ACTION_QUEUE_CAPACITY, ActionHandle, ActionMessage};
@@ -7,9 +7,11 @@ use synapse_core::{
     SCHEMA_VERSION, StoredReflexAudit, error_codes,
 };
 use synapse_reflex::{
-    DEFAULT_REFLEX_PRIORITY, EventBus, HoldMoveParams, REFLEX_LIFETIME_EXPIRED_KIND,
-    REFLEX_RECURSION_LIMIT_KIND, REFLEX_STARVED_KIND, REFLEX_TICK_LATE_KIND, ReflexScheduler,
-    ScheduledReflex, ScheduledReflexDriver, SchedulerConfig, SchedulerTrigger,
+    DEFAULT_REFLEX_PRIORITY, EventBus, HoldMoveParams, REFLEX_ACTION_DENIED_STEP_STATUS,
+    REFLEX_ACTION_PERMISSION_DENIED_KIND, REFLEX_LIFETIME_EXPIRED_KIND,
+    REFLEX_RECURSION_LIMIT_KIND, REFLEX_STARVED_KIND, REFLEX_TICK_LATE_KIND, ReflexActionGate,
+    ReflexActionPermissionDenied, ReflexScheduler, ScheduledReflex, ScheduledReflexDriver,
+    SchedulerConfig, SchedulerTrigger,
 };
 use synapse_storage::{Db, cf, decode_json};
 use tempfile::tempdir;
@@ -346,6 +348,160 @@ fn blocked_dispatch_path_emits_reflex_tick_late() -> Result<(), Box<dyn Error>> 
 }
 
 #[test]
+fn action_gate_denies_triggered_reflex_and_writes_action_denied_audit() -> Result<(), Box<dyn Error>>
+{
+    let temp = tempdir()?;
+    let db = Arc::new(Db::open(&temp.path().join("db"), SCHEMA_VERSION)?);
+    let bus = EventBus::default();
+    let (action_handle, action_rx) = ActionHandle::channel();
+    let key = named_key("d");
+    let reflex = ScheduledReflex::on_event(
+        "reflex-denied",
+        EventFilter::Kind {
+            kind: "deny-trigger".to_owned(),
+        },
+        vec![Action::KeyDown {
+            key,
+            backend: Backend::Software,
+        }],
+    );
+
+    let mut scheduler = ReflexScheduler::spawn_with_audit_db_context_and_action_gate(
+        bus.clone(),
+        action_handle,
+        vec![reflex],
+        slow_one_tick_config(),
+        Arc::clone(&db),
+        None,
+        Arc::new(DenyUnknownScopeGate),
+    )?;
+    let _report = bus.publish(event(1, "deny-trigger"));
+    let samples = scheduler.wait_for_samples(1, WAIT_TIMEOUT);
+    scheduler.stop()?;
+    db.flush()?;
+
+    let statuses = scheduler.statuses();
+    let status = status(&statuses, "reflex-denied")?;
+    let audits = read_audits(&db)?;
+    let denied = audits
+        .iter()
+        .find(|audit| {
+            audit.reflex_id == "reflex-denied"
+                && audit.status == ReflexState::ActionDenied
+                && audit.error_code.as_deref() == Some(error_codes::REFLEX_ACTION_PERMISSION_DENIED)
+        })
+        .ok_or_else(|| io::Error::other("missing action-denied audit row"))?;
+
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].dispatched_actions, 0);
+    assert!(samples[0].late);
+    assert_eq!(action_rx.len(), 0);
+    assert_eq!(status.state, ReflexState::ActionDenied);
+    assert_eq!(
+        status.last_error_code.as_deref(),
+        Some(error_codes::REFLEX_ACTION_PERMISSION_DENIED)
+    );
+    assert_eq!(denied.details["kind"], REFLEX_ACTION_PERMISSION_DENIED_KIND);
+    assert_eq!(
+        denied.details["reason"],
+        error_codes::REFLEX_ACTION_PERMISSION_DENIED
+    );
+    assert_eq!(denied.details["policy_reason"], "unknown_scope");
+    assert_eq!(denied.details["profile_id"], "unknown");
+    assert_eq!(denied.details["use_scope"], "unknown");
+    assert_eq!(denied.steps.len(), 1);
+    assert_eq!(denied.steps[0].status, REFLEX_ACTION_DENIED_STEP_STATUS);
+    assert_eq!(
+        denied.steps[0].error_code.as_deref(),
+        Some(error_codes::REFLEX_ACTION_PERMISSION_DENIED)
+    );
+    Ok(())
+}
+
+#[test]
+fn action_gate_denies_combo_reflex_before_first_step() -> Result<(), Box<dyn Error>> {
+    let temp = tempdir()?;
+    let db = Arc::new(Db::open(&temp.path().join("db"), SCHEMA_VERSION)?);
+    let bus = EventBus::default();
+    let (action_handle, mut action_rx) = ActionHandle::channel();
+    let key = named_key("c");
+    let reflex = ScheduledReflex::on_event(
+        "reflex-denied-combo",
+        EventFilter::Kind {
+            kind: "deny-combo".to_owned(),
+        },
+        vec![Action::Combo {
+            steps: vec![synapse_core::ComboStep {
+                at_ms: 0,
+                input: synapse_core::ComboInput::KeyDown { key },
+            }],
+            backend: Backend::Software,
+        }],
+    );
+
+    let mut scheduler = ReflexScheduler::spawn_with_audit_db_context_and_action_gate(
+        bus.clone(),
+        action_handle,
+        vec![reflex],
+        slow_one_tick_config(),
+        Arc::clone(&db),
+        None,
+        Arc::new(DenyUnknownScopeGate),
+    )?;
+    let _report = bus.publish(event(1, "deny-combo"));
+    let samples = scheduler.wait_for_samples(1, WAIT_TIMEOUT);
+    scheduler.stop()?;
+    db.flush()?;
+
+    let audits = read_audits(&db)?;
+    assert_eq!(samples.len(), 1);
+    assert_eq!(samples[0].dispatched_actions, 0);
+    assert!(drain_actions(&mut action_rx).is_empty());
+    assert!(audits.iter().any(|audit| {
+        audit.reflex_id == "reflex-denied-combo"
+            && audit.status == ReflexState::ActionDenied
+            && audit.details["action_kind"] == "combo"
+            && audit.error_code.as_deref() == Some(error_codes::REFLEX_ACTION_PERMISSION_DENIED)
+    }));
+    Ok(())
+}
+
+#[test]
+fn action_gate_denial_without_audit_db_still_suppresses_dispatch() -> Result<(), Box<dyn Error>> {
+    let bus = EventBus::default();
+    let (action_handle, action_rx) = ActionHandle::channel();
+    let reflex = ScheduledReflex::on_event(
+        "reflex-denied-no-db",
+        EventFilter::Kind {
+            kind: "deny-no-db".to_owned(),
+        },
+        vec![Action::ReleaseAll],
+    );
+
+    let mut scheduler = ReflexScheduler::spawn_with_action_gate(
+        bus.clone(),
+        action_handle,
+        vec![reflex],
+        slow_one_tick_config(),
+        Arc::new(DenyUnknownScopeGate),
+    )?;
+    let _report = bus.publish(event(1, "deny-no-db"));
+    let samples = scheduler.wait_for_samples(1, WAIT_TIMEOUT);
+    scheduler.stop()?;
+
+    let statuses = scheduler.statuses();
+    let status = status(&statuses, "reflex-denied-no-db")?;
+    assert_eq!(samples.len(), 1);
+    assert_eq!(action_rx.len(), 0);
+    assert_eq!(status.state, ReflexState::ActionDenied);
+    assert_eq!(
+        status.last_error_code.as_deref(),
+        Some(error_codes::REFLEX_ACTION_PERMISSION_DENIED)
+    );
+    Ok(())
+}
+
+#[test]
 fn lower_priority_number_wins_cursor_conflict_and_starves_loser() -> Result<(), Box<dyn Error>> {
     let temp = tempdir()?;
     let db = std::sync::Arc::new(Db::open(&temp.path().join("db"), SCHEMA_VERSION)?);
@@ -553,6 +709,24 @@ fn event(seq: u64, kind: &str) -> Event {
         kind: kind.to_owned(),
         data: json!({ "seq": seq, "kind": kind }),
         correlations: Vec::new(),
+    }
+}
+
+struct DenyUnknownScopeGate;
+
+impl ReflexActionGate for DenyUnknownScopeGate {
+    fn ensure_action_allowed(
+        &self,
+        _reflex_id: &synapse_core::ReflexId,
+        _action: &Action,
+    ) -> Result<(), ReflexActionPermissionDenied> {
+        Err(ReflexActionPermissionDenied {
+            policy_code: Some(error_codes::SAFETY_PROFILE_ACTION_DENIED.to_owned()),
+            policy_reason: Some("unknown_scope".to_owned()),
+            profile_id: Some("unknown".to_owned()),
+            use_scope: Some("unknown".to_owned()),
+            detail: "active profile has use_scope=\"unknown\"".to_owned(),
+        })
     }
 }
 

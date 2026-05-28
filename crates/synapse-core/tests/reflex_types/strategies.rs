@@ -277,6 +277,7 @@ pub fn reflex_registration_strategy() -> impl Strategy<Value = ReflexRegistratio
 pub fn reflex_state_strategy() -> impl Strategy<Value = ReflexState> {
     prop_oneof![
         Just(ReflexState::Active),
+        Just(ReflexState::ActionDenied),
         Just(ReflexState::Paused),
         Just(ReflexState::Cancelled),
         Just(ReflexState::Expired),
