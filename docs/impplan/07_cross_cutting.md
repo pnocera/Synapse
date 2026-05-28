@@ -180,7 +180,7 @@ Closes during the phase that hits the decision:
 | M1 | OQ-009 (max_elements default; M5 telem feedback expected); OQ-010 (CDP auto-attach); OQ-024 (token budget enforcement); OQ-023 (element_id stability) |
 | M2 | OQ-004 (productivity aim curve default) — partial; final at M5 |
 | M3 (closed) | OQ-001 (RocksDB primary per ADR-0002); OQ-005 (reflex priority per ADR-0004); OQ-012 (multi-monitor per ADR-0005); OQ-015 (profile match precedence per ADR-0006); OQ-022 (recursion guard per ADR-0003); OQ-029 (per-event notifications per ADR-0007) |
-| M4 | OQ-003 (detection model default — decided in ADR-0010); OQ-013 (aim_track EMA smoothing); OQ-016 (action coalescing on hardware) |
+| M4 | OQ-003 (detection model default — decided in ADR-0010); OQ-013 (aim_track EMA smoothing — decided in ADR-0011); OQ-016 (action coalescing on hardware) |
 | M5 | OQ-008 (VLM bundling); OQ-014 (Whisper-tiny vs base); OQ-017 (disk pressure thresholds); OQ-019 (telemetry split); OQ-020 (`game_screenshot_once` exposure); OQ-030 (GC cadence final) |
 | v1.x | OQ-006 (per-session permissions); OQ-007 (profile signing); OQ-021 (HRTF audio); OQ-027 (hardware HID 2FA); OQ-028 (migrations vs wipe); OQ-026 (cross-platform start trigger); OQ-018 (replay format final) |
 

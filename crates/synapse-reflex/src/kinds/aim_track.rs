@@ -3,6 +3,7 @@ use std::time::Duration;
 use chrono::Utc;
 use serde_json::json;
 use synapse_action::ActionHandle;
+pub use synapse_core::DEFAULT_AIM_TRACK_EMA_ALPHA as DEFAULT_EMA_ALPHA;
 use synapse_core::{
     Action, AimTarget, Backend, DetectedEntity, ElementId, EntityId, Event, EventSource, Point,
     Rect, ReflexAimAxis, ReflexId, error_codes,
@@ -10,7 +11,6 @@ use synapse_core::{
 
 use crate::{EventBus, ReflexError, ReflexResult};
 
-pub const DEFAULT_EMA_ALPHA: f32 = 0.7;
 pub const DEFAULT_MAX_SPEED_PX_PER_TICK: f32 = 5.0;
 pub const DEFAULT_GAIN: f32 = 1.0;
 pub const DEFAULT_DEADZONE_PX: f32 = 2.0;

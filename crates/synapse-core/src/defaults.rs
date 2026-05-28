@@ -9,3 +9,6 @@ pub const REFERENCE_REFLEX_TICK_JITTER_IDLE_P99_US: u32 = 200;
 
 /// Reference-machine event-to-subscriber p99 budget in milliseconds.
 pub const REFERENCE_EVENT_TO_SUBSCRIBER_P99_MS: f32 = 50.0;
+
+/// Default EMA smoothing alpha for `aim_track` reflex target deltas.
+pub const DEFAULT_AIM_TRACK_EMA_ALPHA: f32 = 0.7;

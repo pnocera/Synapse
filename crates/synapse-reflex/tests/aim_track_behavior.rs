@@ -9,7 +9,8 @@ use std::time::Duration;
 use chrono::Utc;
 use synapse_action::ActionHandle;
 use synapse_core::{
-    Action, Backend, DetectedEntity, EventFilter, Point, Rect, ReflexAimAxis, error_codes,
+    Action, Backend, DEFAULT_AIM_TRACK_EMA_ALPHA, DetectedEntity, EventFilter, Point, Rect,
+    ReflexAimAxis, error_codes,
 };
 use synapse_reflex::{
     AimTrackContext, AimTrackController, AimTrackOutput, AimTrackParams, AimTrackTarget, EventBus,
@@ -31,7 +32,7 @@ fn point_target_clamps_to_default_speed() -> Result<(), Box<dyn std::error::Erro
             backend: Backend::Software,
         })
     );
-    assert_eq!(controller.params().ema_alpha, 0.7);
+    assert_eq!(controller.params().ema_alpha, DEFAULT_AIM_TRACK_EMA_ALPHA);
     Ok(())
 }
 

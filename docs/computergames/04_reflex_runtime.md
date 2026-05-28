@@ -119,6 +119,7 @@ pub struct AimTrackParams {
     pub max_speed_px_per_ms: f32,            // cap; protects against teleport-on-track-spike
     pub curve_per_step: AimCurve,            // usually Linear or short-Bezier per-step
     pub backend: Backend,
+    pub ema_alpha: f32,                      // default: synapse_core::DEFAULT_AIM_TRACK_EMA_ALPHA
     pub lifetime: ReflexLifetime,
 }
 ```
@@ -128,8 +129,10 @@ Each tick:
 1. Resolve target position. If `EntityTrack(track_id)`, look up current detection track. If missing, increment `track_lost_ticks`; after 3 consecutive misses → tick fails this cycle (does not cancel; another detection may revive).
 2. Compute screen delta from cursor to target.
 3. Apply deadzone, gain, speed cap.
-4. Emit `MouseMoveRelative { dx, dy }`.
-5. If `track_lost_ticks > 60` (1 second), unregister with reason `track_lost`.
+4. Apply EMA smoothing with `synapse_core::DEFAULT_AIM_TRACK_EMA_ALPHA`
+   unless `ema_alpha` was explicitly provided.
+5. Emit `MouseMoveRelative { dx, dy }`.
+6. If `track_lost_ticks > 60` (1 second), unregister with reason `track_lost`.
 
 Cancellation: agent calls `reflex_cancel(reflex_id)`. Scheduler unregisters, emits `reflex_terminated` event.
 

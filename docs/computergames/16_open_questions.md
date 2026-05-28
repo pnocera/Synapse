@@ -166,9 +166,11 @@ run concurrent per-monitor captures in M3.
 
 **Trade-off.** Every micro-jitter: mouse hunting. Smoothing: lag.
 
-**Default.** EMA `alpha = 0.7` applied to track position before aim-error calc. Configurable in reflex params.
+**Decision.** ADR-0011 accepts EMA `alpha = 0.7` as the default, exported as
+`synapse_core::DEFAULT_AIM_TRACK_EMA_ALPHA` and configurable in reflex params.
 
-**Target.** M4 game testing. Tune from gameplay footage.
+**Target.** M4 game testing. Tune from gameplay footage as audit evidence
+accumulates.
 
 ---
 

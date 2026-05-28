@@ -266,7 +266,7 @@ The PRD's "Open Questions" file enumerates roughly 30 numbered items (OQ-001 …
 | OQ-009/010/023/024 | M1 perception closures (max_elements default, CDP auto-attach, element_id stability, token budget) | M1 source |
 | operator decisions 2026-05-24 (issues #246/#247/#350/#351) | No GitHub Actions / CI as a shipping gate | `AGENTS.md` |
 
-Open items remaining (PRD §16): OQ-013 (aim_track EMA smoothing), OQ-016 (action coalescing on hardware) closed in M4; OQ-008 (VLM bundling), OQ-014 (Whisper-tiny vs base), OQ-017 (disk-pressure thresholds final), OQ-019 (telemetry split), OQ-020 (`game_screenshot_once` exposure), OQ-030 (GC cadence final) closed in M5; OQ-006/007/021/027/028/026/018 remain v1.x.
+Open items remaining (PRD §16): OQ-013 (aim_track EMA smoothing, decided in ADR-0011), OQ-016 (action coalescing on hardware) closed in M4; OQ-008 (VLM bundling), OQ-014 (Whisper-tiny vs base), OQ-017 (disk-pressure thresholds final), OQ-019 (telemetry split), OQ-020 (`game_screenshot_once` exposure), OQ-030 (GC cadence final) closed in M5; OQ-006/007/021/027/028/026/018 remain v1.x.
 
 ## 9. Doctrine documents
 
