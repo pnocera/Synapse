@@ -1,5 +1,6 @@
 use std::{fs, path::Path};
 
+use synapse_core::ProfileUseScope;
 use synapse_core::error_codes;
 use synapse_profiles::{ForegroundWindow, ProfileRuntime, bundled_profiles_dir};
 use tempfile::TempDir;
@@ -72,6 +73,48 @@ fn runtime_resolves_and_activates_foreground_profile() -> Result<(), Box<dyn std
     assert_eq!(resolution.rank_name, "exe");
     assert_eq!(runtime.active_profile_id()?, Some("vscode".to_owned()));
     assert_eq!(runtime.list(false)?.len(), 1);
+    Ok(())
+}
+
+#[test]
+fn runtime_clears_active_profile_for_unmatched_foreground() -> Result<(), Box<dyn std::error::Error>>
+{
+    let temp = TempDir::new()?;
+    let profile_path = temp.path().join("notepad.toml");
+    write_profile(&profile_path, "notepad", "Notepad", "notepad.exe")?;
+    let runtime = ProfileRuntime::spawn(temp.path())?;
+
+    let matched = ForegroundWindow {
+        exe: Some("notepad.exe".to_owned()),
+        title: Some("scratch.txt - Notepad".to_owned()),
+        steam_appid: None,
+        window_class: None,
+    };
+    runtime.activate_for_foreground(&matched)?;
+    assert_eq!(runtime.active_profile_id()?, Some("notepad".to_owned()));
+
+    let transition = runtime.reevaluate_foreground(&ForegroundWindow {
+        exe: Some("unprofiled.exe".to_owned()),
+        title: Some("No Profile".to_owned()),
+        steam_appid: None,
+        window_class: None,
+    })?;
+
+    assert_eq!(transition.previous_profile_id, Some("notepad".to_owned()));
+    assert_eq!(transition.active_profile_id, None);
+    assert_eq!(
+        transition.previous_scope,
+        Some(ProfileUseScope::Productivity)
+    );
+    assert_eq!(transition.active_scope, None);
+    assert_eq!(
+        transition.effective_previous_scope,
+        ProfileUseScope::Productivity
+    );
+    assert_eq!(transition.effective_active_scope, ProfileUseScope::Unknown);
+    assert!(transition.changed);
+    assert!(transition.scope_changed);
+    assert_eq!(runtime.active_profile_id()?, None);
     Ok(())
 }
 

@@ -137,7 +137,7 @@ async fn observe_reports_matching_profile_without_manual_activation() -> anyhow:
     let health = structured(&response)?;
     assert_eq!(
         health["subsystems"]["profiles"]["active_profile_id"],
-        Value::Null
+        "synthetic-notepad"
     );
     assert_eq!(health["subsystems"]["profiles"]["profile_count"], 1);
 

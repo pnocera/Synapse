@@ -48,6 +48,19 @@ pub struct ProfileEventExtensionStatus {
     pub emits_kind: String,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForegroundProfileTransition {
+    pub previous_profile_id: Option<ProfileId>,
+    pub active_profile_id: Option<ProfileId>,
+    pub previous_scope: Option<ProfileUseScope>,
+    pub active_scope: Option<ProfileUseScope>,
+    pub effective_previous_scope: ProfileUseScope,
+    pub effective_active_scope: ProfileUseScope,
+    pub resolution: Option<ProfileMatchResolution>,
+    pub changed: bool,
+    pub scope_changed: bool,
+}
+
 #[derive(Debug, Default)]
 struct ProfileState {
     profiles: BTreeMap<ProfileId, LoadedProfile>,
@@ -219,11 +232,77 @@ impl ProfileRuntime {
         &self,
         foreground: &ForegroundWindow,
     ) -> Result<Option<ProfileMatchResolution>, ProfileError> {
-        let resolution = self.resolve_foreground(foreground)?;
-        if let Some(resolution) = &resolution {
-            self.activate(&resolution.profile_id)?;
+        Ok(self.reevaluate_foreground(foreground)?.resolution)
+    }
+
+    #[instrument(skip_all)]
+    pub fn reevaluate_foreground(
+        &self,
+        foreground: &ForegroundWindow,
+    ) -> Result<ForegroundProfileTransition, ProfileError> {
+        let mut state = self
+            .state
+            .write()
+            .map_err(|_| ProfileError::StatePoisoned)?;
+        let profiles = state.profiles.values().cloned().collect::<Vec<_>>();
+        let previous_profile_id = state.active_profile_id.clone();
+        let previous_scope = previous_profile_id
+            .as_ref()
+            .and_then(|profile_id| state.profiles.get(profile_id))
+            .map(|loaded| loaded.profile.use_scope);
+        let resolution = resolve_active_profile(&profiles, foreground);
+        let (active_profile_id, active_scope) =
+            resolution.as_ref().map_or((None, None), |resolution| {
+                let active_scope = state
+                    .profiles
+                    .get(&resolution.profile_id)
+                    .map(|loaded| loaded.profile.use_scope);
+                (Some(resolution.profile_id.clone()), active_scope)
+            });
+        state.active_profile_id.clone_from(&active_profile_id);
+
+        let effective_previous_scope = effective_scope(previous_scope);
+        let effective_active_scope = effective_scope(active_scope);
+        let changed = previous_profile_id != active_profile_id;
+        let scope_changed = effective_previous_scope != effective_active_scope;
+        drop(state);
+
+        if changed {
+            if let Some(active_profile_id) = &active_profile_id {
+                tracing::info!(
+                    code = "PROFILE_FOREGROUND_ACTIVATED",
+                    previous_profile_id = ?previous_profile_id,
+                    active_profile_id = %active_profile_id,
+                    match_rank = ?resolution.as_ref().map(|resolution| resolution.rank_name),
+                    "foreground profile activated"
+                );
+            } else {
+                tracing::info!(
+                    code = "PROFILE_FOREGROUND_CLEARED",
+                    previous_profile_id = ?previous_profile_id,
+                    "foreground profile cleared after unmatched foreground"
+                );
+            }
         }
-        Ok(resolution)
+
+        Ok(ForegroundProfileTransition {
+            previous_profile_id,
+            active_profile_id,
+            previous_scope,
+            active_scope,
+            effective_previous_scope,
+            effective_active_scope,
+            resolution,
+            changed,
+            scope_changed,
+        })
+    }
+}
+
+const fn effective_scope(scope: Option<ProfileUseScope>) -> ProfileUseScope {
+    match scope {
+        Some(scope) => scope,
+        None => ProfileUseScope::Unknown,
     }
 }
 

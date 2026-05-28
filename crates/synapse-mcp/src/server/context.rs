@@ -3,16 +3,26 @@ use super::{
     ProfileActivateResponse, RecordingBackend, RequiredPermissions, SseState, SynapseService,
     activate_profile, authorization_error, error_codes, mcp_error,
 };
+use std::sync::atomic::{AtomicU64, Ordering};
+
+use chrono::Utc;
 use rmcp::model::ErrorCode;
 use serde_json::json;
-use synapse_core::{Action, ProfileUseScope, ReflexId};
-use synapse_reflex::{ReflexActionGate, ReflexActionGateHandle, ReflexActionPermissionDenied};
+use synapse_core::{Action, Event, EventSource, ForegroundContext, ProfileUseScope, ReflexId};
+use synapse_profiles::ForegroundProfileTransition;
+use synapse_reflex::{
+    EventBus, ReflexActionGate, ReflexActionGateHandle, ReflexActionPermissionDenied,
+};
 
 type M2ActionContext = (
     synapse_action::ActionHandle,
     Option<Arc<RecordingBackend>>,
     Option<CancellationToken>,
 );
+
+const PROFILE_CHANGED_KIND: &str = "profile-changed";
+const SCOPE_TRANSITIONED_KIND: &str = "scope-transitioned";
+static NEXT_PROFILE_EVENT_SEQ: AtomicU64 = AtomicU64::new(1);
 
 impl SynapseService {
     pub(super) fn m1_state(&self) -> Result<MutexGuard<'_, M1State>, ErrorData> {
@@ -126,14 +136,15 @@ impl SynapseService {
         &self,
         tool: &'static str,
     ) -> Result<(), ErrorData> {
-        let runtime = self.profile_runtime()?;
-        ensure_profile_scope_allows_action(&runtime, tool, self.allow_unknown_profile()?)?;
         let foreground = {
             let state = self.m1_state()?;
             let input = crate::m1::current_input(&state, 1)?;
             drop(state);
             input.foreground
         };
+        self.reevaluate_profile_for_foreground(&foreground)?;
+        let runtime = self.profile_runtime()?;
+        ensure_profile_scope_allows_action(&runtime, tool, self.allow_unknown_profile()?)?;
         super::target_policy::ensure_supported_use_allows(&runtime, &foreground, tool)
     }
 
@@ -224,6 +235,7 @@ impl SynapseService {
             profile_runtime: self.profile_runtime()?,
             m1_state: Arc::clone(&self.m1_state),
             allow_unknown_profile: self.allow_unknown_profile()?,
+            event_bus: self.sse_state()?.event_bus(),
         }))
     }
 
@@ -307,6 +319,19 @@ impl SynapseService {
             "action backend resolution updated from active profile"
         );
         Ok(())
+    }
+
+    pub(super) fn reevaluate_profile_for_foreground(
+        &self,
+        foreground: &ForegroundContext,
+    ) -> Result<ForegroundProfileTransition, ErrorData> {
+        let runtime = self.profile_runtime()?;
+        let transition = runtime
+            .reevaluate_foreground(&foreground_window(foreground))
+            .map_err(|error| mcp_error(error.code(), error.to_string()))?;
+        let event_bus = self.sse_state()?.event_bus();
+        publish_profile_transition_events(&event_bus, &transition, foreground);
+        Ok(transition)
     }
 
     pub(super) fn ensure_act_type_foreground(
@@ -445,6 +470,7 @@ struct ReflexScopeActionGate {
     profile_runtime: Arc<synapse_profiles::ProfileRuntime>,
     m1_state: super::SharedM1State,
     allow_unknown_profile: bool,
+    event_bus: EventBus,
 }
 
 impl ReflexActionGate for ReflexScopeActionGate {
@@ -454,27 +480,143 @@ impl ReflexActionGate for ReflexScopeActionGate {
         _action: &Action,
     ) -> Result<(), ReflexActionPermissionDenied> {
         const TOOL: &str = "reflex_dispatch";
-        ensure_profile_scope_allows_action(&self.profile_runtime, TOOL, self.allow_unknown_profile)
+        (|| {
+            let foreground = {
+                let state = self.m1_state.lock().map_err(|_err| {
+                    mcp_error(
+                        error_codes::OBSERVE_INTERNAL,
+                        "M1 service state lock poisoned while checking reflex dispatch scope",
+                    )
+                })?;
+                let input = crate::m1::current_input(&state, 1)?;
+                drop(state);
+                input.foreground
+            };
+            let transition = self
+                .profile_runtime
+                .reevaluate_foreground(&foreground_window(&foreground))
+                .map_err(|error| mcp_error(error.code(), error.to_string()))?;
+            publish_profile_transition_events(&self.event_bus, &transition, &foreground);
+            ensure_profile_scope_allows_action(
+                &self.profile_runtime,
+                TOOL,
+                self.allow_unknown_profile,
+            )
             .and_then(|()| {
-                let foreground = {
-                    let state = self.m1_state.lock().map_err(|_err| {
-                        mcp_error(
-                            error_codes::OBSERVE_INTERNAL,
-                            "M1 service state lock poisoned while checking reflex dispatch scope",
-                        )
-                    })?;
-                    let input = crate::m1::current_input(&state, 1)?;
-                    drop(state);
-                    input.foreground
-                };
                 super::target_policy::ensure_supported_use_allows(
                     &self.profile_runtime,
                     &foreground,
                     TOOL,
                 )
             })
-            .map_err(|error| reflex_denial_from_error(&error))
+        })()
+        .map_err(|error| reflex_denial_from_error(&error))
     }
+}
+
+fn foreground_window(foreground: &ForegroundContext) -> synapse_profiles::ForegroundWindow {
+    synapse_profiles::ForegroundWindow {
+        exe: non_empty(&foreground.process_name),
+        title: non_empty(&foreground.window_title),
+        steam_appid: foreground.steam_appid,
+        window_class: None,
+    }
+}
+
+fn non_empty(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    (!trimmed.is_empty()).then(|| trimmed.to_owned())
+}
+
+fn publish_profile_transition_events(
+    event_bus: &EventBus,
+    transition: &ForegroundProfileTransition,
+    foreground: &ForegroundContext,
+) {
+    if transition.changed {
+        let report = event_bus.publish(profile_transition_event(
+            PROFILE_CHANGED_KIND,
+            profile_changed_event_data(transition, foreground),
+        ));
+        tracing::debug!(
+            code = "PROFILE_CHANGED_EVENT_PUBLISHED",
+            matched = report.matched,
+            queued = report.queued,
+            dropped = report.dropped,
+            previous_profile_id = ?transition.previous_profile_id,
+            active_profile_id = ?transition.active_profile_id,
+            "profile-changed event published"
+        );
+    }
+    if transition.scope_changed {
+        let report = event_bus.publish(profile_transition_event(
+            SCOPE_TRANSITIONED_KIND,
+            scope_transition_event_data(transition, foreground),
+        ));
+        tracing::debug!(
+            code = "SCOPE_TRANSITIONED_EVENT_PUBLISHED",
+            matched = report.matched,
+            queued = report.queued,
+            dropped = report.dropped,
+            old_scope = profile_use_scope_label(transition.effective_previous_scope),
+            new_scope = profile_use_scope_label(transition.effective_active_scope),
+            "scope-transitioned event published"
+        );
+    }
+}
+
+fn profile_transition_event(kind: &str, data: serde_json::Value) -> Event {
+    Event {
+        seq: NEXT_PROFILE_EVENT_SEQ.fetch_add(1, Ordering::Relaxed),
+        at: Utc::now(),
+        source: EventSource::System,
+        kind: kind.to_owned(),
+        data,
+        correlations: Vec::new(),
+    }
+}
+
+fn profile_changed_event_data(
+    transition: &ForegroundProfileTransition,
+    foreground: &ForegroundContext,
+) -> serde_json::Value {
+    json!({
+        "old_profile_id": transition.previous_profile_id.clone(),
+        "new_profile_id": transition.active_profile_id.clone(),
+        "old_scope": transition.previous_scope.map(profile_use_scope_label),
+        "new_scope": transition.active_scope.map(profile_use_scope_label),
+        "effective_old_scope": profile_use_scope_label(transition.effective_previous_scope),
+        "effective_new_scope": profile_use_scope_label(transition.effective_active_scope),
+        "match_rank": transition.resolution.as_ref().map(|resolution| resolution.rank_name),
+        "foreground": foreground_event_data(foreground),
+    })
+}
+
+fn scope_transition_event_data(
+    transition: &ForegroundProfileTransition,
+    foreground: &ForegroundContext,
+) -> serde_json::Value {
+    json!({
+        "old_profile_id": transition.previous_profile_id.clone(),
+        "new_profile_id": transition.active_profile_id.clone(),
+        "old_scope": profile_use_scope_label(transition.effective_previous_scope),
+        "new_scope": profile_use_scope_label(transition.effective_active_scope),
+        "old_profile_scope": transition.previous_scope.map(profile_use_scope_label),
+        "new_profile_scope": transition.active_scope.map(profile_use_scope_label),
+        "match_rank": transition.resolution.as_ref().map(|resolution| resolution.rank_name),
+        "foreground": foreground_event_data(foreground),
+    })
+}
+
+fn foreground_event_data(foreground: &ForegroundContext) -> serde_json::Value {
+    json!({
+        "hwnd": foreground.hwnd,
+        "pid": foreground.pid,
+        "process_name": foreground.process_name.clone(),
+        "process_path": foreground.process_path.clone(),
+        "window_title": foreground.window_title.clone(),
+        "steam_appid": foreground.steam_appid,
+    })
 }
 
 fn reflex_denial_from_error(error: &ErrorData) -> ReflexActionPermissionDenied {
@@ -535,7 +677,7 @@ pub(super) fn maybe_force_panic_during_act(_tool: &'static str) {}
 
 #[cfg(test)]
 mod scope_gate_tests {
-    use std::{fs, num::NonZeroUsize, path::Path};
+    use std::{fs, num::NonZeroUsize, path::Path, time::Duration};
 
     use rmcp::handler::server::wrapper::Parameters;
     use serde_json::json;
@@ -575,6 +717,7 @@ mod scope_gate_tests {
         let profiles = TempDir::new()?;
         write_profile(&profiles.path().join("known.toml"), "known", "productivity")?;
         let service = service_with_profiles(profiles.path(), false)?;
+        install_synthetic_notepad_input(&service)?;
 
         let error = match service.ensure_supported_use_allows_action("act_type") {
             Ok(()) => anyhow::bail!("action tools must fail closed without an active profile"),
@@ -601,6 +744,7 @@ mod scope_gate_tests {
         let profiles = TempDir::new()?;
         write_profile(&profiles.path().join("unknown.toml"), "unknown", "unknown")?;
         let service = service_with_profiles(profiles.path(), false)?;
+        install_synthetic_process_input(&service, "unknown.exe", "Unknown App", 0x4567)?;
         let runtime = service.profile_runtime()?;
         runtime.activate("unknown")?;
 
@@ -646,7 +790,7 @@ mod scope_gate_tests {
             "single_player",
         )?;
         let service = service_with_profiles(profiles.path(), false)?;
-        install_synthetic_notepad_input(&service)?;
+        install_synthetic_process_input(&service, "single-player.exe", "Single Player", 0x4567)?;
         let runtime = service.profile_runtime()?;
         runtime.activate("single-player")?;
 
@@ -728,7 +872,7 @@ mod scope_gate_tests {
         )?;
         write_profile(&profiles.path().join("unknown.toml"), "unknown", "unknown")?;
         let service = service_with_profiles(profiles.path(), false)?;
-        install_synthetic_notepad_input(&service)?;
+        install_synthetic_process_input(&service, "single-player.exe", "Single Player", 0x4567)?;
         let runtime = service.profile_runtime()?;
         runtime.activate("single-player")?;
         let gate = service.reflex_action_gate()?;
@@ -738,6 +882,7 @@ mod scope_gate_tests {
         gate.ensure_action_allowed(&reflex_id, &action)
             .map_err(|denial| anyhow::anyhow!("single-player dispatch denied: {denial:?}"))?;
 
+        install_synthetic_process_input(&service, "unknown.exe", "Unknown App", 0x4568)?;
         runtime.activate("unknown")?;
         let denial = match gate.ensure_action_allowed(&reflex_id, &action) {
             Ok(()) => anyhow::bail!("unknown active profile must deny reflex dispatch"),
@@ -746,6 +891,136 @@ mod scope_gate_tests {
         assert_eq!(denial.policy_reason.as_deref(), Some("unknown_scope"));
         assert_eq!(denial.profile_id.as_deref(), Some("unknown"));
         assert_eq!(denial.use_scope.as_deref(), Some("unknown"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observe_reevaluates_foreground_and_publishes_scope_transition_within_200ms()
+    -> anyhow::Result<()> {
+        let profiles = TempDir::new()?;
+        write_profile(
+            &profiles.path().join("notepad.toml"),
+            "notepad",
+            "productivity",
+        )?;
+        let service = service_with_profiles(profiles.path(), false)?;
+        let subscription = service.sse_state()?.event_bus().subscribe(
+            EventFilter::All,
+            vec![
+                PROFILE_CHANGED_KIND.to_owned(),
+                SCOPE_TRANSITIONED_KIND.to_owned(),
+            ],
+            false,
+        )?;
+
+        install_synthetic_notepad_input(&service)?;
+        let first = service
+            .observe(Parameters(ObserveParams::default()))
+            .await?;
+        assert_eq!(first.0.foreground.profile_id.as_deref(), Some("notepad"));
+        let runtime = service.profile_runtime()?;
+        assert_eq!(runtime.active_profile_id()?.as_deref(), Some("notepad"));
+        let _initial_events = subscription.drain();
+
+        install_synthetic_process_input(&service, "unprofiled.exe", "Unprofiled App", 0x6789)?;
+        let started = std::time::Instant::now();
+        let second = service
+            .observe(Parameters(ObserveParams::default()))
+            .await?;
+        let elapsed = started.elapsed();
+        assert!(elapsed <= Duration::from_millis(200));
+        assert_eq!(second.0.foreground.profile_id, None);
+        assert_eq!(runtime.active_profile_id()?, None);
+
+        let events = subscription.drain();
+        assert!(
+            events
+                .iter()
+                .any(|event| event.kind == PROFILE_CHANGED_KIND)
+        );
+        let Some(scope_event) = events
+            .iter()
+            .find(|event| event.kind == SCOPE_TRANSITIONED_KIND)
+        else {
+            anyhow::bail!("scope-transitioned event missing: {events:?}");
+        };
+        assert_eq!(
+            scope_event.data.get("old_scope"),
+            Some(&json!("productivity"))
+        );
+        assert_eq!(scope_event.data.get("new_scope"), Some(&json!("unknown")));
+        assert_eq!(scope_event.data.get("new_profile_id"), Some(&json!(null)));
+        Ok(())
+    }
+
+    #[test]
+    fn action_scope_gate_reevaluates_foreground_and_denies_no_profile_after_transition()
+    -> anyhow::Result<()> {
+        let profiles = TempDir::new()?;
+        write_profile(
+            &profiles.path().join("notepad.toml"),
+            "notepad",
+            "productivity",
+        )?;
+        let service = service_with_profiles(profiles.path(), false)?;
+        install_synthetic_notepad_input(&service)?;
+
+        service.ensure_supported_use_allows_action("act_press")?;
+        let runtime = service.profile_runtime()?;
+        assert_eq!(runtime.active_profile_id()?.as_deref(), Some("notepad"));
+
+        install_synthetic_process_input(&service, "unprofiled.exe", "Unprofiled App", 0x6789)?;
+        let error = match service.ensure_supported_use_allows_action("act_press") {
+            Ok(()) => anyhow::bail!("unprofiled foreground must fail closed"),
+            Err(error) => error,
+        };
+        assert_eq!(runtime.active_profile_id()?, None);
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("code")),
+            Some(&json!(error_codes::SAFETY_PROFILE_ACTION_DENIED))
+        );
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("reason")),
+            Some(&json!("no_profile"))
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn action_scope_gate_reevaluates_foreground_and_denies_unknown_scope_after_transition()
+    -> anyhow::Result<()> {
+        let profiles = TempDir::new()?;
+        write_profile(
+            &profiles.path().join("notepad.toml"),
+            "notepad",
+            "productivity",
+        )?;
+        write_profile(&profiles.path().join("unknown.toml"), "unknown", "unknown")?;
+        let service = service_with_profiles(profiles.path(), false)?;
+        install_synthetic_notepad_input(&service)?;
+
+        service.ensure_supported_use_allows_action("act_press")?;
+        let runtime = service.profile_runtime()?;
+        assert_eq!(runtime.active_profile_id()?.as_deref(), Some("notepad"));
+
+        install_synthetic_process_input(&service, "unknown.exe", "Unknown App", 0x4568)?;
+        let error = match service.ensure_supported_use_allows_action("act_press") {
+            Ok(()) => anyhow::bail!("unknown-scope foreground must fail closed"),
+            Err(error) => error,
+        };
+        assert_eq!(runtime.active_profile_id()?.as_deref(), Some("unknown"));
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("reason")),
+            Some(&json!("unknown_scope"))
+        );
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("profile_id")),
+            Some(&json!("unknown"))
+        );
+        assert_eq!(
+            error.data.as_ref().and_then(|data| data.get("use_scope")),
+            Some(&json!("unknown"))
+        );
         Ok(())
     }
 
@@ -803,12 +1078,46 @@ max_detections = 8
     }
 
     fn install_synthetic_notepad_input(service: &SynapseService) -> anyhow::Result<()> {
+        install_synthetic_input(service, synthetic_notepad_input())
+    }
+
+    fn install_synthetic_process_input(
+        service: &SynapseService,
+        process_name: &str,
+        window_title: &str,
+        hwnd: i64,
+    ) -> anyhow::Result<()> {
+        install_synthetic_input(
+            service,
+            synthetic_process_input(process_name, window_title, hwnd),
+        )
+    }
+
+    fn install_synthetic_input(
+        service: &SynapseService,
+        input: ObservationInput,
+    ) -> anyhow::Result<()> {
         let mut state = service.m1_state.lock().map_err(|_err| {
             anyhow::anyhow!("M1 service state lock poisoned while installing synthetic input")
         })?;
-        state.synthetic = Some(synthetic_notepad_input());
+        state.synthetic = Some(input);
         drop(state);
         Ok(())
+    }
+
+    fn synthetic_process_input(
+        process_name: &str,
+        window_title: &str,
+        hwnd: i64,
+    ) -> ObservationInput {
+        let mut input = synthetic_notepad_input();
+        input.foreground.hwnd = hwnd;
+        input.foreground.pid = u32::try_from(hwnd & 0xffff).unwrap_or(0);
+        input.foreground.process_name = process_name.to_owned();
+        input.foreground.process_path = format!("C:\\Synthetic\\{process_name}");
+        input.foreground.window_title = window_title.to_owned();
+        input.foreground.profile_id = None;
+        input
     }
 
     fn synthetic_notepad_input() -> ObservationInput {

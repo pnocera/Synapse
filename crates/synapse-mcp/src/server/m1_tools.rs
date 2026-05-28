@@ -128,59 +128,52 @@ impl SynapseService {
         input: &mut synapse_perception::ObservationInput,
         include_hud: bool,
     ) {
-        let foreground = synapse_profiles::ForegroundWindow {
-            exe: non_empty(&input.foreground.process_name),
-            title: non_empty(&input.foreground.window_title),
-            steam_appid: input.foreground.steam_appid,
-            window_class: None,
-        };
-
-        let Ok(runtime) = self.profile_runtime() else {
-            tracing::warn!(
-                code = "PROFILE_FOREGROUND_RESOLUTION_SKIPPED",
-                "profile runtime unavailable while resolving observed foreground"
-            );
-            return;
-        };
-
-        match runtime.resolve_foreground(&foreground) {
-            Ok(Some(resolution)) => {
+        match self.reevaluate_profile_for_foreground(&input.foreground) {
+            Ok(transition) => {
+                let Some(profile_id) = transition.active_profile_id.clone() else {
+                    tracing::debug!(
+                        code = "PROFILE_FOREGROUND_UNMATCHED",
+                        "observed foreground did not match a loaded profile"
+                    );
+                    return;
+                };
                 tracing::info!(
                     code = "PROFILE_FOREGROUND_MATCHED",
-                    profile_id = %resolution.profile_id,
-                    rank = resolution.rank_name,
+                    profile_id = %profile_id,
+                    rank = ?transition.resolution.as_ref().map(|resolution| resolution.rank_name),
                     "observed foreground matched profile"
                 );
-                input.foreground.profile_id = Some(resolution.profile_id.clone());
+                input.foreground.profile_id = Some(profile_id.clone());
                 if !include_hud {
                     return;
                 }
-                match runtime.profile(&resolution.profile_id) {
+                let Ok(runtime) = self.profile_runtime() else {
+                    tracing::warn!(
+                        code = "PROFILE_FOREGROUND_RESOLUTION_SKIPPED",
+                        "profile runtime unavailable while resolving observed foreground HUD"
+                    );
+                    return;
+                };
+                match runtime.profile(&profile_id) {
                     Ok(Some(profile)) => {
                         populate_profile_hud(input, &profile, runtime.profile_dir());
                     }
                     Ok(None) => {
                         tracing::warn!(
                             code = "PROFILE_HUD_PROFILE_MISSING",
-                            profile_id = %resolution.profile_id,
+                            profile_id = %profile_id,
                             "profile resolved but could not be loaded for HUD extraction"
                         );
                     }
                     Err(error) => {
                         tracing::warn!(
                             code = "PROFILE_HUD_PROFILE_LOAD_FAILED",
-                            profile_id = %resolution.profile_id,
+                            profile_id = %profile_id,
                             error = %error,
                             "profile load failed for HUD extraction"
                         );
                     }
                 }
-            }
-            Ok(None) => {
-                tracing::debug!(
-                    code = "PROFILE_FOREGROUND_UNMATCHED",
-                    "observed foreground did not match a loaded profile"
-                );
             }
             Err(error) => {
                 tracing::warn!(
@@ -191,11 +184,6 @@ impl SynapseService {
             }
         }
     }
-}
-
-fn non_empty(value: &str) -> Option<String> {
-    let trimmed = value.trim();
-    (!trimmed.is_empty()).then(|| trimmed.to_owned())
 }
 
 #[cfg(windows)]
