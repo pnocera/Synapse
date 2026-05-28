@@ -655,15 +655,15 @@ code exists; it is done only when the issue is closed with manual FSV evidence.
 | Issue | State | Work item |
 |---|---|---|
 | #382 | closed | B-01 scaffold `synapse-hid-host`. |
-| #383 | open | B-02 `HidGateway::connect(port_name)`, 1 Mbaud, 5 ms timeout. |
-| #384 | open | B-03 `IDENTIFY` handshake and version check. |
-| #385 | open | B-04 pipelined send, 16 outstanding, 5 ms ACK, 3 retries. |
-| #386 | open | B-05 auto-detect via `--hardware-hid auto`. |
-| #387 | open | B-06 reconnect loop every 500 ms on serial disconnect. |
-| #388 | open | B-07 host-side CRC16/CCITT-FALSE encode/decode. |
-| #389 | open | B-08 frame reassembly across CDC ACM packet boundaries. |
-| #390 | open | B-09 send-buffer backpressure to `ACTION_QUEUE_FULL`. |
-| #391 | open | B-10 in-process loopback fixture for supporting checks. |
+| #383 | blocked | B-02 `HidGateway::connect(port_name)`, 1 Mbaud, 5 ms timeout; waits on real serial open/busy-port readback. |
+| #384 | blocked | B-03 `IDENTIFY` handshake and version check; waits on real firmware success/mismatch/no-response readback. |
+| #385 | blocked | B-04 pipelined send, 16 outstanding, 5 ms ACK, 3 retries; waits on real ACK/telemetry run. |
+| #386 | blocked | B-05 auto-detect via `--hardware-hid auto`; waits on one/multiple physical Pico enumeration readback. |
+| #387 | blocked | B-06 reconnect loop every 500 ms on serial disconnect; waits on physical unplug/replug readback. |
+| #388 | closed | B-07 host-side CRC16/CCITT-FALSE encode/decode. |
+| #389 | closed | B-08 frame reassembly across CDC ACM packet boundaries. |
+| #390 | closed | B-09 send-buffer backpressure to `ACTION_QUEUE_FULL`. |
+| #391 | closed | B-10 in-process loopback fixture for supporting checks. |
 
 ### 6.4 Block C - action hardware backend
 
