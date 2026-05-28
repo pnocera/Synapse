@@ -11,8 +11,9 @@
    registry/audit inspector, #499 adds a profile-keymap action alias tool,
    #508 adds the narrow EverQuest `/loc` probe, #510 adds the compact
    EverQuest current-state estimator, #526 adds compact EverQuest outcome
-   ingest, and #531 adds EverQuest action-prior sample/scorecard tools,
-   bringing the live surface to 57. Any
+   ingest, #528 adds EverQuest hazard/safe memory record and consult tools,
+   and #531 adds EverQuest action-prior sample/scorecard tools,
+   bringing the live surface to 59. Any
    further agent-facing tools require an ADR-approved cap change.
    Overlapping tools merge. Profile and parameter knobs are the escape hatches.
 2. **One tool, one verb.** No `do_everything(action_kind, ...)` mega-tools.
@@ -26,7 +27,8 @@ The first 30 tools below are the live M3 baseline. #499 adds `act_keymap` as a
 profile-keymap action alias, #508 adds `everquest_loc_probe` as a literal
 EverQuest `/loc` readback tool, #510 adds `everquest_current_state` as the
 compact world-state row writer/readback tool, #526 adds
-`everquest_outcome_ingest`, and #531 adds `everquest_action_prior_record` plus
+`everquest_outcome_ingest`, #528 adds `everquest_memory_record` plus
+`everquest_memory_consult`, and #531 adds `everquest_action_prior_record` plus
 `everquest_action_prior_scorecard`. M4 adds `act_combo`, `act_run_shell`, and
 `act_launch`; M5 adds local profile-registry/audit quality scoring, authoring
 candidates, registry row operations, import/export, audit intelligence, and
@@ -96,11 +98,13 @@ future `tools/list` snapshots in #447/#448.
 | 52 | `audit_export_bundle` | read/write | writes a local redacted audit bundle after consent verification |
 | 53 | `everquest_loc_probe` | write/read | sends literal `/loc` to `everquest.live` and verifies the EQ log coordinate line |
 | 54 | `everquest_current_state` | write/read | fuses foreground, EQ log, map, HUD, and action audit into a compact `CF_KV` row and reads it back |
-| 55 | `everquest_action_prior_record` | write/read | stores one prediction/outcome sample under `CF_KV` with computed correctness and exact readback |
-| 56 | `everquest_action_prior_scorecard` | write/read | aggregates stored samples into a floor-not-ceiling competence scorecard row and reads it back |
-| 57 | `everquest_outcome_ingest` | write/read | parses bounded EQ log bytes into compact redacted outcome rows with offset/hash readback |
+| 55 | `everquest_outcome_ingest` | write/read | parses bounded EQ log bytes into compact redacted outcome rows with offset/hash readback |
+| 56 | `everquest_memory_record` | write/read | stores one compact hazard or safe-area memory row with source refs, stale/conflict handling, and exact readback |
+| 57 | `everquest_memory_consult` | write/read | consults hazard/safe memories for one candidate action and persists the planner decision row |
+| 58 | `everquest_action_prior_record` | write/read | stores one prediction/outcome sample under `CF_KV` with computed correctness and exact readback |
+| 59 | `everquest_action_prior_scorecard` | write/read | aggregates stored samples into a floor-not-ceiling competence scorecard row and reads it back |
 
-M3 live count: 30 tools. Current live count: 57
+M3 live count: 30 tools. Current live count: 59
 tools.
 
 Deferred ideas from earlier drafts (`describe` and `read_hud`) are still not
@@ -109,6 +113,8 @@ addition; `everquest_loc_probe` is the #508 literal `/loc` readback tool;
 `everquest_current_state` is the #510 current-state row writer/readback tool;
 `everquest_outcome_ingest` is the #526 compact outcome row writer/readback
 tool;
+`everquest_memory_record` and `everquest_memory_consult` are the #528
+hazard/safe-area memory and planner consult tools;
 `everquest_action_prior_record` and `everquest_action_prior_scorecard` are the
 #531 competence scorecard tools;
 `act_combo`, `act_run_shell`, and `act_launch` remain the M4 phase plan
@@ -653,7 +659,83 @@ Manual FSV must read the physical log bytes before the trigger, call this real
 MCP tool, then separately read `CF_KV` through storage readback and verify the
 row offsets, hashes, kinds, and redaction flags.
 
-### 3.13e `everquest_action_prior_record`
+### 3.13e `everquest_memory_record`
+
+```json
+{
+  "name": "everquest_memory_record",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["memory_id", "memory_type", "memory_kind", "subject", "confidence"],
+    "properties": {
+      "memory_id": {"type": "string"},
+      "profile_id": {"type": "string", "default": "everquest.live"},
+      "memory_type": {"enum": ["hazard", "safe_area"]},
+      "memory_kind": {"type": "string"},
+      "subject": {"type": "string"},
+      "zone_short_name": {"type": "string"},
+      "location": {"type": "object", "additionalProperties": false},
+      "radius": {"type": "number", "minimum": 0.0},
+      "severity": {"type": "string"},
+      "confidence": {"type": "number", "minimum": 0.0, "maximum": 1.0},
+      "evidence_relation": {"enum": ["supports_memory", "conflicts_with_memory"], "default": "supports_memory"},
+      "conflict_confidence_delta": {"type": "number", "default": 0.35},
+      "source_state_row_key": {"type": "string"},
+      "source_state_generated_at": {"type": "string"},
+      "stale_after_seconds": {"type": "integer", "default": 3600},
+      "source_refs": {"type": "array", "items": {"type": "object"}},
+      "redacted_note": {"type": "string"}
+    }
+  }
+}
+```
+
+`everquest_memory_record` writes either
+`CF_KV/everquest/hazard_memory/v1/everquest.live/<memory_id>` or
+`CF_KV/everquest/safe_area_memory/v1/everquest.live/<memory_id>`. Rows include
+schema version, memory kind, subject, optional zone/location/radius, confidence,
+active-for-planning status, source refs, redaction evidence, duplicate marker,
+stale-source detection, and conflict downgrade state. Conflicting later
+evidence lowers confidence instead of erasing the earlier hazard. Stale source
+state caps confidence and prevents planner use until refreshed.
+
+Manual FSV must read the physical source evidence before the trigger, call this
+real MCP tool with known source refs, then separately inspect the durable
+`CF_KV` row afterward. The schema is closed; attempted raw chat payload fields
+are rejected and must leave storage unchanged.
+
+### 3.13f `everquest_memory_consult`
+
+```json
+{
+  "name": "everquest_memory_consult",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["candidate_id", "candidate_kind"],
+    "properties": {
+      "candidate_id": {"type": "string"},
+      "profile_id": {"type": "string", "default": "everquest.live"},
+      "candidate_kind": {"type": "string"},
+      "target": {"type": "string"},
+      "zone_short_name": {"type": "string"},
+      "location": {"type": "object", "additionalProperties": false},
+      "memory_row_keys": {"type": "array", "items": {"type": "string"}, "default": []},
+      "max_memory_rows": {"type": "integer", "default": 128}
+    }
+  }
+}
+```
+
+`everquest_memory_consult` reads named memory rows or scans the hazard/safe
+prefixes, matches active rows against target, zone, and location radius, writes
+`CF_KV/everquest/planner_consult/v1/everquest.live/<candidate_id>`, and reads
+that exact decision row back. Matching active hazards return `avoid`; matching
+safe areas without hazards return `allow_with_safe_memory`; candidates with no
+target, zone, or location return `abstain_state_unknown`.
+
+### 3.13g `everquest_action_prior_record`
 
 ```json
 {
@@ -712,7 +794,7 @@ an FSV substitute. Manual FSV must still read storage state before the trigger,
 call the tool with known synthetic prediction/outcome inputs, and separately
 read `storage_inspect` or another physical storage readback after the write.
 
-### 3.13f `everquest_action_prior_scorecard`
+### 3.13h `everquest_action_prior_scorecard`
 
 ```json
 {
@@ -1989,6 +2071,14 @@ profile-authoring and audit-export defaults below.
 | `everquest_outcome_ingest` | `log_path` | omitted; active EQ log | #526 |
 | `everquest_outcome_ingest` | `allow_explicit_log_path` | `false` | #526 |
 | `everquest_outcome_ingest` | `persist_unknown` | `true` | #526 |
+| `everquest_memory_record` | `profile_id` | `"everquest.live"` | #528 |
+| `everquest_memory_record` | `evidence_relation` | `"supports_memory"` | #528 |
+| `everquest_memory_record` | `conflict_confidence_delta` | `0.35` | #528 |
+| `everquest_memory_record` | `stale_after_seconds` | `3600` | #528 |
+| `everquest_memory_record` | `source_refs` | `[]` by schema; runtime requires at least one | #528 |
+| `everquest_memory_consult` | `profile_id` | `"everquest.live"` | #528 |
+| `everquest_memory_consult` | `memory_row_keys` | `[]`; scans memory prefixes | #528 |
+| `everquest_memory_consult` | `max_memory_rows` | `128` | #528 |
 | `everquest_action_prior_record` | `sample_id` | required; no default | #531 |
 | `everquest_action_prior_record` | `profile_id` | `"everquest.live"` | #531 |
 | `everquest_action_prior_record` | `prediction_id` | required; no default | #531 |

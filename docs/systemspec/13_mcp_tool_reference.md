@@ -5,6 +5,7 @@ Source files covered:
 - `crates/synapse-mcp/src/server/everquest_tools.rs`
 - `crates/synapse-mcp/src/server/everquest_log.rs`
 - `crates/synapse-mcp/src/server/everquest_state.rs`
+- `crates/synapse-mcp/src/server/everquest_memory.rs`
 - `crates/synapse-mcp/src/server/everquest_outcome.rs`
 - `crates/synapse-mcp/src/server/everquest_scorecard.rs`
 - `crates/synapse-mcp/src/m1.rs` (+ `m1/{ocr, search, sources}.rs`)
@@ -12,7 +13,7 @@ Source files covered:
 - `crates/synapse-mcp/src/m3/{audio, audit_export, permissions, profile, profile_authoring, profile_quality, profile_registry, reflex, replay, subscribe}.rs`
 - `crates/synapse-core/src/types.rs`
 
-All 57 live tools are registered on `SynapseService` via `#[tool(description=...)]` in `server.rs`. Tool descriptions are taken verbatim from the source. Every tool returns through `Json<T>` so the response shape exactly matches the deserialized response struct.
+All 59 live tools are registered on `SynapseService` via `#[tool(description=...)]` in `server.rs`. Tool descriptions are taken verbatim from the source. Every tool returns through `Json<T>` so the response shape exactly matches the deserialized response struct.
 
 Default error response shape (all tools): `ErrorData { code: rmcp::ErrorCode(-32099), message, data: { "code": <SCREAMING_SNAKE_CASE> } }` via `crates/synapse-mcp/src/m1.rs::mcp_error`.
 
@@ -232,7 +233,56 @@ Manual FSV must read the EQ log/config/map files and foreground state before the
 
 Manual FSV must read the physical log bytes before the trigger, call the real MCP tool, then separately inspect durable `CF_KV` rows afterward for offsets, hashes, outcome kinds, duplicate markers, and redaction flags.
 
-## 9e. `everquest_action_prior_record`
+## 9e. `everquest_memory_record`
+
+**Description:** "Persist one compact EverQuest hazard or safe-area memory row with source refs, stale/conflict handling, and exact CF_KV readback"
+**Side effects:** validates compact/redacted source refs, writes either `CF_KV/everquest/hazard_memory/v1/everquest.live/<memory_id>` or `CF_KV/everquest/safe_area_memory/v1/everquest.live/<memory_id>`, then reads the exact row back before returning.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `memory_id` | `String` | yes | - | ASCII id, used in the row key |
+| `profile_id` | `String` | no | `everquest.live` | EverQuest profile id; other ids fail closed |
+| `memory_type` | `EverQuestMemoryType` | yes | - | `hazard` or `safe_area` |
+| `memory_kind` | `String` | yes | - | High-risk target, death location, safe recovery area, etc. |
+| `subject` | `String` | yes | - | Compact target/area/route label |
+| `zone_short_name` | `Option<String>` | no | - | Zone short name such as `nektulos` or `neriaka` |
+| `location` | `Option<EverQuestMemoryLocation>` | no | - | Map-order X/Y/Z coordinate |
+| `radius` | `Option<f64>` | no | - | Match radius for planner consult |
+| `severity` | `Option<String>` | no | type default | Hazard defaults to `high`; safe area defaults to `supportive` |
+| `confidence` | `f32` | yes | - | `0.0..=1.0` |
+| `evidence_relation` | `EverQuestMemoryEvidenceRelation` | no | `supports_memory` | `conflicts_with_memory` downgrades an existing row |
+| `conflict_confidence_delta` | `f32` | no | `0.35` | Amount to subtract from existing confidence on conflicting evidence |
+| `source_state_row_key` | `Option<String>` | no | - | Current-state or trajectory row key used as source |
+| `source_state_generated_at` | `Option<DateTime<Utc>>` | no | - | Time used for stale-source detection |
+| `stale_after_seconds` | `u64` | no | `3600` | Older source state disables planning use and caps confidence |
+| `source_refs` | `Vec<EverQuestMemorySourceRef>` | yes at runtime | `[]` by schema | Runtime requires at least one physical SoT ref |
+| `redacted_note` | `Option<String>` | no | - | Short redacted operator/agent note |
+
+**Returns:** `EverQuestMemoryRecordResponse { ok, row_key, duplicate_of_prior_row, stored_value_len_bytes, memory }`. The memory row includes stale-source status, active-for-planning status, duplicate marker, prior confidence, conflict count, source refs, and redaction/evidence-boundary flags.
+**Errors:** `TOOL_PARAMS_INVALID`, `STORAGE_READ_FAILED`, `STORAGE_WRITE_FAILED`, `STORAGE_CORRUPTED`, `TOOL_INTERNAL_ERROR`.
+
+Manual FSV must read the physical EQ log/UI/storage evidence first, call the real tool with known source refs, then separately inspect the `CF_KV` row. Closed schemas reject attempted raw chat payload fields; storage must remain unchanged for that edge.
+
+## 9f. `everquest_memory_consult`
+
+**Description:** "Consult persisted EverQuest hazard and safe-area memories for one candidate action, write a compact planner consult row, and read it back"
+**Side effects:** reads named memory rows or scans hazard/safe prefixes, matches active rows by target/zone/location radius, writes `CF_KV/everquest/planner_consult/v1/everquest.live/<candidate_id>`, then reads that exact decision row back.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `candidate_id` | `String` | yes | - | Planner candidate id |
+| `profile_id` | `String` | no | `everquest.live` | EverQuest profile id; other ids fail closed |
+| `candidate_kind` | `String` | yes | - | Movement, combat, rest, probe, etc. |
+| `target` | `Option<String>` | no | - | Candidate target label |
+| `zone_short_name` | `Option<String>` | no | - | Candidate zone |
+| `location` | `Option<EverQuestMemoryLocation>` | no | - | Candidate location |
+| `memory_row_keys` | `Vec<String>` | no | `[]` | Empty scans memory prefixes |
+| `max_memory_rows` | `usize` | no | `128` | Prefix scan cap; max `512` |
+
+**Returns:** `EverQuestMemoryConsultResponse { ok, row_key, stored_value_len_bytes, consult }`. The consult decision is `avoid`, `allow_with_safe_memory`, `allow_no_matching_hazard`, or `abstain_state_unknown`, with matched hazard/safe rows and match reasons.
+**Errors:** `TOOL_PARAMS_INVALID`, `STORAGE_READ_FAILED`, `STORAGE_WRITE_FAILED`, `STORAGE_CORRUPTED`, `TOOL_INTERNAL_ERROR`.
+
+## 9g. `everquest_action_prior_record`
 
 **Description:** "Persist one EverQuest action-prior prediction/outcome sample with computed correctness and exact CF_KV readback"
 **Side effects:** validates a redacted prediction/outcome sample, computes correctness, writes `CF_KV/everquest/action_prior_eval/v1/everquest.live/<sample_id>`, then reads that exact row back before returning.
@@ -252,7 +302,7 @@ Manual FSV must read the physical log bytes before the trigger, call the real MC
 **Returns:** `EverQuestActionPriorRecordResponse { ok, row_key, stored_value_len_bytes, sample }`. `sample.correctness.class` is one of `correct_top1`, `correct_top3`, `correct_context`, `wrong`, `abstained`, or `unknown_actual`; it also carries calibration bucket, useful flag, overconfident-wrong flag, and the evidence boundary that scorecards are not FSV.
 **Errors:** `TOOL_PARAMS_INVALID`, `STORAGE_WRITE_FAILED`, `STORAGE_READ_FAILED`, `STORAGE_CORRUPTED`, `TOOL_INTERNAL_ERROR`.
 
-## 9f. `everquest_action_prior_scorecard`
+## 9h. `everquest_action_prior_scorecard`
 
 **Description:** "Aggregate persisted EverQuest action-prior samples into a floor-not-ceiling competence scorecard with exact CF_KV readback"
 **Side effects:** reads named eval rows from `CF_KV`, writes `CF_KV/everquest/action_prior_scorecard/v1/everquest.live/<window_id>`, then reads that exact row back before returning.

@@ -221,6 +221,35 @@ planner guards, and scorecards without replaying stale raw log text into model
 context. Manual FSV still reads physical log bytes before the trigger, invokes
 the real MCP tool, and separately reads the persisted `CF_KV` rows afterward.
 
+## Hazard And Safe-Area Memory Rows
+
+#528 adds durable memory rows that let the planner avoid repeating known
+EverQuest failures while still allowing supervised progress when safe evidence
+exists. The memory writer stores:
+
+- `CF_KV/everquest/hazard_memory/v1/everquest.live/<memory_id>` for high-risk
+  targets, death locations, unexpected zone transitions, aggro/damage clusters,
+  and low-confidence focus/location zones.
+- `CF_KV/everquest/safe_area_memory/v1/everquest.live/<memory_id>` for safe
+  recovery areas, successful rest/recovery, low-risk con evidence, or
+  confirmed level-appropriate route outcomes.
+- `CF_KV/everquest/planner_consult/v1/everquest.live/<candidate_id>` for the
+  planner's readback decision after consulting active hazard/safe rows.
+
+Each memory row includes schema version, memory type/kind, subject, optional
+zone/location/radius, confidence, source state key/time, compact source refs,
+duplicate marker, stale-source status, conflict downgrade state, and redaction
+evidence. Stale source state caps confidence and disables planner use until
+refreshed. Conflicting later evidence lowers confidence instead of deleting the
+older hazard, preserving the learning trail.
+
+Planner consult rows match active memories by target, zone, or location radius.
+An active matching hazard returns `avoid`; a matching safe area with no active
+hazard returns `allow_with_safe_memory`; unknown candidate state returns
+`abstain_state_unknown`. These rows are action-prior inputs, not autonomous
+gameplay. Manual FSV still reads physical EQ logs/UI/storage before and after
+the runtime trigger, and raw chat bodies must not be persisted.
+
 ## Action-Prior Scorecard Rows
 
 #531 adds the runtime storage surface for measuring whether the EverQuest world
