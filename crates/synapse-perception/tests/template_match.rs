@@ -1,6 +1,7 @@
 use std::{
     error::Error,
     io::{self, Write},
+    path::PathBuf,
 };
 
 use image::{DynamicImage, GrayImage, Luma};
@@ -10,7 +11,7 @@ use synapse_perception::{
     extract_template_counter_from_region,
 };
 
-type TestResult = Result<(), Box<dyn Error>>;
+type TestResult<T = ()> = Result<T, Box<dyn Error>>;
 
 fn regression_log(args: std::fmt::Arguments<'_>) -> io::Result<()> {
     let mut stdout = io::stdout().lock();
@@ -158,12 +159,107 @@ fn template_match_fails_closed_for_structural_edges() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn template_match_loads_bundled_minecraft_status_assets() -> TestResult {
+    let hearts = bundled_templates("hearts", &[("full", 2), ("half", 1), ("empty", 0)])?;
+    let heart_region = synthetic_region_from_bundled_template(&hearts, "full")?;
+    regression_log(format_args!(
+        "regression_check=hud_template_assets edge=hearts_full before=region:{}x{} templates:{}",
+        heart_region.width(),
+        heart_region.height(),
+        hearts.len()
+    ))?;
+    let heart_reading = extract_template_counter_from_region(
+        &heart_region,
+        &hearts,
+        TemplateCounterConfig::default(),
+    )?;
+    regression_log(format_args!(
+        "regression_check=hud_template_assets edge=hearts_full after=value:{} confidence:{:.3}",
+        heart_reading.value, heart_reading.confidence
+    ))?;
+    assert_eq!(heart_reading.value, 20);
+    assert!(heart_reading.confidence >= 0.99);
+
+    let hunger = bundled_templates("hunger", &[("full", 1), ("half", 1), ("empty", 0)])?;
+    let hunger_region = synthetic_region_from_bundled_template(&hunger, "full")?;
+    let hunger_config = TemplateCounterConfig {
+        max_value: 10,
+        ..TemplateCounterConfig::default()
+    };
+    regression_log(format_args!(
+        "regression_check=hud_template_assets edge=hunger_full before=region:{}x{} templates:{}",
+        hunger_region.width(),
+        hunger_region.height(),
+        hunger.len()
+    ))?;
+    let hunger_reading =
+        extract_template_counter_from_region(&hunger_region, &hunger, hunger_config)?;
+    regression_log(format_args!(
+        "regression_check=hud_template_assets edge=hunger_full after=value:{} confidence:{:.3}",
+        hunger_reading.value, hunger_reading.confidence
+    ))?;
+    assert_eq!(hunger_reading.value, 10);
+    assert!(hunger_reading.confidence >= 0.99);
+    Ok(())
+}
+
 fn status_templates() -> synapse_perception::PerceptionResult<Vec<HudTemplate>> {
     Ok(vec![
         HudTemplate::from_gray("full", 2, full_template())?,
         HudTemplate::from_gray("half", 1, half_template())?,
         HudTemplate::from_gray("empty", 0, empty_template())?,
     ])
+}
+
+fn bundled_templates(
+    group: &str,
+    labels_and_values: &[(&str, u32)],
+) -> TestResult<Vec<HudTemplate>> {
+    let root = bundled_asset_root()?;
+    let mut templates = Vec::with_capacity(labels_and_values.len());
+    for (label, value) in labels_and_values {
+        templates.push(HudTemplate::load(
+            *label,
+            *value,
+            root.join(group).join(format!("{label}.png")),
+        )?);
+    }
+    Ok(templates)
+}
+
+fn bundled_asset_root() -> TestResult<PathBuf> {
+    let manifest_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let workspace_crates_dir = manifest_dir
+        .parent()
+        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "missing crates directory"))?;
+    Ok(workspace_crates_dir
+        .join("synapse-profiles")
+        .join("profiles")
+        .join("assets")
+        .join("minecraft.java"))
+}
+
+fn synthetic_region_from_bundled_template(
+    templates: &[HudTemplate],
+    label: &str,
+) -> Result<GrayImage, Box<dyn Error>> {
+    let template = templates
+        .iter()
+        .find(|template| template.label == label)
+        .ok_or_else(|| format!("missing bundled template {label}"))?;
+    let slot_w = template.image.width().saturating_add(4);
+    let slot_h = template.image.height();
+    let mut region = GrayImage::from_pixel(slot_w.saturating_mul(10), slot_h, Luma([6]));
+    for index in 0..10_u32 {
+        blit(
+            &mut region,
+            &template.image,
+            index.saturating_mul(slot_w).saturating_add(2),
+            0,
+        );
+    }
+    Ok(region)
 }
 
 fn synthetic_region(values: &[u32; 10]) -> GrayImage {

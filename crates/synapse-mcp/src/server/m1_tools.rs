@@ -239,7 +239,7 @@ fn extract_profile_hud_field(
             mapping,
         } => color_ratio_reading(field, screen_region, &region_image, mapping),
         HudExtractor::TemplateMatch { templates } => {
-            let loaded_templates = load_templates(templates, profile_dir)?;
+            let loaded_templates = load_templates(&field.name, templates, profile_dir)?;
             let provider = SystemOcrProvider;
             extract_field(&FieldExtractionRequest {
                 field,
@@ -333,13 +333,17 @@ fn color_ratio_reading(
 }
 
 #[cfg(windows)]
-fn load_templates(paths: &[String], profile_dir: &Path) -> PerceptionResult<Vec<HudTemplate>> {
+fn load_templates(
+    field_name: &str,
+    paths: &[String],
+    profile_dir: &Path,
+) -> PerceptionResult<Vec<HudTemplate>> {
     paths
         .iter()
         .enumerate()
         .map(|(index, path)| {
             let label = template_label(path, index);
-            let value = template_value(path, index)?;
+            let value = template_value(field_name, path, index)?;
             let resolved = resolve_template_path(path, profile_dir);
             HudTemplate::load(label, value, resolved)
         })
@@ -376,8 +380,17 @@ fn template_label(path: &str, index: usize) -> String {
 }
 
 #[cfg(windows)]
-fn template_value(path: &str, index: usize) -> PerceptionResult<u32> {
+fn template_value(field_name: &str, path: &str, index: usize) -> PerceptionResult<u32> {
+    let lower_field = field_name.to_ascii_lowercase();
     let lower = path.to_ascii_lowercase();
+    if lower_field.contains("hunger") {
+        if lower.contains("full") || lower.contains("half") {
+            return Ok(1);
+        }
+        if lower.contains("empty") {
+            return Ok(0);
+        }
+    }
     if lower.contains("full") {
         return Ok(2);
     }
@@ -394,6 +407,32 @@ fn template_value(path: &str, index: usize) -> PerceptionResult<u32> {
         _ => Err(hud_error(format!(
             "cannot infer HUD template value for path {path:?}"
         ))),
+    }
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::template_value;
+
+    #[test]
+    fn template_values_are_field_specific_for_minecraft_status_bars() -> Result<(), String> {
+        let heart_full = template_value("minecraft.hp_hearts", "hearts/full.png", 0)
+            .map_err(|error| error.to_string())?;
+        let heart_half = template_value("minecraft.hp_hearts", "hearts/half.png", 1)
+            .map_err(|error| error.to_string())?;
+        let hunger_full = template_value("minecraft.hunger", "hunger/full.png", 0)
+            .map_err(|error| error.to_string())?;
+        let hunger_half = template_value("minecraft.hunger", "hunger/half.png", 1)
+            .map_err(|error| error.to_string())?;
+        let hunger_empty = template_value("minecraft.hunger", "hunger/empty.png", 2)
+            .map_err(|error| error.to_string())?;
+
+        assert_eq!(heart_full, 2);
+        assert_eq!(heart_half, 1);
+        assert_eq!(hunger_full, 1);
+        assert_eq!(hunger_half, 1);
+        assert_eq!(hunger_empty, 0);
+        Ok(())
     }
 }
 
