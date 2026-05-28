@@ -2856,7 +2856,7 @@ Each M2 tool wrapper builds one or more `synapse_core::Action`s and dispatches t
 
 ## 17. What is NOT covered
 
-- **Remaining hardware HID gaps.** The live `Backend::Hardware` path is enabled by `--hardware-hid <port|auto>` and maps Synapse keys to USB HID Keyboard/Keypad usage IDs with boot-report modifier byte handling, 6KRO limit enforcement, shifted US-layout text, and absolute mouse fallback by converting screen or resolved-element targets into batched `MOUSE_MOVE_REL` commands. Broader supported-use gates remain M4 work.
+- **Remaining hardware HID gaps.** The live `Backend::Hardware` path is enabled by `--hardware-hid <port|auto>` and maps Synapse keys to USB HID Keyboard/Keypad usage IDs with boot-report modifier byte handling, 6KRO limit enforcement, shifted US-layout text, and absolute mouse fallback by converting screen or resolved-element targets into batched `MOUSE_MOVE_REL` commands. Curve-generated hardware mouse batches coalesce adjacent same-direction deltas within a `<= 2 ms` implied window when the merged payload stays inside the firmware `-127..=127` axis range (ADR-0012); software and standalone direct `MouseMoveRelative` actions are unchanged. Broader supported-use gates remain M4 work.
 - **Modifiers on `act_click`.** The schema accepts `Vec<ClickModifier>` but emitting a non-empty list currently returns `ACTION_BACKEND_UNAVAILABLE` with the message "act_click modifiers are not wired in the M2 click schema slice".
 - **Element-target aim and drag**. `act_aim` with an `Element` target returns `ACTION_BACKEND_UNAVAILABLE` ("requires the dedicated target resolution issue"); same for `Track` targets. `act_drag` supports `Element` targets via UIA bbox resolution.
 
@@ -4056,7 +4056,7 @@ The PRD's "Open Questions" file enumerates roughly 30 numbered items (OQ-001 …
 | OQ-009/010/023/024 | M1 perception closures (max_elements default, CDP auto-attach, element_id stability, token budget) | M1 source |
 | operator decisions 2026-05-24 (issues #246/#247/#350/#351) | No GitHub Actions / CI as a shipping gate | `AGENTS.md` |
 
-Open items remaining (PRD §16): OQ-013 (aim_track EMA smoothing, decided in ADR-0011), OQ-016 (action coalescing on hardware) closed in M4; OQ-008 (VLM bundling), OQ-014 (Whisper-tiny vs base), OQ-017 (disk-pressure thresholds final), OQ-019 (telemetry split), OQ-020 (`game_screenshot_once` exposure), OQ-030 (GC cadence final) closed in M5; OQ-006/007/021/027/028/026/018 remain v1.x.
+Open items remaining (PRD §16): OQ-013 (aim_track EMA smoothing, decided in ADR-0011) and OQ-016 (hardware action coalescing, decided in ADR-0012) closed in M4; OQ-008 (VLM bundling), OQ-014 (Whisper-tiny vs base), OQ-017 (disk-pressure thresholds final), OQ-019 (telemetry split), OQ-020 (`game_screenshot_once` exposure), OQ-030 (GC cadence final) closed in M5; OQ-006/007/021/027/028/026/018 remain v1.x.
 
 ## 9. Doctrine documents
 

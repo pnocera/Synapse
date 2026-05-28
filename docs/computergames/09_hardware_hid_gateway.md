@@ -252,6 +252,13 @@ synchronously, and dispatches each parsed frame immediately. `NAK_BUFFER_FULL`
 is currently emitted when command state cannot accept more data, such as the
 6-key boot-keyboard rollover slots already being full.
 
+ADR-0012 reduces unnecessary hardware mouse traffic before this pipeline sees
+curve-generated batches. After action curve sampling and `-127..=127`
+boot-mouse chunking, the hardware backend coalesces adjacent same-direction
+`MOUSE_MOVE_REL` deltas when their implied span is `<= 2 ms` and the merged
+payload remains inside the firmware range. Software actions and standalone
+direct `MouseMoveRelative` calls are unchanged.
+
 ### 5.5 NAK reason codes
 
 ```
@@ -420,6 +427,10 @@ Status LED:
 | End-to-end: host call → physical USB IN packet | ≤ 4 ms p99 |
 
 1 ms USB poll is the hard floor. Hardware HID will always be ~3 ms slower than software `SendInput` (which doesn't go over USB). That is the cost of going through a physical USB device.
+
+Hardware curve coalescing keeps sub-2 ms same-direction cursor detail from
+creating more CDC frames than the nominal HID poll floor can expose, while the
+firmware range check still prevents overlarge mouse payloads.
 
 ---
 

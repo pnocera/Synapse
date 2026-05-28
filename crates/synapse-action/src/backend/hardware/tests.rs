@@ -535,6 +535,72 @@ fn absolute_hardware_mouse_chunks_large_relative_deltas() {
 }
 
 #[test]
+fn absolute_hardware_mouse_coalesces_sub_2ms_curve_deltas() {
+    let mut gateway = StubGateway::default();
+    let records = gateway.clone();
+    let start = Point { x: 0, y: 0 };
+    let target = Point { x: 14, y: 0 };
+    println!(
+        "readback=hardware_mouse_coalescing edge=sub_2ms before=start:{start:?} target:{target:?} commands:{:?} batches:{:?}",
+        records.commands(),
+        records.batch_lengths()
+    );
+
+    super::mouse::move_curve_from(&mut gateway, start, target, &AimCurve::Linear, 7)
+        .unwrap_or_else(|error| panic!("sub-2ms curve should emit coalesced batch: {error}"));
+
+    let commands = records.commands();
+    let actual_points = cumulative_mouse_points(&commands, start);
+    assert_eq!(
+        commands,
+        vec![
+            (HOST_COMMAND_MOUSE_MOVE_REL, vec![6, 0, 0, 0]),
+            (HOST_COMMAND_MOUSE_MOVE_REL, vec![6, 0, 0, 0]),
+            (HOST_COMMAND_MOUSE_MOVE_REL, vec![2, 0, 0, 0]),
+        ]
+    );
+    assert_eq!(actual_points.last(), Some(&target));
+    assert!(relative_payloads_within_firmware_range(&commands));
+    assert_eq!(records.batch_lengths(), vec![3]);
+    println!(
+        "readback=hardware_mouse_coalescing edge=sub_2ms after=commands:{commands:?} points:{actual_points:?} batches:{:?}",
+        records.batch_lengths()
+    );
+}
+
+#[test]
+fn absolute_hardware_mouse_preserves_steps_above_2ms_window() {
+    let mut gateway = StubGateway::default();
+    let records = gateway.clone();
+    let start = Point { x: 0, y: 0 };
+    let target = Point { x: 14, y: 0 };
+    println!(
+        "readback=hardware_mouse_coalescing edge=above_2ms before=start:{start:?} target:{target:?} commands:{:?} batches:{:?}",
+        records.commands(),
+        records.batch_lengths()
+    );
+
+    super::mouse::move_curve_from(&mut gateway, start, target, &AimCurve::Linear, 21)
+        .unwrap_or_else(|error| panic!("above-2ms curve should emit uncoalesced batch: {error}"));
+
+    let commands = records.commands();
+    let actual_points = cumulative_mouse_points(&commands, start);
+    let expected_points = crate::sample_curve(&AimCurve::Linear, start, target, 21, None)
+        .into_iter()
+        .skip(1)
+        .collect::<Vec<_>>();
+    assert_eq!(commands.len(), 7);
+    assert_eq!(actual_points, expected_points);
+    assert_eq!(actual_points.last(), Some(&target));
+    assert!(relative_payloads_within_firmware_range(&commands));
+    assert_eq!(records.batch_lengths(), vec![7]);
+    println!(
+        "readback=hardware_mouse_coalescing edge=above_2ms after=commands:{commands:?} points:{actual_points:?} batches:{:?}",
+        records.batch_lengths()
+    );
+}
+
+#[test]
 fn absolute_hardware_mouse_zero_delta_emits_no_commands() {
     let mut gateway = StubGateway::default();
     let records = gateway.clone();

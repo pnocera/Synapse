@@ -316,9 +316,12 @@ absolute `MouseMove` and one-shot `AimAt` screen targets into a relative
 `MOUSE_MOVE_REL` stream. It reads the current cursor position, resolves
 `MouseTarget::Element` / `AimTarget::Element` to a UIA bounding-rectangle center
 when possible, samples the requested curve, chunks every relative step to the
-firmware `-127..=127` delta range, and sends the command stream through the HID
-pipeline. Unresolved element targets and `Track` targets fail closed; hardware
-requests never silently downgrade to software.
+firmware `-127..=127` delta range, coalesces adjacent same-direction hardware
+curve deltas whose implied span is `<= 2 ms` and whose merged payload still fits
+that firmware range, and sends the command stream through the HID pipeline.
+Software output and standalone direct `MouseMoveRelative` actions are not
+coalesced by this M4 policy (ADR-0012). Unresolved element targets and `Track`
+targets fail closed; hardware requests never silently downgrade to software.
 
 Routing:
 

@@ -197,15 +197,23 @@ tie-breakers. Manual `profile_activate` remains an explicit override.
 
 ---
 
-## OQ-016 — Action coalescing
+## OQ-016 — Action coalescing — DECIDED 2026-05-28
 
-**Q.** If agent fires `MouseMoveRelative(1, 0)` 100 times rapidly, coalesce into `MouseMoveRelative(100, 0)`?
+→ decided in ADR-0012.
 
-**Trade-off.** Coalescing reduces USB poll pressure on hardware HID. Not coalescing preserves exact timing.
+**Decision.** Hardware backend coalescing applies to internally generated
+curve batches for absolute `MouseMove`, one-shot `AimAt`, and drag move
+segments. Adjacent same-direction `MOUSE_MOVE_REL` deltas merge only when the
+candidate stays within a `<= 2 ms` implied window and the merged payload remains
+inside the firmware `-127..=127` range per axis.
 
-**Default.** No coalescing for software (cheap anyway). Coalescing for hardware when target poll interval would be missed (deferred ≤ 2 ms of pending small moves merge).
+Software output and `sample_curve` are unchanged. Standalone direct
+`MouseMoveRelative` actions still send one command per action until a later
+action scheduler can own delayed flush and hardware-link error reporting.
 
-**Target.** M4 hardware HID testing. Tune window.
+**Future change.** Hardware telemetry from real Luanti/Minecraft runs may tune
+the window or add cross-call buffering behind an explicit scheduler/audit
+surface.
 
 ---
 

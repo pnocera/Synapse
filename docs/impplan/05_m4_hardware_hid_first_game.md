@@ -712,8 +712,8 @@ code exists; it is done only when the issue is closed with manual FSV evidence.
 | #417 | open | F-03 heart HUD templates. |
 | #418 | open | F-04 hunger HUD templates. |
 | #419 | open | F-05 XP HUD region. |
-| #420 | open | F-06 ADR: `aim_track` EMA smoothing alpha. |
-| #421 | open | F-07 ADR: hardware-backend coalescing for small moves. |
+| #420 | closed | F-06 ADR: `aim_track` EMA smoothing alpha selected in ADR-0011. |
+| #421 | open | F-07 ADR: hardware-backend coalescing for small moves selected in ADR-0012. |
 | #422 | open | F-08 Minecraft 5-minute hands-off demo. |
 
 ### 6.8 Block G - supported-use gates
@@ -916,7 +916,7 @@ M4 blocks M5 until all gates are satisfied and issue evidence is posted:
 | Firmware bugs are hard to diagnose. | Keep loopback build, serial telemetry, LED patterns, and host-side parser checks; verify real hardware state manually before closure. |
 | Existing docs have stale "stub/absent" claims. | Track and fix in #437/#445/#446/#450; this file records current source state. |
 | Gamepad compatibility differs by game. | Hardware pad is standard HID/DirectInput; use ViGEm for XInput-only paths per ADR #372. |
-| Hardware HID latency under load. | Pipeline to 16 outstanding frames, measure p99 on host, and apply coalescing decision from #421. |
+| Hardware HID latency under load. | Pipeline to 16 outstanding frames, measure p99 on host, and apply the ADR-0012 hardware curve coalescing policy from #421. |
 | Minecraft HUD varies by resource pack, scale, biome, and lighting. | Use anchored regions, confidence thresholds, asset fixtures, and documented fallback OCR where needed. |
 | Supported-use gates regress under foreground changes. | Re-evaluate profile scope on foreground change and manually verify unknown-scope suppression. |
 | Shell/launch tools expand local agency. | Require narrow allowlists, reject broad regex, cap output/time, and log every execution. |

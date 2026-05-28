@@ -9,6 +9,10 @@ use synapse_hid_host::{
 use super::{HardwareGateway, send_empty_if_zero, sleep_ms};
 use crate::{ActionError, EmitState, sample_curve};
 
+const HARDWARE_MOUSE_COALESCE_WINDOW_MS: u32 = 2;
+const FIRMWARE_MOUSE_DELTA_MIN: i32 = -127;
+const FIRMWARE_MOUSE_DELTA_MAX: i32 = 127;
+
 pub(super) fn move_relative<G>(gateway: &mut G, dx: f32, dy: f32) -> Result<(), ActionError>
 where
     G: HardwareGateway,
@@ -92,6 +96,7 @@ where
     for point in samples.into_iter().skip(1) {
         append_relative_deltas_to_point(&mut current, point, &mut deltas);
     }
+    let deltas = coalesce_relative_deltas_for_curve(&deltas, duration_ms);
     send_relative_deltas(gateway, &deltas)
 }
 
@@ -99,6 +104,74 @@ where
 struct RelativeMouseDelta {
     dx: i16,
     dy: i16,
+}
+
+fn coalesce_relative_deltas_for_curve(
+    deltas: &[RelativeMouseDelta],
+    duration_ms: u32,
+) -> Vec<RelativeMouseDelta> {
+    if duration_ms == 0 || deltas.len() < 2 {
+        return deltas.to_vec();
+    }
+
+    let segment_count = deltas.len();
+    let mut coalesced = Vec::with_capacity(deltas.len());
+    let mut group_start_index = 0_usize;
+    let mut pending = deltas[0];
+
+    for (index, delta) in deltas.iter().copied().enumerate().skip(1) {
+        if within_coalesce_window(group_start_index, index, duration_ms, segment_count)
+            && let Some(merged) = merge_relative_delta(pending, delta)
+        {
+            pending = merged;
+            continue;
+        }
+
+        coalesced.push(pending);
+        pending = delta;
+        group_start_index = index;
+    }
+
+    coalesced.push(pending);
+    coalesced
+}
+
+fn within_coalesce_window(
+    group_start_index: usize,
+    candidate_index: usize,
+    duration_ms: u32,
+    segment_count: usize,
+) -> bool {
+    let elapsed_units = (candidate_index - group_start_index) as u128 * u128::from(duration_ms);
+    let limit_units = u128::from(HARDWARE_MOUSE_COALESCE_WINDOW_MS) * segment_count as u128;
+    elapsed_units <= limit_units
+}
+
+fn merge_relative_delta(
+    current: RelativeMouseDelta,
+    next: RelativeMouseDelta,
+) -> Option<RelativeMouseDelta> {
+    if !same_direction_or_zero(current.dx, next.dx) || !same_direction_or_zero(current.dy, next.dy)
+    {
+        return None;
+    }
+
+    let dx = i32::from(current.dx) + i32::from(next.dx);
+    let dy = i32::from(current.dy) + i32::from(next.dy);
+    if !(FIRMWARE_MOUSE_DELTA_MIN..=FIRMWARE_MOUSE_DELTA_MAX).contains(&dx)
+        || !(FIRMWARE_MOUSE_DELTA_MIN..=FIRMWARE_MOUSE_DELTA_MAX).contains(&dy)
+    {
+        return None;
+    }
+
+    Some(RelativeMouseDelta {
+        dx: i16::try_from(dx).unwrap_or_else(|_| unreachable!("dx range checked above")),
+        dy: i16::try_from(dy).unwrap_or_else(|_| unreachable!("dy range checked above")),
+    })
+}
+
+const fn same_direction_or_zero(current: i16, next: i16) -> bool {
+    current == 0 || next == 0 || (current > 0) == (next > 0)
 }
 
 fn send_relative_deltas<G>(
@@ -168,7 +241,10 @@ fn screen_aim_target(target: &AimTarget) -> Result<Point, ActionError> {
 }
 
 fn clamp_relative_step(value: i64) -> i16 {
-    let step = value.clamp(-127, 127);
+    let step = value.clamp(
+        i64::from(FIRMWARE_MOUSE_DELTA_MIN),
+        i64::from(FIRMWARE_MOUSE_DELTA_MAX),
+    );
     i16::try_from(step).unwrap_or_else(|_| unreachable!("step is clamped to i16 range"))
 }
 
@@ -266,5 +342,42 @@ fn firmware_button(button: MouseButton) -> Result<u8, ActionError> {
             detail: "hardware firmware supports only left, right, and middle mouse buttons"
                 .to_owned(),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{RelativeMouseDelta, coalesce_relative_deltas_for_curve};
+
+    #[test]
+    fn coalesce_relative_deltas_preserves_sign_reversals() {
+        let deltas = [
+            RelativeMouseDelta { dx: 5, dy: 0 },
+            RelativeMouseDelta { dx: -5, dy: 0 },
+            RelativeMouseDelta { dx: 5, dy: 0 },
+        ];
+
+        let coalesced = coalesce_relative_deltas_for_curve(&deltas, 1);
+
+        assert_eq!(coalesced, deltas);
+    }
+
+    #[test]
+    fn coalesce_relative_deltas_respects_firmware_delta_range() {
+        let deltas = [
+            RelativeMouseDelta { dx: 90, dy: 0 },
+            RelativeMouseDelta { dx: 50, dy: 0 },
+            RelativeMouseDelta { dx: 30, dy: 0 },
+        ];
+
+        let coalesced = coalesce_relative_deltas_for_curve(&deltas, 1);
+
+        assert_eq!(
+            coalesced,
+            [
+                RelativeMouseDelta { dx: 90, dy: 0 },
+                RelativeMouseDelta { dx: 80, dy: 0 }
+            ]
+        );
     }
 }
