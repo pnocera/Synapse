@@ -33,6 +33,7 @@ const FLOOR_ROUTE_CONNECT_RADIUS: f64 = 96.0;
 const FLOOR_ROUTE_NODE_PRECISION: f64 = 4.0;
 const FLOOR_ROUTE_REACHED_XY_DISTANCE: f64 = 6.0;
 const FLOOR_ROUTE_REACHED_Z_DISTANCE: f64 = 6.0;
+const FLOOR_ROUTE_SEGMENT_PROXIMITY_DISTANCE: f64 = 8.0;
 const MAX_GUIDANCE_STEP_DISTANCE: f64 = 64.0;
 const MIN_SEGMENT_LENGTH: f64 = 1.0;
 
@@ -1135,18 +1136,68 @@ fn select_guidance_nodes(nodes: &[MapRouteNode], max_guidance: usize) -> Vec<Map
 }
 
 fn prune_reached_floor_route_nodes(nodes: &mut Vec<MapRouteNode>, current: &EverQuestMapCoord) {
-    let reached_count = nodes
-        .iter()
-        .take_while(|node| floor_route_node_reached(current, &node.location))
-        .count();
-    if reached_count > 0 {
-        nodes.drain(0..reached_count);
+    while let Some(first) = nodes.first() {
+        if floor_route_node_reached(current, &first.location)
+            || floor_route_segment_start_reached(nodes, current)
+        {
+            nodes.remove(0);
+            continue;
+        }
+        break;
     }
 }
 
 fn floor_route_node_reached(current: &EverQuestMapCoord, node: &EverQuestMapCoord) -> bool {
     horizontal_distance(current, node) <= FLOOR_ROUTE_REACHED_XY_DISTANCE
         && (current.z - node.z).abs() <= FLOOR_ROUTE_REACHED_Z_DISTANCE
+}
+
+fn floor_route_segment_start_reached(nodes: &[MapRouteNode], current: &EverQuestMapCoord) -> bool {
+    let [start, next, ..] = nodes else {
+        return false;
+    };
+    let Some(projection) = segment_projection(current, &start.location, &next.location) else {
+        return false;
+    };
+    projection.ratio > 0.0
+        && projection.ratio < 1.0
+        && projection.distance_from_start >= FLOOR_ROUTE_REACHED_XY_DISTANCE
+        && projection.distance_to_segment <= FLOOR_ROUTE_SEGMENT_PROXIMITY_DISTANCE
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SegmentProjection {
+    ratio: f64,
+    distance_from_start: f64,
+    distance_to_segment: f64,
+}
+
+fn segment_projection(
+    current: &EverQuestMapCoord,
+    start: &EverQuestMapCoord,
+    end: &EverQuestMapCoord,
+) -> Option<SegmentProjection> {
+    let dx = end.x - start.x;
+    let dy = end.y - start.y;
+    let dz = end.z - start.z;
+    let segment_len_squared = dx.mul_add(dx, dy.mul_add(dy, dz * dz));
+    if segment_len_squared <= f64::EPSILON {
+        return None;
+    }
+    let from_start_x = current.x - start.x;
+    let from_start_y = current.y - start.y;
+    let from_start_z = current.z - start.z;
+    let ratio =
+        from_start_x.mul_add(dx, from_start_y.mul_add(dy, from_start_z * dz)) / segment_len_squared;
+    if !(0.0..=1.0).contains(&ratio) {
+        return None;
+    }
+    let projected = lerp_coord(start, end, ratio);
+    Some(SegmentProjection {
+        ratio,
+        distance_from_start: distance(start, &projected),
+        distance_to_segment: distance(current, &projected),
+    })
 }
 
 fn horizontal_distance(left: &EverQuestMapCoord, right: &EverQuestMapCoord) -> f64 {
@@ -1587,6 +1638,74 @@ mod tests {
         assert_eq!(nodes.len(), 1);
         assert_eq!(nodes[0].source_line_number, 11);
         assert_eq!(nodes[0].location.x, 90.0);
+    }
+
+    #[test]
+    fn z_level_route_skips_segment_start_when_current_is_on_segment() {
+        let mut nodes = vec![
+            MapRouteNode {
+                location: EverQuestMapCoord {
+                    x: -34.8122,
+                    y: -195.0499,
+                    z: 4.0505,
+                },
+                source_path: "neriaka.txt".to_owned(),
+                source_line_number: 1753,
+            },
+            MapRouteNode {
+                location: EverQuestMapCoord {
+                    x: -41.75086666666667,
+                    y: -148.69586666666666,
+                    z: 7.525066666666667,
+                },
+                source_path: "neriaka.txt".to_owned(),
+                source_line_number: 1755,
+            },
+        ];
+        let current = EverQuestMapCoord {
+            x: -35.4,
+            y: -183.2,
+            z: 6.93,
+        };
+
+        prune_reached_floor_route_nodes(&mut nodes, &current);
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].source_line_number, 1755);
+    }
+
+    #[test]
+    fn z_level_route_keeps_segment_start_when_current_is_off_segment() {
+        let mut nodes = vec![
+            MapRouteNode {
+                location: EverQuestMapCoord {
+                    x: -34.8122,
+                    y: -195.0499,
+                    z: 4.0505,
+                },
+                source_path: "neriaka.txt".to_owned(),
+                source_line_number: 1753,
+            },
+            MapRouteNode {
+                location: EverQuestMapCoord {
+                    x: -41.75086666666667,
+                    y: -148.69586666666666,
+                    z: 7.525066666666667,
+                },
+                source_path: "neriaka.txt".to_owned(),
+                source_line_number: 1755,
+            },
+        ];
+        let current = EverQuestMapCoord {
+            x: -35.4,
+            y: -183.2,
+            z: 28.0,
+        };
+
+        prune_reached_floor_route_nodes(&mut nodes, &current);
+
+        assert_eq!(nodes.len(), 2);
+        assert_eq!(nodes[0].source_line_number, 1753);
     }
 
     #[test]
