@@ -121,6 +121,7 @@ mod everquest_scorecard;
 mod everquest_state;
 mod everquest_tools;
 mod everquest_trajectory;
+mod everquest_world_model;
 mod handler;
 mod health;
 mod m1_tools;
@@ -245,6 +246,7 @@ impl SynapseService {
             + Self::everquest_route_tool_router()
             + Self::everquest_scorecard_tool_router()
             + Self::everquest_trajectory_tool_router()
+            + Self::everquest_world_model_tool_router()
             + Self::m3_tool_router()
             + Self::m4_tool_router()
     }

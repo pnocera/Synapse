@@ -10,13 +10,17 @@ Source files covered:
 - `crates/synapse-mcp/src/server/everquest_outcome.rs`
 - `crates/synapse-mcp/src/server/everquest_guard.rs`
 - `crates/synapse-mcp/src/server/everquest_route.rs`
+- `crates/synapse-mcp/src/server/everquest_domain.rs`
+- `crates/synapse-mcp/src/server/everquest_trajectory.rs`
+- `crates/synapse-mcp/src/server/everquest_world_model.rs`
+- `crates/synapse-mcp/src/server/everquest_world_model/{model,validation}.rs`
 - `crates/synapse-mcp/src/server/everquest_scorecard.rs`
 - `crates/synapse-mcp/src/m1.rs` (+ `m1/{ocr, search, sources}.rs`)
 - `crates/synapse-mcp/src/m2/{aim, click, clipboard, drag, pad, press, release_all, scroll, type_text}.rs`
 - `crates/synapse-mcp/src/m3/{audio, audit_export, permissions, profile, profile_authoring, profile_quality, profile_registry, reflex, replay, subscribe}.rs`
 - `crates/synapse-core/src/types.rs`
 
-All 65 live tools are registered on `SynapseService` via `#[tool(description=...)]` in `server.rs`. Tool descriptions are taken verbatim from the source. Every tool returns through `Json<T>` so the response shape exactly matches the deserialized response struct.
+All 67 live tools are registered on `SynapseService` via `#[tool(description=...)]` in `server.rs`. Tool descriptions are taken verbatim from the source. Every tool returns through `Json<T>` so the response shape exactly matches the deserialized response struct.
 
 Default error response shape (all tools): `ErrorData { code: rmcp::ErrorCode(-32099), message, data: { "code": <SCREAMING_SNAKE_CASE> } }` via `crates/synapse-mcp/src/m1.rs::mcp_error`.
 
@@ -413,7 +417,49 @@ The tool rejects missing linked rows, duplicate transition ids, non-increasing s
 
 Manual FSV must read `CF_KV`, source CF counts/samples, EQ log bytes, and the JSONL file path before the trigger, call the real MCP tool with known linked source refs, then separately inspect the persisted trajectory row and export artifact afterward.
 
-## 9l. `everquest_action_prior_record`
+## 9l. `everquest_world_model_record`
+
+**Description:** "Persist one compact EverQuest world-model row under an approved CF_KV prefix with exact readback"
+**Side effects:** validates one compact world-model payload, writes `CF_KV` under an approved EverQuest world-model prefix, then reads the exact row back before returning.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `row_kind` | `EverQuestWorldModelKind` | yes | - | `map`, `zone_graph`, `state`, `transition`, `trajectory`, `planner`, or `surprise` |
+| `row_id` | `String` | yes | - | ASCII id used in the row key |
+| `profile_id` | `String` | no | `everquest.live` | EverQuest profile id; other ids fail closed |
+| `payload` | `serde_json::Value` | yes | - | Nonempty JSON object, compact/redacted, max 8192 bytes by default |
+| `source_refs` | `Vec<EverQuestWorldModelSourceRef>` | yes | - | 1..=32 compact source provenance refs |
+| `write_mode` | `EverQuestWorldModelWriteMode` | no | `create` | `create` rejects existing keys; `replace` requires an existing key |
+| `retention_class` | `EverQuestWorldModelRetentionClass` | no | `strategic` | `strategic`, `episode`, or `scratch` |
+| `compact_redacted` | `bool` | no | `true` | Marks the payload as compact/redacted |
+| `max_payload_bytes` | `usize` | no | `8192` | Per-call payload cap, hard maximum 32768 |
+
+Approved key prefixes are `everquest/map/v1/everquest.live/`, `everquest/zone_graph/v1/everquest.live/`, `everquest/state/v1/everquest.live/`, `everquest/transition/v1/everquest.live/`, `everquest/trajectory/v1/everquest.live/`, `everquest/planner/v1/everquest.live/`, and `everquest/surprise/v1/everquest.live/`.
+
+**Returns:** `EverQuestWorldModelRecordResponse { ok, row_key, stored_value_len_bytes, updated_existing, row }`. The row includes schema version, timestamps, revision, previous payload hash on replace, payload hash/length, source refs, redaction flags, retention class/TTL, caps, and an evidence boundary that manual runtime FSV is still required.
+**Errors:** `TOOL_PARAMS_INVALID`, `STORAGE_WRITE_FAILED`, `STORAGE_READ_FAILED`, `STORAGE_CORRUPTED`, `TOOL_INTERNAL_ERROR`.
+
+The tool rejects invalid profile ids, invalid row ids, non-object or empty payloads, oversized payloads, missing source refs, malformed hashes, duplicate create writes, replace-without-existing-row, and payloads that appear to contain raw chat/message bodies.
+
+## 9m. `everquest_world_model_inspect`
+
+**Description:** "Inspect approved EverQuest world-model CF_KV prefixes, selected keys, counts, and redacted samples"
+**Side effects:** none beyond reading `CF_KV`.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `profile_id` | `String` | no | `everquest.live` | EverQuest profile id; other ids fail closed |
+| `row_kind` | `Option<EverQuestWorldModelKind>` | no | - | Restrict counts/samples to one approved kind |
+| `row_key` | `Option<String>` | no | - | Selected key readback; must start with an approved prefix |
+| `sample_limit` | `usize` | no | `8` | 1..=64 samples per scanned kind |
+| `include_payload` | `bool` | no | `false` | Include compact payloads in samples when explicitly requested |
+
+**Returns:** `EverQuestWorldModelInspectResponse { ok, profile_id, cf_name, counts, samples, selected }`. Counts are bounded by the scan cap; samples include row key, value length, revision, payload hash, and redaction state.
+**Errors:** `TOOL_PARAMS_INVALID`, `STORAGE_READ_FAILED`, `STORAGE_CORRUPTED`, `TOOL_INTERNAL_ERROR`.
+
+Manual FSV for both #513 tools must read `CF_KV` before the trigger, call the real MCP tool with known synthetic world-model data, then separately read selected keys, prefix counts, and storage/WAL state afterward. These tools are storage/readback surfaces, not FSV scripts and not gameplay-progress proof.
+
+## 9n. `everquest_action_prior_record`
 
 **Description:** "Persist one EverQuest action-prior prediction/outcome sample with computed correctness and exact CF_KV readback"
 **Side effects:** validates a redacted prediction/outcome sample, computes correctness, writes `CF_KV/everquest/action_prior_eval/v1/everquest.live/<sample_id>`, then reads that exact row back before returning.
@@ -433,7 +479,7 @@ Manual FSV must read `CF_KV`, source CF counts/samples, EQ log bytes, and the JS
 **Returns:** `EverQuestActionPriorRecordResponse { ok, row_key, stored_value_len_bytes, sample }`. `sample.correctness.class` is one of `correct_top1`, `correct_top3`, `correct_context`, `wrong`, `abstained`, or `unknown_actual`; it also carries calibration bucket, useful flag, overconfident-wrong flag, and the evidence boundary that scorecards are not FSV.
 **Errors:** `TOOL_PARAMS_INVALID`, `STORAGE_WRITE_FAILED`, `STORAGE_READ_FAILED`, `STORAGE_CORRUPTED`, `TOOL_INTERNAL_ERROR`.
 
-## 9m. `everquest_action_prior_scorecard`
+## 9o. `everquest_action_prior_scorecard`
 
 **Description:** "Aggregate persisted EverQuest action-prior samples into a floor-not-ceiling competence scorecard with exact CF_KV readback"
 **Side effects:** reads named eval rows from `CF_KV`, writes `CF_KV/everquest/action_prior_scorecard/v1/everquest.live/<window_id>`, then reads that exact row back before returning.

@@ -16,8 +16,9 @@
    #527 adds EverQuest route-plan rows, #525 adds EverQuest current-map sensor
    rows, #514 adds EverQuest planner guard-decision rows, #511 adds the
    EverQuest DynamicJEPA domain normalizer, #512 adds linked trajectory rows
-   from action/observation/event/log evidence, and #531 adds EverQuest
-   action-prior sample/scorecard tools, bringing the live surface to 65. Any
+   from action/observation/event/log evidence, #513 adds EverQuest
+   world-model record/inspect storage surfaces, and #531 adds EverQuest
+   action-prior sample/scorecard tools, bringing the live surface to 67. Any
    further agent-facing tools require an ADR-approved cap change.
    Overlapping tools merge. Profile and parameter knobs are the escape hatches.
 2. **One tool, one verb.** No `do_everything(action_kind, ...)` mega-tools.
@@ -35,7 +36,8 @@ visible chat-buffer pollution readback that also gates `/loc`, #510 adds
 `everquest_outcome_ingest`, #528 adds `everquest_memory_record` plus
 `everquest_memory_consult`, #514 adds `everquest_planner_guard`, #527 adds
 `everquest_route_plan`, #525 adds `everquest_map_sensor`, #511 adds
-`everquest_domain_normalize`, #512 adds `everquest_trajectory_record`, and #531 adds
+`everquest_domain_normalize`, #512 adds `everquest_trajectory_record`, #513 adds
+`everquest_world_model_record` plus `everquest_world_model_inspect`, and #531 adds
 `everquest_action_prior_record` plus `everquest_action_prior_scorecard`. M4 adds `act_combo`, `act_run_shell`, and
 `act_launch`; M5 adds local profile-registry/audit quality scoring, authoring
 candidates, registry row operations, import/export, audit intelligence, and
@@ -114,10 +116,12 @@ future `tools/list` snapshots in #447/#448.
 | 61 | `everquest_route_plan` | write/read | stores one bounded route plan from current state to a local map landmark/zone line without movement |
 | 62 | `everquest_domain_normalize` | write/read | stores the EverQuest DynamicJEPA domain pack plus typed state/action/outcome/transition rows |
 | 63 | `everquest_trajectory_record` | write/read | stores one ordered trajectory from linked action/observation/event/log/state evidence and writes a JSONL provenance artifact |
-| 64 | `everquest_action_prior_record` | write/read | stores one prediction/outcome sample under `CF_KV` with computed correctness and exact readback |
-| 65 | `everquest_action_prior_scorecard` | write/read | aggregates stored samples into a floor-not-ceiling competence scorecard row and reads it back |
+| 64 | `everquest_world_model_record` | write/read | stores one compact world-model row under an approved `CF_KV` prefix with exact readback |
+| 65 | `everquest_world_model_inspect` | read | inspects approved EverQuest world-model prefixes, selected keys, counts, and redacted samples |
+| 66 | `everquest_action_prior_record` | write/read | stores one prediction/outcome sample under `CF_KV` with computed correctness and exact readback |
+| 67 | `everquest_action_prior_scorecard` | write/read | aggregates stored samples into a floor-not-ceiling competence scorecard row and reads it back |
 
-M3 live count: 30 tools. Current live count: 65
+M3 live count: 30 tools. Current live count: 67
 tools.
 
 Deferred ideas from earlier drafts (`describe` and `read_hud`) are still not
@@ -137,6 +141,8 @@ for bounded candidate actions;
 `everquest_domain_normalize` is the #511 DynamicJEPA state/action/outcome
 domain-pack normalizer;
 `everquest_trajectory_record` is the #512 ordered trajectory row/export tool;
+`everquest_world_model_record` and `everquest_world_model_inspect` are the
+#513 approved-prefix storage/readback tools;
 `everquest_action_prior_record` and `everquest_action_prior_scorecard` are the
 #531 competence scorecard tools;
 `act_combo`, `act_run_shell`, and `act_launch` remain the M4 phase plan
@@ -1035,7 +1041,90 @@ Manual FSV must read `CF_KV`, source CF counts/samples, EQ log bytes, and the
 export-file path before the trigger, call this real MCP tool with known linked
 source refs, then separately inspect the trajectory row and JSONL artifact.
 
-### 3.13l `everquest_action_prior_record`
+### 3.13l `everquest_world_model_record`
+
+```json
+{
+  "name": "everquest_world_model_record",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["row_kind", "row_id", "payload", "source_refs"],
+    "properties": {
+      "row_kind": {"enum": ["map", "zone_graph", "state", "transition", "trajectory", "planner", "surprise"]},
+      "row_id": {"type": "string"},
+      "profile_id": {"type": "string", "default": "everquest.live"},
+      "payload": {"type": "object"},
+      "source_refs": {"type": "array", "minItems": 1, "maxItems": 32, "items": {"type": "object"}},
+      "write_mode": {"enum": ["create", "replace"], "default": "create"},
+      "retention_class": {"enum": ["strategic", "episode", "scratch"], "default": "strategic"},
+      "compact_redacted": {"type": "boolean", "default": true},
+      "max_payload_bytes": {"type": "integer", "minimum": 1, "maximum": 32768, "default": 8192}
+    }
+  }
+}
+```
+
+`everquest_world_model_record` persists one compact #513 world-model row in
+`CF_KV` using only approved prefixes:
+
+- `everquest/map/v1/everquest.live/<row_id>`
+- `everquest/zone_graph/v1/everquest.live/<row_id>`
+- `everquest/state/v1/everquest.live/<row_id>`
+- `everquest/transition/v1/everquest.live/<row_id>`
+- `everquest/trajectory/v1/everquest.live/<row_id>`
+- `everquest/planner/v1/everquest.live/<row_id>`
+- `everquest/surprise/v1/everquest.live/<row_id>`
+
+Rows include schema version, profile id, world-model kind, row id/key,
+created/updated timestamps, revision, previous payload hash on replace,
+payload SHA-256/length, compact source provenance refs, redaction flags,
+retention class, hard caps, and an evidence-boundary block stating that runtime
+manual FSV is still required. Strategic rows have no TTL and are pressure
+preserved; episode rows use a 30-day TTL; scratch rows use a 24-hour TTL and
+are not pressure preserved.
+
+The writer rejects non-`everquest.live` profiles, invalid row ids, empty or
+non-object payloads, payloads over the declared/hard cap, missing source refs,
+too many source refs, malformed SHA-256 refs, duplicate create writes,
+replace-without-existing-row, and payload keys/strings that look like raw
+chat/message bodies. Raw chat bodies and raw target names are not persisted.
+
+Manual FSV must read `CF_KV` before the trigger, call this real MCP tool with
+known synthetic payloads and source refs, then separately inspect the selected
+row and storage/WAL state afterward. This tool is a storage/readback surface,
+not an FSV script or gameplay-success proof.
+
+### 3.13m `everquest_world_model_inspect`
+
+```json
+{
+  "name": "everquest_world_model_inspect",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {
+      "profile_id": {"type": "string", "default": "everquest.live"},
+      "row_kind": {"enum": ["map", "zone_graph", "state", "transition", "trajectory", "planner", "surprise"]},
+      "row_key": {"type": "string"},
+      "sample_limit": {"type": "integer", "minimum": 1, "maximum": 64, "default": 8},
+      "include_payload": {"type": "boolean", "default": false}
+    }
+  }
+}
+```
+
+`everquest_world_model_inspect` reads `CF_KV` counts and redacted samples for
+the approved #513 world-model prefixes. It can also read a selected key when
+the key starts with one of the approved `everquest/.../v1/everquest.live/`
+prefixes. Counts are bounded by the tool scan cap, and samples omit payloads
+unless `include_payload=true` is explicitly requested.
+
+This is the normal compact readback surface for planners, ContextGraph export,
+surprise detection, and manual FSV evidence. It does not parse raw EQ logs or
+drive game input.
+
+### 3.13n `everquest_action_prior_record`
 
 ```json
 {
@@ -1094,7 +1183,7 @@ an FSV substitute. Manual FSV must still read storage state before the trigger,
 call the tool with known synthetic prediction/outcome inputs, and separately
 read `storage_inspect` or another physical storage readback after the write.
 
-### 3.13m `everquest_action_prior_scorecard`
+### 3.13o `everquest_action_prior_scorecard`
 
 ```json
 {
@@ -2407,6 +2496,20 @@ profile-authoring and audit-export defaults below.
 | `everquest_trajectory_record` | `transitions` | required; no default | #512 |
 | `everquest_trajectory_record` | `source_refs` | `[]`; runtime requires at least one | #512 |
 | `everquest_trajectory_record` | `export_jsonl` | `true` | #512 |
+| `everquest_world_model_record` | `row_kind` | required; no default | #513 |
+| `everquest_world_model_record` | `row_id` | required; no default | #513 |
+| `everquest_world_model_record` | `profile_id` | `"everquest.live"` | #513 |
+| `everquest_world_model_record` | `payload` | required object; no default | #513 |
+| `everquest_world_model_record` | `source_refs` | required; runtime requires at least one | #513 |
+| `everquest_world_model_record` | `write_mode` | `"create"` | #513 |
+| `everquest_world_model_record` | `retention_class` | `"strategic"` | #513 |
+| `everquest_world_model_record` | `compact_redacted` | `true` | #513 |
+| `everquest_world_model_record` | `max_payload_bytes` | `8192` | #513 |
+| `everquest_world_model_inspect` | `profile_id` | `"everquest.live"` | #513 |
+| `everquest_world_model_inspect` | `row_kind` | omitted; scans all approved kinds | #513 |
+| `everquest_world_model_inspect` | `row_key` | omitted; no selected row | #513 |
+| `everquest_world_model_inspect` | `sample_limit` | `8` | #513 |
+| `everquest_world_model_inspect` | `include_payload` | `false` | #513 |
 | `everquest_action_prior_record` | `sample_id` | required; no default | #531 |
 | `everquest_action_prior_record` | `profile_id` | `"everquest.live"` | #531 |
 | `everquest_action_prior_record` | `prediction_id` | required; no default | #531 |

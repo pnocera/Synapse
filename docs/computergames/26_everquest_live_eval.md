@@ -389,6 +389,37 @@ ContextGraph/DynamicJEPA exports and model scorecards. They are not scripts,
 training jobs, or FSV substitutes. Manual FSV must still read the physical
 storage rows and export file before and after the real MCP trigger.
 
+## World-Model Prefix Rows
+
+#513 adds durable, compact EverQuest world-model storage prefixes and readback
+surfaces without bloating generic observation rows. The runtime writer stores
+only approved `CF_KV` keys:
+
+- `everquest/map/v1/everquest.live/<row_id>`
+- `everquest/zone_graph/v1/everquest.live/<row_id>`
+- `everquest/state/v1/everquest.live/<row_id>`
+- `everquest/transition/v1/everquest.live/<row_id>`
+- `everquest/trajectory/v1/everquest.live/<row_id>`
+- `everquest/planner/v1/everquest.live/<row_id>`
+- `everquest/surprise/v1/everquest.live/<row_id>`
+
+Every row carries schema version, profile id, world-model kind, row key,
+created/updated timestamps, revision, payload hash/length, compact source refs,
+redaction flags, retention class, caps, and an evidence boundary saying manual
+runtime FSV is still required. Strategic rows have no TTL and are pressure
+preserved; episode rows use 30-day TTL; scratch rows use 24-hour TTL.
+
+`everquest_world_model_inspect` is the compact readback surface for counts,
+selected keys, and redacted samples from those prefixes. It is meant for
+planners, ContextGraph/DynamicJEPA export, surprise detection, and manual FSV
+evidence. Raw chat/message payloads and raw target-name style data must be
+rejected before storage.
+
+Manual FSV for these rows reads `CF_KV` before the trigger, calls the real MCP
+tool with known synthetic world-model data, then separately reads the selected
+key, prefix counts, and storage/WAL state afterward. These rows are not
+movement, combat, level-progress, or gameplay-success proof by themselves.
+
 ## Action-Prior Scorecard Rows
 
 #531 adds the runtime storage surface for measuring whether the EverQuest world
@@ -462,6 +493,7 @@ GitHub issues remain the canonical coordination state:
 | #510 | Current-state estimator fusing logs, `/loc`, map, HUD, and action audit |
 | #511 | EverQuest DynamicJEPA state/action/outcome domain pack |
 | #512 | Linked trajectory rows from Synapse audit rows plus EQ log events |
+| #513 | Durable world-model row prefixes and compact readback tools |
 | #514 | Planner guard-decision rows for bounded EverQuest candidates |
 | #517 | Stabilize EverQuest foreground before accepted action candidates |
 | #518 | Safe target/combat model for level-1 wizard leveling |

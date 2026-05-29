@@ -3,7 +3,7 @@ source: crates/synapse-mcp/tests/m4_tools_list.rs
 expression: snapshot
 ---
 {
-  "count": 65,
+  "count": 67,
   "m4_defaults": [
     {
       "actual": 33,
@@ -102,6 +102,8 @@ expression: snapshot
     "everquest_planner_guard",
     "everquest_route_plan",
     "everquest_trajectory_record",
+    "everquest_world_model_inspect",
+    "everquest_world_model_record",
     "find",
     "health",
     "observe",
