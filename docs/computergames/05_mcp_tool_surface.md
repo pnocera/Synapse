@@ -893,7 +893,9 @@ target label or zone-line in the current zone, writes
 route-plan row back. A ready plan contains current and target waypoints, map
 coordinates, distance, nearest labels, confidence, source refs, and guard
 requirements. The tool never executes movement; it emits bounded step-probe
-requirements for later attended action FSV.
+requirements for later attended action FSV. Floor-route guidance prunes already
+reached local map-line nodes before emitting the next waypoint so route rows do
+not steer back to a crossed guidance point.
 
 Unknown zone, missing `/loc`, absent target, stale state, or conflicting map
 calibration produce persisted abstain rows instead of guessed movement.

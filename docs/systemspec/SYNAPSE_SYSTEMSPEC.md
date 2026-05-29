@@ -4483,9 +4483,9 @@ Manual FSV must read the physical EQ log/UI/storage evidence first, call the rea
 | `state_override` | `Option<EverQuestRouteStateOverride>` | no | - | Synthetic/manual edge input with source refs |
 | `map_calibration` | `Option<EverQuestRouteMapCalibration>` | no | - | Optional map-window calibration used to detect conflicts |
 | `stale_after_seconds` | `u64` | no | `300` | Older current-state rows abstain |
-| `max_waypoints` | `usize` | no | `8` | Waypoint cap; allowed `2..=16` |
+| `max_waypoints` | `usize` | no | `8` | Waypoint cap; allowed `2..=32` |
 
-**Returns:** `EverQuestRoutePlanResponse { ok, row_key, stored_value_len_bytes, plan }`. Ready plans carry current and target waypoints, map coordinates, distance, nearest labels, source map lines, confidence, guard requirements, and evidence-boundary flags. Unknown zone, missing `/loc`, absent target, stale state, or conflicting map calibration persist abstain rows instead of guessed movement.
+**Returns:** `EverQuestRoutePlanResponse { ok, row_key, stored_value_len_bytes, plan }`. Ready plans carry current and target waypoints, map coordinates, distance, nearest labels, source map lines, confidence, guard requirements, and evidence-boundary flags. Floor-route guidance skips already reached local map-line nodes before choosing the next waypoint. Unknown zone, missing `/loc`, absent target, stale state, or conflicting map calibration persist abstain rows instead of guessed movement.
 **Errors:** `TOOL_PARAMS_INVALID`, `ACTION_TARGET_INVALID`, `STORAGE_READ_FAILED`, `STORAGE_WRITE_FAILED`, `STORAGE_CORRUPTED`, `TOOL_INTERNAL_ERROR`.
 
 Manual FSV must read the physical map/current-state SoT before the trigger, call the real MCP tool, then separately inspect the persisted `CF_KV` route-plan row. This tool does not execute movement.

@@ -31,6 +31,8 @@ const CALIBRATION_CONFLICT_DISTANCE: f64 = 150.0;
 const FLOOR_ROUTE_MIN_Z_DELTA: f64 = 8.0;
 const FLOOR_ROUTE_CONNECT_RADIUS: f64 = 96.0;
 const FLOOR_ROUTE_NODE_PRECISION: f64 = 4.0;
+const FLOOR_ROUTE_REACHED_XY_DISTANCE: f64 = 6.0;
+const FLOOR_ROUTE_REACHED_Z_DISTANCE: f64 = 6.0;
 const MAX_GUIDANCE_STEP_DISTANCE: f64 = 64.0;
 const MIN_SEGMENT_LENGTH: f64 = 1.0;
 
@@ -873,12 +875,11 @@ fn route_waypoints(
     floor_route_required: bool,
 ) -> Option<(Vec<EverQuestRouteWaypoint>, Option<f64>)> {
     let route_nodes = if floor_route_required {
-        Some(floor_route_nodes(
-            graph,
-            zone_short_name,
-            current_location,
-            target_landmark,
-        )?)
+        let mut nodes =
+            floor_route_nodes(graph, zone_short_name, current_location, target_landmark)?;
+        let current_coord = route_location_to_coord(current_location);
+        prune_reached_floor_route_nodes(&mut nodes, &current_coord);
+        Some(nodes)
     } else {
         None
     };
@@ -1131,6 +1132,27 @@ fn select_guidance_nodes(nodes: &[MapRouteNode], max_guidance: usize) -> Vec<Map
         }
     }
     selected
+}
+
+fn prune_reached_floor_route_nodes(nodes: &mut Vec<MapRouteNode>, current: &EverQuestMapCoord) {
+    let reached_count = nodes
+        .iter()
+        .take_while(|node| floor_route_node_reached(current, &node.location))
+        .count();
+    if reached_count > 0 {
+        nodes.drain(0..reached_count);
+    }
+}
+
+fn floor_route_node_reached(current: &EverQuestMapCoord, node: &EverQuestMapCoord) -> bool {
+    horizontal_distance(current, node) <= FLOOR_ROUTE_REACHED_XY_DISTANCE
+        && (current.z - node.z).abs() <= FLOOR_ROUTE_REACHED_Z_DISTANCE
+}
+
+fn horizontal_distance(left: &EverQuestMapCoord, right: &EverQuestMapCoord) -> f64 {
+    let dx = left.x - right.x;
+    let dy = left.y - right.y;
+    dx.hypot(dy)
 }
 
 fn expand_long_guidance_segments(nodes: &[MapRouteNode]) -> Vec<MapRouteNode> {
@@ -1530,6 +1552,41 @@ mod tests {
                 .any(|waypoint| waypoint.waypoint_kind == "map_line_guidance")
         );
         assert_eq!(row.waypoints.last().unwrap().label, "to_Nektulos_Forest");
+    }
+
+    #[test]
+    fn z_level_route_skips_reached_guidance_node() {
+        let mut nodes = vec![
+            MapRouteNode {
+                location: EverQuestMapCoord {
+                    x: 50.0,
+                    y: 0.0,
+                    z: 10.0,
+                },
+                source_path: "neriaka.txt".to_owned(),
+                source_line_number: 10,
+            },
+            MapRouteNode {
+                location: EverQuestMapCoord {
+                    x: 90.0,
+                    y: 0.0,
+                    z: 20.0,
+                },
+                source_path: "neriaka.txt".to_owned(),
+                source_line_number: 11,
+            },
+        ];
+        let current = EverQuestMapCoord {
+            x: 51.0,
+            y: 0.0,
+            z: 12.0,
+        };
+
+        prune_reached_floor_route_nodes(&mut nodes, &current);
+
+        assert_eq!(nodes.len(), 1);
+        assert_eq!(nodes[0].source_line_number, 11);
+        assert_eq!(nodes[0].location.x, 90.0);
     }
 
     #[test]
