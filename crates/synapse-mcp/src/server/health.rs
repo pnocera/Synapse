@@ -226,6 +226,16 @@ impl SynapseService {
                 Ok((source, policy)) => {
                     let emitter_available = state.emitter_available();
                     let operator_hotkey = synapse_action::operator_hotkey_status().label();
+                    let allow_shell = if self.m4_config.allow_shell_any() {
+                        "any".to_owned()
+                    } else {
+                        self.m4_config.allow_shell_count().to_string()
+                    };
+                    let allow_launch = if self.m4_config.allow_launch_any() {
+                        "any".to_owned()
+                    } else {
+                        self.m4_config.allow_launch_count().to_string()
+                    };
                     SubsystemHealth {
                         status: if emitter_available { "ok" } else { "error" }.to_owned(),
                         detail: Some(format!(
@@ -234,8 +244,8 @@ impl SynapseService {
                             state.recording_enabled(),
                             state.hardware_hid().unwrap_or("disabled"),
                             operator_hotkey,
-                            self.m4_config.allow_shell_count(),
-                            self.m4_config.allow_launch_count()
+                            allow_shell,
+                            allow_launch
                         )),
                         device_name: state.hardware_hid().map(str::to_owned),
                         backend_resolution: Some(backend_resolution_health(source, policy)),

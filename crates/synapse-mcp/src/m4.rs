@@ -27,6 +27,15 @@ const DEFAULT_SHELL_TIMEOUT_MS: u32 = 30_000;
 const DEFAULT_LAUNCH_TIMEOUT_MS: u32 = 10_000;
 const ALLOW_SHELL_ENV: &str = "SYNAPSE_ALLOW_SHELL";
 const ALLOW_LAUNCH_ENV: &str = "SYNAPSE_ALLOW_LAUNCH";
+/// Operator opt-in for unrestricted shell/launch. When truthy, the per-target
+/// allowlist is bypassed and any command/target is permitted. The action is
+/// still recorded in `CF_ACTION_LOG` and the mode is logged loudly at startup.
+/// Off by default so a stock daemon stays fail-closed.
+const ALLOW_SHELL_ANY_ENV: &str = "SYNAPSE_ALLOW_SHELL_ANY";
+const ALLOW_LAUNCH_ANY_ENV: &str = "SYNAPSE_ALLOW_LAUNCH_ANY";
+/// Sentinel recorded as the matched pattern when permissive mode authorizes a
+/// command/target without an allowlist entry.
+const ANY_PERMITTED_SENTINEL: &str = "__any_permitted__";
 const SHELL_OUTPUT_CAP_BYTES: usize = 1024 * 1024;
 const ALLOW_PATTERN_SIZE_LIMIT_BYTES: usize = 256 * 1024;
 const PROCESS_BASE_ENV_KEYS: [&str; 4] = ["PATH", "USERPROFILE", "TEMP", "SystemRoot"];
@@ -34,10 +43,15 @@ const LAUNCH_WINDOW_POLL_INTERVAL_MS: u64 = 20;
 pub const SHELL_PATTERN_TOO_BROAD: &str = "SHELL_PATTERN_TOO_BROAD";
 pub const LAUNCH_PATTERN_TOO_BROAD: &str = "LAUNCH_PATTERN_TOO_BROAD";
 
+// All fields are allowlist policy for the two gated tools; the shared `allow_`
+// prefix is intentional and reads clearly at call sites.
+#[allow(clippy::struct_field_names)]
 #[derive(Clone, Debug, Default)]
 pub struct M4ServiceConfig {
     allow_shell: Vec<AllowPattern>,
     allow_launch: Vec<AllowPattern>,
+    allow_shell_any: bool,
+    allow_launch_any: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -99,6 +113,22 @@ impl M4ServiceConfig {
         allow_shell: Vec<String>,
         allow_launch: Vec<String>,
     ) -> anyhow::Result<Self> {
+        let allow_shell_any = env_flag(ALLOW_SHELL_ANY_ENV);
+        let allow_launch_any = env_flag(ALLOW_LAUNCH_ANY_ENV);
+        if allow_shell_any {
+            tracing::warn!(
+                code = "M4_ALLOW_SHELL_ANY_ENABLED",
+                env = ALLOW_SHELL_ANY_ENV,
+                "act_run_shell permissive mode enabled: ALL shell commands are allowed (allowlist bypassed); every command is still recorded in CF_ACTION_LOG"
+            );
+        }
+        if allow_launch_any {
+            tracing::warn!(
+                code = "M4_ALLOW_LAUNCH_ANY_ENABLED",
+                env = ALLOW_LAUNCH_ANY_ENV,
+                "act_launch permissive mode enabled: ALL launch targets are allowed (allowlist bypassed); every launch is still recorded in CF_ACTION_LOG"
+            );
+        }
         Ok(Self {
             allow_shell: compile_allow_patterns(
                 ALLOW_SHELL_ENV,
@@ -110,6 +140,8 @@ impl M4ServiceConfig {
                 allow_launch,
                 AllowPatternPolicy::Launch,
             )?,
+            allow_shell_any,
+            allow_launch_any,
         })
     }
 
@@ -130,7 +162,20 @@ impl M4ServiceConfig {
         self.allow_launch.len()
     }
 
+    #[must_use]
+    pub const fn allow_shell_any(&self) -> bool {
+        self.allow_shell_any
+    }
+
+    #[must_use]
+    pub const fn allow_launch_any(&self) -> bool {
+        self.allow_launch_any
+    }
+
     fn shell_match<'a>(&'a self, command_line: &str) -> Option<&'a str> {
+        if self.allow_shell_any {
+            return Some(ANY_PERMITTED_SENTINEL);
+        }
         self.allow_shell
             .iter()
             .find(|pattern| pattern.regex.is_match(command_line))
@@ -138,11 +183,23 @@ impl M4ServiceConfig {
     }
 
     fn launch_match<'a>(&'a self, command_line: &str) -> Option<&'a str> {
+        if self.allow_launch_any {
+            return Some(ANY_PERMITTED_SENTINEL);
+        }
         self.allow_launch
             .iter()
             .find(|pattern| pattern.regex.is_match(command_line))
             .map(|pattern| pattern.raw.as_str())
     }
+}
+
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).is_ok_and(|value| {
+        matches!(
+            value.trim().to_ascii_lowercase().as_str(),
+            "1" | "true" | "yes" | "on"
+        )
+    })
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
