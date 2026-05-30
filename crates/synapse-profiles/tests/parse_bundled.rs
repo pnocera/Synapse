@@ -168,9 +168,29 @@ fn bundled_everquest_profile_targets_inventory_panel() -> Result<(), Box<dyn std
             h: 260,
         }
     ));
+    let map_window = profile
+        .hud
+        .iter()
+        .find(|field| field.name == "everquest.map_window_text")
+        .ok_or("everquest.map_window_text HUD field missing")?;
+    assert!(matches!(map_window.extractor, HudExtractor::WinrtOcr));
+    assert!(matches!(
+        map_window.region,
+        HudRegion::FractionOfWindow { x, y, w, h }
+            if (x - 0.00).abs() < f32::EPSILON
+                && (y - 0.10).abs() < f32::EPSILON
+                && (w - 0.22).abs() < f32::EPSILON
+                && (h - 0.45).abs() < f32::EPSILON
+    ));
+    assert!(matches!(
+        map_window.parser,
+        HudParser::Regex { ref pattern, group }
+            if pattern.contains("nektulos") && pattern.contains("search") && group == 1
+    ));
     assert!(
         profile.metadata["capability.observe.hud"].contains("visible Inventory character panel")
     );
+    assert!(profile.metadata["capability.observe.hud"].contains("everquest.map_window_text"));
     assert_eq!(profile.backends.mouse_default, Backend::Hardware);
     Ok(())
 }

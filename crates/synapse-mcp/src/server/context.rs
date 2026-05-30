@@ -885,6 +885,8 @@ mod scope_gate_tests {
             stored_event["data"]["observation_id"],
             stored_observation["observation_id"]
         );
+        assert_eq!(stored_event["data"]["hud_fields"], json!([]));
+        assert_eq!(stored_event["data"]["hud_error_fields"], json!([]));
 
         let session_rows = runtime.storage_cf_tail_rows(cf::CF_SESSIONS, 1)?;
         let stored_session: Value = serde_json::from_slice(&session_rows[0].1)?;

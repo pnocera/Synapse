@@ -311,24 +311,32 @@ from full-audit-corrected predictions without storing raw chat/log bodies.
 ## Current-Map Sensor Rows
 
 #525 adds `everquest_map_sensor`, the runtime surface for turning visible map
-evidence into compact map-calibration/readback rows. The tool reads the
-persisted current-state row, visible-map evidence from an observe/screenshot
-readback, and the local `maps/*.txt` file for the current zone, then writes:
+evidence into compact map-calibration/readback rows. #509 extends the live
+EverQuest profile with the bounded `everquest.map_window_text` HUD OCR crop
+for the saved top-left map-window layout and lets the sensor auto-promote that
+crop into visible-map evidence only when map UI, current-zone, or local
+map-label signals agree. The tool reads the
+persisted current-state row, visible-map evidence from either the bounded
+profile HUD crop or an explicit observe/screenshot readback, and the local
+`maps/*.txt` file for the current zone, then writes:
 
 - `CF_KV/everquest/map_sensor/v1/everquest.live/<sensor_id>` for calibrated or
   fail-closed current-map sensor state.
 
 Rows contain the foreground EQ window identity, visible map bounds/confidence,
 current `/loc`, map file SHA-256/mtime/counts, nearest labels and exits,
-visible label or player-marker anchors, transform confidence, hazards, and
-source refs. Hidden maps, occlusion, stale current state, missing `/loc`,
+visible label or player-marker anchors, compact readable map UI summary,
+transform confidence, hazards, and source refs. Hidden maps, occlusion, stale current state, missing `/loc`,
 non-EQ foreground, zoom/pan changes after calibration, low visible confidence,
 or contradictory zone sources persist abstain rows instead of guessed
 calibration. Map-sensor rows do not execute movement.
 
 Manual FSV for map sensing reads the physical screenshot/observe crop, physical
 EQ log/current-state row, and local map file before the trigger, calls the real
-MCP tool, then separately reads the persisted `CF_KV` map-sensor row.
+MCP tool, then separately reads the persisted `CF_OBSERVATIONS`, `CF_EVENTS`,
+and `CF_KV` map-sensor rows. Event rows carry HUD field names/counts only; raw
+OCR remains in observation storage and sensor source refs store hashes and
+compact summaries instead of chat-like text.
 
 ## Map Data Provenance
 

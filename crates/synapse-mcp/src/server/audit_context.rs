@@ -580,6 +580,8 @@ fn observation_recorded_event(
             "process_name": observation.foreground.process_name,
             "hud_field_count": observation.hud.by_name.len(),
             "hud_error_count": observation.hud.errors.len(),
+            "hud_fields": observation.hud.by_name.keys().cloned().collect::<Vec<_>>(),
+            "hud_error_fields": observation.hud.errors.keys().cloned().collect::<Vec<_>>(),
             "entity_count": observation.entities.len(),
             "element_count": observation.elements.len(),
             "capture_status": observation.diagnostics.capture_status,

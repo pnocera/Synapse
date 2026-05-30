@@ -4701,8 +4701,8 @@ Manual FSV must read the EQ log/config/map files and foreground state before the
 
 ## 9d. `everquest_map_sensor`
 
-**Description:** "Persist calibrated EverQuest visible-map sensor state from current-state, screenshot/observe evidence, and local map files"
-**Side effects:** reads the persisted current-state row by default, reads the current zone's local `maps/*.txt` file, fuses visible-map evidence from a separately inspected observe/screenshot source, writes `CF_KV/everquest/map_sensor/v1/everquest.live/<sensor_id>`, then reads the exact row back before returning.
+**Description:** "Persist calibrated EverQuest visible-map sensor state from current-state, bounded HUD/screenshot/observe evidence, and local map files"
+**Side effects:** reads the persisted current-state row by default, reads the current zone's local `maps/*.txt` file, fuses visible-map evidence from bounded `everquest.map_window_text` HUD OCR or a separately inspected observe/screenshot source, writes `CF_KV/everquest/map_sensor/v1/everquest.live/<sensor_id>`, then reads the exact row back before returning.
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
@@ -4710,15 +4710,15 @@ Manual FSV must read the EQ log/config/map files and foreground state before the
 | `profile_id` | `String` | no | `everquest.live` | EverQuest profile id; other ids fail closed |
 | `state_row_key` | `String` | no | `everquest/current_state/v1/everquest.live` | Current-state source row |
 | `state_override` | `Option<EverQuestMapSensorStateOverride>` | no | - | Synthetic/manual state input with source refs |
-| `visible_map_override` | `Option<EverQuestVisibleMapOverride>` | no | - | Verified visible-map evidence from observe/screenshot readback |
+| `visible_map_override` | `Option<EverQuestVisibleMapOverride>` | no | - | Optional explicit verified visible-map evidence from observe/screenshot readback |
 | `expected_zone_short_name` | `Option<String>` | no | - | Optional zone consistency guard |
 | `stale_after_seconds` | `u64` | no | `300` | Older current-state rows abstain |
 | `max_nearest_labels` | `usize` | no | `8` | Nearest landmark cap; max `16` |
 
-**Returns:** `EverQuestMapSensorResponse { ok, row_key, stored_value_len_bytes, sensor }`. Calibrated rows carry foreground proof, visible map bounds/confidence, current `/loc`, map file SHA-256/mtime/counts, nearest labels/exits, visible label or player-marker anchors, transform confidence, hazards, source refs, and evidence-boundary flags. Hidden maps, occlusion, stale current state, missing `/loc`, non-EQ foreground, zoom/pan changes, low visible confidence, or contradictory zone sources persist abstain rows instead of guessed calibration.
+**Returns:** `EverQuestMapSensorResponse { ok, row_key, stored_value_len_bytes, sensor }`. Calibrated rows carry foreground proof, visible map bounds/confidence, compact readable map UI summary, current `/loc`, map file SHA-256/mtime/counts, nearest labels/exits, visible label or player-marker anchors, transform confidence, hazards, source refs, and evidence-boundary flags. Hidden maps, occlusion, stale current state, missing `/loc`, non-EQ foreground, zoom/pan changes, low visible confidence, or contradictory zone sources persist abstain rows instead of guessed calibration.
 **Errors:** `TOOL_PARAMS_INVALID`, `ACTION_TARGET_INVALID`, `STORAGE_READ_FAILED`, `STORAGE_WRITE_FAILED`, `STORAGE_CORRUPTED`, `TOOL_INTERNAL_ERROR`.
 
-Manual FSV must read the physical screenshot/observe crop, physical EQ log/current-state row, and local map file before the trigger, call the real MCP tool, then separately inspect the persisted `CF_KV` map-sensor row. The tool does not execute movement.
+Manual FSV must read the physical screenshot/observe crop, physical EQ log/current-state row, and local map file before the trigger, call the real MCP tool, then separately inspect the persisted `CF_OBSERVATIONS`, `CF_EVENTS`, and `CF_KV` map-sensor rows. Event rows include bounded HUD field-name/count metadata, not raw OCR text. The tool does not execute movement.
 
 ## 9e. `everquest_outcome_ingest`
 

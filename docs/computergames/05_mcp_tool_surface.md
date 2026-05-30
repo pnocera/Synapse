@@ -864,20 +864,24 @@ separate source-of-truth read after the trigger.
 ```
 
 `everquest_map_sensor` reads the persisted current-state row by default, fuses
-visible map evidence from an observe/screenshot readback, reads the local map
-file and zone graph, writes
+visible map evidence from either the bounded `everquest.map_window_text` HUD
+OCR crop for the saved top-left map-window layout or an explicit
+observe/screenshot readback, reads the local map file and zone graph, writes
 `CF_KV/everquest/map_sensor/v1/everquest.live/<sensor_id>`, and reads the exact
 row back. Calibrated rows include foreground identity, visible map bounds,
 current `/loc`, map file SHA-256/mtime/counts, nearest labels and exits,
-visible label or player-marker anchors, transform confidence, hazards, and
-source refs. The tool does not execute movement.
+visible label or player-marker anchors, compact readable map UI summary,
+transform confidence, hazards, and source refs. The tool does not execute
+movement.
 
 Hidden maps, occlusion, stale current state, missing `/loc`, non-EQ foreground,
 zoom/pan changes after calibration, low visible confidence, or contradictory
 zone sources produce persisted fail-closed rows instead of guessed calibration.
 Manual FSV must read the physical screenshot/observe crop, EQ log/current-state
 row, and local map file before the trigger, call this real MCP tool, then
-separately inspect the `CF_KV` row afterward.
+separately inspect the `CF_OBSERVATIONS`, `CF_EVENTS`, and `CF_KV` rows
+afterward. Event rows include bounded HUD field-name/count metadata, not raw
+OCR text.
 
 ### 3.13e `everquest_outcome_ingest`
 
@@ -2940,7 +2944,7 @@ profile-authoring and audit-export defaults below.
 | `everquest_map_sensor` | `profile_id` | `"everquest.live"` | #525 |
 | `everquest_map_sensor` | `state_row_key` | `"everquest/current_state/v1/everquest.live"` | #525 |
 | `everquest_map_sensor` | `state_override` | omitted; reads storage current-state row | #525 |
-| `everquest_map_sensor` | `visible_map_override` | omitted; automatic detector fails closed without verified map evidence | #525 |
+| `everquest_map_sensor` | `visible_map_override` | omitted; automatic detector uses bounded `everquest.map_window_text` OCR and fails closed without verified map evidence | #509/#525 |
 | `everquest_map_sensor` | `expected_zone_short_name` | omitted | #525 |
 | `everquest_map_sensor` | `stale_after_seconds` | `300` | #525 |
 | `everquest_map_sensor` | `max_nearest_labels` | `8` | #525 |

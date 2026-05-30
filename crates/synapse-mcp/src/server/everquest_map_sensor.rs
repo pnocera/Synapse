@@ -1,8 +1,10 @@
+use std::collections::BTreeSet;
+
 use chrono::{DateTime, Utc};
 use rmcp::{ErrorData, schemars::JsonSchema};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use sha2::{Digest, Sha256};
-use synapse_core::{Rect, error_codes};
+use synapse_core::{HudReadings, HudValue, Rect, error_codes};
 use synapse_everquest::{
     EverQuestMapCoord, EverQuestMapFile, EverQuestZoneEdge, EverQuestZoneGraph,
     EverQuestZoneLandmark, build_zone_graph_from_root, parse_map_file,
@@ -27,6 +29,7 @@ const MAX_TEXT_BYTES: usize = 512;
 const MAX_SOURCE_REFS: usize = 32;
 const MAX_VISIBLE_LABELS: usize = 32;
 const MIN_VISIBLE_CONFIDENCE: f32 = 0.50;
+const MAP_WINDOW_HUD_FIELD: &str = "everquest.map_window_text";
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -152,6 +155,8 @@ pub struct EverQuestVisibleMapReadback {
     pub player_marker_screen: Option<EverQuestScreenPoint>,
     pub detected_labels: Vec<String>,
     pub source_mode: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ui_state_summary: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub note: Option<String>,
 }
@@ -349,7 +354,7 @@ impl SynapseService {
                 format!("{TOOL} could not build EverQuest zone graph: {error}"),
             )
         })?;
-        let row = map_sensor_row(&normalized, foreground, &source_state, &graph)?;
+        let row = map_sensor_row(&normalized, foreground, &input.hud, &source_state, &graph)?;
         let (sensor, stored_value_len_bytes) =
             self.persist_map_sensor_json(&normalized.row_key, &row)?;
         Ok(Json(EverQuestMapSensorResponse {
@@ -564,6 +569,7 @@ fn normalize_visible_map_override(
             player_marker_screen: visible.player_marker_screen,
             detected_labels,
             source_mode: "visible_map_override".to_owned(),
+            ui_state_summary: None,
             note: None,
         },
         source_refs,
@@ -577,13 +583,13 @@ fn normalize_visible_map_override(
 fn map_sensor_row(
     params: &NormalizedParams,
     foreground: EverQuestMapSensorForeground,
+    hud: &HudReadings,
     source: &MapSourceState,
     graph: &EverQuestZoneGraph,
 ) -> Result<EverQuestMapSensorRow, ErrorData> {
-    let visible_evidence = params
-        .visible_map_override
-        .clone()
-        .unwrap_or_else(|| auto_visible_map_evidence(&foreground));
+    let visible_evidence = params.visible_map_override.clone().unwrap_or_else(|| {
+        auto_visible_map_evidence(&foreground, hud, source.zone_short_name.as_deref(), None)
+    });
     let mut source_refs = source.source_refs.clone();
     source_refs.extend(visible_evidence.source_refs.clone());
     source_refs.truncate(MAX_SOURCE_REFS);
@@ -695,6 +701,15 @@ fn map_sensor_row(
         })
         .collect();
     row.nearest_exits = nearest_exits(graph, zone_short_name, current_location, 4);
+
+    if params.visible_map_override.is_none() {
+        let refined_visible_evidence =
+            auto_visible_map_evidence(&row.foreground, hud, Some(zone_short_name), Some(&map_file));
+        row.visible_map = refined_visible_evidence.readback;
+        row.source_refs.clone_from(&source.source_refs);
+        row.source_refs.extend(refined_visible_evidence.source_refs);
+        row.source_refs.truncate(MAX_SOURCE_REFS);
+    }
 
     if !row.visible_map.visible {
         let reason = row
@@ -969,7 +984,124 @@ fn map_foreground(foreground: &synapse_core::ForegroundContext) -> EverQuestMapS
     }
 }
 
-fn auto_visible_map_evidence(foreground: &EverQuestMapSensorForeground) -> VisibleMapEvidence {
+fn auto_visible_map_evidence(
+    foreground: &EverQuestMapSensorForeground,
+    hud: &HudReadings,
+    zone_short_name: Option<&str>,
+    map_file: Option<&EverQuestMapFile>,
+) -> VisibleMapEvidence {
+    let mut source_refs = vec![foreground_source_ref(foreground)];
+    let Some(reading) = hud.by_name.get(MAP_WINDOW_HUD_FIELD) else {
+        let note = hud.errors.get(MAP_WINDOW_HUD_FIELD).map_or_else(
+            || format!("HUD field {MAP_WINDOW_HUD_FIELD} is absent; map window is not verified"),
+            |error| {
+                format!(
+                    "HUD field {MAP_WINDOW_HUD_FIELD} failed with {}: {}",
+                    error.code,
+                    compact_summary_text(&error.detail, 180)
+                )
+            },
+        );
+        source_refs.push(EverQuestMapSensorSourceRef {
+            kind: "perception_hud".to_owned(),
+            row_key: None,
+            path: None,
+            line_number: None,
+            start_offset: None,
+            next_offset: None,
+            summary: Some(note.clone()),
+        });
+        return hidden_visible_map("hud_map_window_absent", note, source_refs);
+    };
+
+    let ui_tokens = map_ui_tokens(&reading.raw_text);
+    let detected_labels = map_file.map_or_else(Vec::new, |map| {
+        detected_map_labels_from_ocr(&reading.raw_text, map)
+    });
+    let zone_status = zone_ocr_status(&reading.raw_text, zone_short_name, &detected_labels);
+    let revision_hash = sha256_hex(reading.raw_text.as_bytes());
+    let revision_prefix = revision_hash.chars().take(16).collect::<String>();
+    let ui_state_summary = map_ui_state_summary(&ui_tokens, &detected_labels, zone_status);
+
+    source_refs.push(EverQuestMapSensorSourceRef {
+        kind: "perception_hud".to_owned(),
+        row_key: None,
+        path: None,
+        line_number: None,
+        start_offset: None,
+        next_offset: None,
+        summary: Some(map_hud_source_summary(
+            reading,
+            &ui_tokens,
+            &detected_labels,
+            zone_status,
+            &revision_prefix,
+        )),
+    });
+
+    if zone_status == ZoneOcrStatus::Contradictory {
+        return hidden_visible_map(
+            "hud_map_window_ocr_contradictory",
+            "bounded map OCR conflicted with the current zone and no local map-label anchor resolved",
+            source_refs,
+        );
+    }
+
+    let has_map_signal = !ui_tokens.is_empty()
+        || !detected_labels.is_empty()
+        || zone_status == ZoneOcrStatus::MatchedCurrentZone;
+    if !has_map_signal {
+        return hidden_visible_map(
+            "hud_map_window_no_map_signal",
+            "bounded map OCR did not contain map UI, current-zone, or local label evidence",
+            source_refs,
+        );
+    }
+
+    let confidence = auto_map_confidence(
+        reading.confidence,
+        &ui_tokens,
+        &detected_labels,
+        zone_status,
+    );
+    VisibleMapEvidence {
+        readback: EverQuestVisibleMapReadback {
+            visible: true,
+            bounds: map_window_ocr_bounds(foreground.window_bounds),
+            confidence,
+            occluded: false,
+            zoom_or_pan_changed: false,
+            visible_revision: Some(format!("hud:{revision_prefix}")),
+            player_marker_screen: None,
+            detected_labels,
+            source_mode: "hud_map_window_ocr".to_owned(),
+            ui_state_summary,
+            note: Some("bounded profile HUD OCR verified visible map-window evidence".to_owned()),
+        },
+        source_refs,
+    }
+}
+
+fn foreground_source_ref(foreground: &EverQuestMapSensorForeground) -> EverQuestMapSensorSourceRef {
+    EverQuestMapSensorSourceRef {
+        kind: "foreground_observation".to_owned(),
+        row_key: None,
+        path: None,
+        line_number: None,
+        start_offset: None,
+        next_offset: None,
+        summary: Some(format!(
+            "foreground hwnd={} process={} title={:?}",
+            foreground.hwnd, foreground.process_name, foreground.window_title
+        )),
+    }
+}
+
+fn hidden_visible_map(
+    source_mode: &str,
+    note: impl Into<String>,
+    source_refs: Vec<EverQuestMapSensorSourceRef>,
+) -> VisibleMapEvidence {
     VisibleMapEvidence {
         readback: EverQuestVisibleMapReadback {
             visible: false,
@@ -980,25 +1112,226 @@ fn auto_visible_map_evidence(foreground: &EverQuestMapSensorForeground) -> Visib
             visible_revision: None,
             player_marker_screen: None,
             detected_labels: Vec::new(),
-            source_mode: "foreground_auto_fail_closed".to_owned(),
-            note: Some(
-                "automatic map-window detector has no verified visible-map evidence; provide visible_map_override from a physical observe/screenshot readback"
-                    .to_owned(),
-            ),
+            source_mode: source_mode.to_owned(),
+            ui_state_summary: None,
+            note: Some(note.into()),
         },
-        source_refs: vec![EverQuestMapSensorSourceRef {
-            kind: "foreground_observation".to_owned(),
-            row_key: None,
-            path: None,
-            line_number: None,
-            start_offset: None,
-            next_offset: None,
-            summary: Some(format!(
-                "foreground hwnd={} process={} title={:?}",
-                foreground.hwnd, foreground.process_name, foreground.window_title
-            )),
-        }],
+        source_refs,
     }
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq)]
+enum ZoneOcrStatus {
+    Unknown,
+    MatchedCurrentZone,
+    Contradictory,
+}
+
+fn zone_ocr_status(
+    raw_text: &str,
+    zone_short_name: Option<&str>,
+    detected_labels: &[String],
+) -> ZoneOcrStatus {
+    let Some(zone_short_name) = zone_short_name else {
+        return ZoneOcrStatus::Unknown;
+    };
+    let normalized_text = normalize_label(raw_text);
+    let current_aliases = zone_title_aliases(zone_short_name);
+    if current_aliases
+        .iter()
+        .map(|alias| normalize_label(alias))
+        .any(|alias| !alias.is_empty() && normalized_text.contains(&alias))
+    {
+        return ZoneOcrStatus::MatchedCurrentZone;
+    }
+    if !detected_labels.is_empty() {
+        return ZoneOcrStatus::Unknown;
+    }
+    if conflicting_known_zone_alias_present(&normalized_text, zone_short_name) {
+        return ZoneOcrStatus::Contradictory;
+    }
+    ZoneOcrStatus::Unknown
+}
+
+fn conflicting_known_zone_alias_present(normalized_text: &str, zone_short_name: &str) -> bool {
+    ["neriaka", "neriakb", "neriakc", "nektulos"]
+        .into_iter()
+        .filter(|known_zone| !known_zone.eq_ignore_ascii_case(zone_short_name))
+        .flat_map(zone_title_aliases)
+        .map(|alias| normalize_label(&alias))
+        .any(|alias| !alias.is_empty() && normalized_text.contains(&alias))
+}
+
+fn zone_title_aliases(zone_short_name: &str) -> Vec<String> {
+    match zone_short_name.to_ascii_lowercase().as_str() {
+        "neriaka" => vec![
+            "neriaka".to_owned(),
+            "neriak".to_owned(),
+            "neriak foreign quarter".to_owned(),
+            "foreign quarter".to_owned(),
+        ],
+        "neriakb" => vec![
+            "neriakb".to_owned(),
+            "neriak".to_owned(),
+            "neriak commons".to_owned(),
+            "commons".to_owned(),
+        ],
+        "neriakc" => vec![
+            "neriakc".to_owned(),
+            "neriak".to_owned(),
+            "neriak third gate".to_owned(),
+            "third gate".to_owned(),
+        ],
+        "nektulos" => vec!["nektulos".to_owned(), "nektulos forest".to_owned()],
+        other => vec![other.to_owned()],
+    }
+}
+
+fn detected_map_labels_from_ocr(raw_text: &str, map_file: &EverQuestMapFile) -> Vec<String> {
+    let normalized_text = normalize_label(raw_text);
+    if normalized_text.is_empty() {
+        return Vec::new();
+    }
+    let mut seen = BTreeSet::new();
+    let mut labels = Vec::new();
+    for record in &map_file.records {
+        let synapse_everquest::EverQuestMapRecord::Point(point) = record else {
+            continue;
+        };
+        let normalized_label = normalize_label(&point.label);
+        if normalized_label.len() < 4 || point.label.len() > MAX_TEXT_BYTES {
+            continue;
+        }
+        if normalized_text.contains(&normalized_label) && seen.insert(normalized_label) {
+            labels.push(point.label.clone());
+        }
+        if labels.len() >= MAX_VISIBLE_LABELS {
+            break;
+        }
+    }
+    labels
+}
+
+fn map_ui_tokens(raw_text: &str) -> Vec<&'static str> {
+    let normalized = normalized_word_text(raw_text);
+    let mut tokens = Vec::new();
+    for (token, phrase) in [
+        ("map", "map"),
+        ("search", "search"),
+        ("find", "find"),
+        ("labels", "labels"),
+        ("height", "height"),
+        ("zoom", "zoom"),
+        ("auto_zoom", "auto zoom"),
+        ("zone_guide", "zone guide"),
+        ("base_layer", "base layer"),
+        ("layer", "layer"),
+    ] {
+        if normalized.split_whitespace().any(|word| word == phrase) || normalized.contains(phrase) {
+            tokens.push(token);
+        }
+    }
+    tokens
+}
+
+fn normalized_word_text(value: &str) -> String {
+    value
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character.to_ascii_lowercase()
+            } else {
+                ' '
+            }
+        })
+        .collect::<String>()
+}
+
+fn auto_map_confidence(
+    ocr_confidence: f32,
+    ui_tokens: &[&str],
+    detected_labels: &[String],
+    zone_status: ZoneOcrStatus,
+) -> f32 {
+    let mut confidence = ocr_confidence.clamp(0.0, 1.0);
+    if !ui_tokens.is_empty() {
+        confidence = confidence.max(0.60);
+    }
+    if zone_status == ZoneOcrStatus::MatchedCurrentZone {
+        confidence = confidence.max(0.72);
+    }
+    if !detected_labels.is_empty() {
+        confidence = confidence.max(0.78);
+    }
+    confidence.clamp(0.0, 0.95)
+}
+
+const fn map_window_ocr_bounds(window: Rect) -> Option<Rect> {
+    if window.w <= 0 || window.h <= 0 {
+        return None;
+    }
+    Some(Rect {
+        x: window.x,
+        y: window.y.saturating_add(window.h.saturating_mul(10) / 100),
+        w: window.w.saturating_mul(22) / 100,
+        h: window.h.saturating_mul(45) / 100,
+    })
+}
+
+fn map_ui_state_summary(
+    ui_tokens: &[&str],
+    detected_labels: &[String],
+    zone_status: ZoneOcrStatus,
+) -> Option<String> {
+    let mut parts = Vec::new();
+    if !ui_tokens.is_empty() {
+        parts.push(format!("ui={}", ui_tokens.join(",")));
+    }
+    if !detected_labels.is_empty() {
+        parts.push(format!("labels={}", detected_labels.len()));
+    }
+    parts.push(format!("zone={zone_status:?}"));
+    let summary = parts.join("; ");
+    if summary.is_empty() {
+        None
+    } else {
+        Some(summary)
+    }
+}
+
+fn map_hud_source_summary(
+    reading: &synapse_core::HudReading,
+    ui_tokens: &[&str],
+    detected_labels: &[String],
+    zone_status: ZoneOcrStatus,
+    revision_prefix: &str,
+) -> String {
+    let parsed = compact_hud_value(&reading.parsed);
+    compact_summary_text(
+        &format!(
+            "HUD field {MAP_WINDOW_HUD_FIELD}; confidence={:.3}; parsed={parsed}; ui_tokens={}; detected_labels={}; zone_status={zone_status:?}; raw_sha256_prefix={revision_prefix}",
+            reading.confidence,
+            ui_tokens.join(","),
+            detected_labels.len(),
+        ),
+        MAX_TEXT_BYTES,
+    )
+}
+
+fn compact_hud_value(value: &HudValue) -> String {
+    match value {
+        HudValue::Number(number) => format!("{number:.3}"),
+        HudValue::Text(text) | HudValue::Enum(text) => compact_summary_text(text, 80),
+        HudValue::Null => "null".to_owned(),
+    }
+}
+
+fn compact_summary_text(value: &str, max_chars: usize) -> String {
+    let compacted = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    if compacted.chars().count() <= max_chars {
+        return compacted;
+    }
+    compacted.chars().take(max_chars).collect()
 }
 
 fn landmark_from_zone_landmark(
@@ -1267,7 +1600,13 @@ mod tests {
         let foreground = foreground(true);
         let (_temp, graph) = graph_fixture();
 
-        let row = map_sensor_row(&params, foreground, &source, &graph)?;
+        let row = map_sensor_row(
+            &params,
+            foreground,
+            &HudReadings::default(),
+            &source,
+            &graph,
+        )?;
 
         assert_eq!(row.decision, "calibrated");
         let calibration = row.calibration.expect("calibration");
@@ -1285,6 +1624,101 @@ mod tests {
     }
 
     #[test]
+    fn auto_hud_map_ocr_calibrates_visible_label_anchor() -> Result<(), ErrorData> {
+        let mut params = params("auto-happy");
+        params.visible_map_override = None;
+        let source = source_state(Some("neriaka"), Some(location(154.0, 50.94, 31.19)), 0.95);
+        let hud = hud_map_text(
+            "Map Search Neriak - Foreign Quarter Labels to Nektulos Forest",
+            0.66,
+        );
+        let (_temp, graph) = graph_fixture();
+
+        let row = map_sensor_row(&params, foreground(true), &hud, &source, &graph)?;
+
+        assert_eq!(row.decision, "calibrated");
+        assert_eq!(row.visible_map.source_mode, "hud_map_window_ocr");
+        assert_eq!(
+            row.visible_map.bounds,
+            Some(Rect {
+                x: 0,
+                y: 108,
+                w: 422,
+                h: 486,
+            })
+        );
+        assert_eq!(
+            row.visible_map.detected_labels,
+            vec!["to_Nektulos_Forest".to_owned()]
+        );
+        assert!(
+            row.visible_map
+                .ui_state_summary
+                .as_deref()
+                .unwrap_or_default()
+                .contains("ui=")
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn auto_hud_map_ocr_without_labels_stays_uncalibrated() -> Result<(), ErrorData> {
+        let mut params = params("auto-no-labels");
+        params.visible_map_override = None;
+        let source = source_state(Some("neriaka"), Some(location(154.0, 50.94, 31.19)), 0.95);
+        let hud = hud_map_text("Map Search Neriak - Foreign Quarter Auto Zoom Labels", 0.66);
+        let (_temp, graph) = graph_fixture();
+
+        let row = map_sensor_row(&params, foreground(true), &hud, &source, &graph)?;
+
+        assert_eq!(row.decision, "uncalibrated_visible_map");
+        assert!(row.visible_map.visible);
+        assert!(row.visible_map.detected_labels.is_empty());
+        assert_eq!(row.hazards[0].code, "insufficient_visible_anchors");
+        Ok(())
+    }
+
+    #[test]
+    fn auto_hud_map_absent_abstains_closed() -> Result<(), ErrorData> {
+        let mut params = params("auto-hidden");
+        params.visible_map_override = None;
+        let source = source_state(Some("neriaka"), Some(location(154.0, 50.94, 31.19)), 0.95);
+        let (_temp, graph) = graph_fixture();
+
+        let row = map_sensor_row(
+            &params,
+            foreground(true),
+            &HudReadings::default(),
+            &source,
+            &graph,
+        )?;
+
+        assert_eq!(row.decision, "abstain_map_not_visible");
+        assert_eq!(row.visible_map.source_mode, "hud_map_window_absent");
+        assert!(!row.visible_map.visible);
+        Ok(())
+    }
+
+    #[test]
+    fn auto_hud_map_contradictory_zone_abstains_closed() -> Result<(), ErrorData> {
+        let mut params = params("auto-contradictory");
+        params.visible_map_override = None;
+        let source = source_state(Some("neriaka"), Some(location(154.0, 50.94, 31.19)), 0.95);
+        let hud = hud_map_text("Map Search Nektulos Forest", 0.70);
+        let (_temp, graph) = graph_fixture();
+
+        let row = map_sensor_row(&params, foreground(true), &hud, &source, &graph)?;
+
+        assert_eq!(row.decision, "abstain_map_not_visible");
+        assert_eq!(
+            row.visible_map.source_mode,
+            "hud_map_window_ocr_contradictory"
+        );
+        assert!(!row.visible_map.visible);
+        Ok(())
+    }
+
+    #[test]
     fn hidden_map_abstains_after_map_readback() -> Result<(), ErrorData> {
         let mut params = params("hidden");
         params.visible_map_override = Some(VisibleMapEvidence {
@@ -1298,6 +1732,7 @@ mod tests {
                 player_marker_screen: None,
                 detected_labels: Vec::new(),
                 source_mode: "visible_map_override".to_owned(),
+                ui_state_summary: None,
                 note: Some("synthetic hidden map".to_owned()),
             },
             source_refs: refs("manual_hidden"),
@@ -1306,6 +1741,7 @@ mod tests {
         let row = map_sensor_row(
             &params,
             foreground(true),
+            &HudReadings::default(),
             &source_state(Some("neriaka"), Some(location(154.0, 50.94, 31.19)), 0.95),
             &graph,
         )?;
@@ -1326,6 +1762,7 @@ mod tests {
         let row = map_sensor_row(
             &params,
             foreground(true),
+            &HudReadings::default(),
             &source_state(Some("neriaka"), Some(location(154.0, 50.94, 31.19)), 0.95),
             &graph,
         )?;
@@ -1343,6 +1780,7 @@ mod tests {
         let row = map_sensor_row(
             &params,
             foreground(true),
+            &HudReadings::default(),
             &source_state(Some("neriaka"), Some(location(154.0, 50.94, 31.19)), 0.95),
             &graph,
         )?;
@@ -1363,6 +1801,7 @@ mod tests {
         let row = map_sensor_row(
             &params,
             foreground(true),
+            &HudReadings::default(),
             &source_state(Some("neriaka"), Some(location(154.0, 50.94, 31.19)), 0.95),
             &graph,
         )?;
@@ -1394,6 +1833,7 @@ mod tests {
                     player_marker_screen: Some(EverQuestScreenPoint { x: 320.0, y: 260.0 }),
                     detected_labels: vec!["to_Nektulos_Forest".to_owned()],
                     source_mode: "visible_map_override".to_owned(),
+                    ui_state_summary: None,
                     note: None,
                 },
                 source_refs: refs("manual_visible_map"),
@@ -1436,6 +1876,20 @@ mod tests {
             next_offset: None,
             summary: Some("synthetic source".to_owned()),
         }]
+    }
+
+    fn hud_map_text(raw_text: &str, confidence: f32) -> HudReadings {
+        let mut hud = HudReadings::default();
+        hud.by_name.insert(
+            MAP_WINDOW_HUD_FIELD.to_owned(),
+            synapse_core::HudReading {
+                raw_text: raw_text.to_owned(),
+                parsed: HudValue::Text("map".to_owned()),
+                confidence,
+                stale_ms: 0,
+            },
+        );
+        hud
     }
 
     fn location(map_x: f64, map_y: f64, map_z: f64) -> EverQuestMapSensorLocation {
