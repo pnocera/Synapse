@@ -42,7 +42,7 @@ use crate::{
         M3ServiceConfig, SharedM3State,
         audio::{
             AudioTailParams, AudioTailResponse, AudioTranscribeParams, AudioTranscribeResponse,
-            tail_audio, transcribe_audio,
+            populate_audio_summary, tail_audio, transcribe_audio,
         },
         audit_export::{
             AuditExportBundleParams, AuditExportBundleResponse, AuditExportConsentSetParams,

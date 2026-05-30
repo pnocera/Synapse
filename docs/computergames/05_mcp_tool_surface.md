@@ -43,7 +43,12 @@
    populate redacted summary metadata: formats, optional text length, and a
    hash-only excerpt marker. Raw clipboard text must not be stored in reality
    rows.
-10. **Filesystem paths are hash-only.** When an MCP request includes the `fs`
+10. **Audio summaries are metadata only.** When an MCP request includes the
+    `audio` slot and audio is enabled, live observation/reality tools may sample
+    loopback only to populate bounded RMS, VAD, detector-event, and direction
+    metadata. Raw PCM and transcript text must not be stored in observation or
+    reality rows.
+11. **Filesystem paths are hash-only.** When an MCP request includes the `fs`
     slot, live observation/reality tools read only the explicitly configured
     non-recursive `SYNAPSE_FS_WATCH_ROOT` watcher. Events are capped and store
     hashed path tokens, event kind, and optional file size metadata; raw watched

@@ -1874,7 +1874,7 @@ Sub-structs:
 | `HudFieldError` | `{ code, detail }` |
 | `HudReading` | `{ raw_text, parsed: HudValue, confidence, stale_ms }` |
 | `HudValue` | untagged `Number(f64)` \| `Text(String)` \| `Enum(String)` \| `Null` |
-| `AudioContext` | `rms_db: f32`, `vad_speech_recent: bool`, `recent_events: Vec<AudioEvent>`, `direction_estimate: Option<DirectionEstimate>` |
+| `AudioContext` | Bounded summary metadata only: `rms_db: f32`, `vad_speech_recent: bool`, `recent_events: Vec<AudioEvent>` capped by live observation/reality paths, `direction_estimate: Option<DirectionEstimate>`; raw PCM and transcript text are not stored in observation/reality rows |
 | `AudioEvent` | `at`, `kind: String`, `azimuth_deg: Option<f32>`, `confidence` |
 | `DirectionEstimate` | `azimuth_deg: f32`, `confidence: f32` |
 | `ClipboardSummary` | `formats: Vec<String>`, `text_len: Option<u32>`, `text_excerpt: Option<String>` containing only hash/source metadata, `redacted: bool` |
@@ -3146,7 +3146,7 @@ of the HUD crop relative to the selected client-rect anchor. For example, a
 ### 4.2 `ObservationAssembler::assemble` algorithm
 
 1. Compute the effective `PerceptionMode`: if `input.mode_override.is_some()` use it, else `auto_mode(input)`.
-2. For each slot enabled by `ObserveInclude` (defaults: focused, elements, entities, hud, events), include the corresponding fields. Otherwise the slot is left at its default (empty vec / None). When the `clipboard` slot is requested through the live MCP path, the server reads the Win32 clipboard text surface and populates `ClipboardSummary` with formats, text length, a hash-only redacted excerpt marker, and `redacted=true`; raw clipboard text is not persisted into compact reality rows. When the `fs` slot is requested and `SYNAPSE_FS_WATCH_ROOT` names an approved local directory, the server drains the non-recursive OS watcher and populates `fs_recent` with at most five redacted events containing a hashed path token, event kind, and optional file size.
+2. For each slot enabled by `ObserveInclude` (defaults: focused, elements, entities, hud, events), include the corresponding fields. Otherwise the slot is left at its default (empty vec / None). When the `audio` slot is requested and `--enable-audio`/`SYNAPSE_ENABLE_AUDIO=true` initialized a loopback runtime, the server samples a bounded one-second summary into `AudioContext` (RMS, VAD flag, at most five detector events, and optional direction estimate) without persisting raw PCM or transcript text. The detector processor starts with loopback by default so VAD/events are real runtime state, not synthetic placeholders. When the `clipboard` slot is requested through the live MCP path, the server reads the Win32 clipboard text surface and populates `ClipboardSummary` with formats, text length, a hash-only redacted excerpt marker, and `redacted=true`; raw clipboard text is not persisted into compact reality rows. When the `fs` slot is requested and `SYNAPSE_FS_WATCH_ROOT` names an approved local directory, the server drains the non-recursive OS watcher and populates `fs_recent` with at most five redacted events containing a hashed path token, event kind, and optional file size.
 3. Truncate `elements` to `max_subtree_nodes` (default 60, clamp 1..=500) and apply `max_subtree_depth` (clamp ≤ 6). Set `diagnostics.elements_truncated` when truncated.
 4. Truncate `entities` to `max_entities` (default 60). Set `diagnostics.entities_truncated`.
 5. Compute `diagnostics.assembled_in_ms = started.elapsed().as_secs_f32() * 1000`.
@@ -3337,7 +3337,7 @@ The fixed JSON-RPC code `-32099` is the rmcp custom-error slot; the structured `
   `event_extensions` evaluator and validator, but the current `observe()` path
   does not yet automatically feed live detection/HUD events through profile
   extensions and publish them. #414 owns the creeper-nearby runtime path.
-- **Audio in `Observation`.** The `audio: AudioContext` field is populated only when an audio runtime is initialized and pushing into the observation source (current build leaves it default).
+- **Audio in `Observation`.** The `audio: AudioContext` field is populated by the live MCP path only when the caller includes `audio` and the M3 audio runtime is enabled/running. It carries compact summary metadata only; raw PCM stays in `audio_tail` responses and is not stored in reality rows.
 - **Linux/macOS.** All UIA / WinEvent / WinRT OCR paths are `cfg(windows)`; non-Windows builds return `A11Y_NOT_AVAILABLE` / `OCR_BACKEND_UNAVAILABLE`.
 
 
@@ -4393,6 +4393,13 @@ force rebase.
 | `since_event_seq` | `u64` | no | — | — | When set, `recent_events` filtered to `seq > since` |
 
 **Returns:** `synapse_core::Observation`.
+When `include` contains `audio` and the daemon was started with
+`--enable-audio` / `SYNAPSE_ENABLE_AUDIO=true`, the live path initializes the
+approved loopback runtime if needed and returns a bounded one-second
+`AudioContext` summary: RMS, VAD flag, at most five detector events, and an
+optional direction estimate. Loopback starts the lightweight detector processor
+by default, so VAD/events come from live runtime state. Raw PCM and transcript
+text are not persisted into observation or reality rows.
 When `include` contains `clipboard`, the live path samples the system clipboard
 into a redacted `ClipboardSummary` containing format names, optional text
 length, and hash-only excerpt metadata. Raw clipboard text must not be persisted

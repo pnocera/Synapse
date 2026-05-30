@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
 use synapse_core::{
-    Event, EventSource, ForbiddenRawDataKind, Observation, RealityAudit, RealityBaseline,
-    RealityBaselineStatus, RealityDelta, RealityDriftItem, RealityDriftStatus,
+    AudioContext, Event, EventSource, ForbiddenRawDataKind, Observation, RealityAudit,
+    RealityBaseline, RealityBaselineStatus, RealityDelta, RealityDriftItem, RealityDriftStatus,
     RealitySourceSurface, RealityTargetKind, RealityTargetRef, RedactionSummary, SourceRef,
     error_codes,
 };
@@ -20,7 +20,7 @@ use synapse_storage::cf;
 
 use super::{
     Json, ObserveParams, Parameters, SynapseService, current_input, observe_include,
-    populate_clipboard_summary, populate_fs_recent, tool, tool_router,
+    populate_audio_summary, populate_clipboard_summary, populate_fs_recent, tool, tool_router,
 };
 use crate::{
     m1::{ObserveSlot, mcp_error},
@@ -882,6 +882,9 @@ impl SynapseService {
         }
         drop(state);
 
+        if include.audio && input.audio == AudioContext::default() {
+            populate_audio_summary(&self.m3_state, &mut input);
+        }
         if include.clipboard && input.clipboard_summary.is_none() {
             populate_clipboard_summary(&mut input);
         }

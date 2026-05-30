@@ -228,6 +228,12 @@ pub struct AudioEvent {
 pub struct DirectionEstimate { pub azimuth_deg: f32, pub confidence: f32 }
 ```
 
+Live observation/reality tools populate `AudioContext` as bounded summary
+metadata only when the caller includes `audio` and the approved audio runtime is
+enabled. The summary may carry RMS, VAD, at most five recent events, and an
+optional direction estimate; raw PCM and transcript text remain outside
+observation/reality rows.
+
 ### 2.7 ClipboardSummary
 
 ```rust

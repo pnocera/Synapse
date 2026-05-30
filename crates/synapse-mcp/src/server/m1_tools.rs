@@ -2,8 +2,9 @@ use super::{
     ErrorData, FindParams, FindResponse, Health, Json, ObserveParams, Parameters, ReadTextParams,
     SetCaptureTargetParams, SetCaptureTargetResponse, SetPerceptionModeParams,
     SetPerceptionModeResponse, SynapseService, current_input, empty_input_schema, find_in_state,
-    mcp_error, observe_include, populate_clipboard_summary, populate_fs_recent, read_text_in_state,
-    set_capture_target_in_state, set_perception_mode_in_state, tool, tool_router,
+    mcp_error, observe_include, populate_audio_summary, populate_clipboard_summary,
+    populate_fs_recent, read_text_in_state, set_capture_target_in_state,
+    set_perception_mode_in_state, tool, tool_router,
 };
 
 #[cfg(windows)]
@@ -57,6 +58,9 @@ impl SynapseService {
         }
         drop(state);
 
+        if include.audio && input.audio == synapse_core::AudioContext::default() {
+            populate_audio_summary(&self.m3_state, &mut input);
+        }
         if include.clipboard && input.clipboard_summary.is_none() {
             populate_clipboard_summary(&mut input);
         }

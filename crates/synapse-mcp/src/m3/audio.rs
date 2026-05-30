@@ -1,11 +1,14 @@
 use rmcp::{ErrorData, schemars::JsonSchema};
+use std::time::Instant;
+
 use schemars::{Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
 use synapse_audio::{
-    AudioRuntime, AudioWindow, MAX_RING_SECONDS, Transcription,
+    AudioError, AudioRuntime, AudioWindow, MAX_RING_SECONDS, Transcription,
     ring::{DEFAULT_SAMPLE_RATE_HZ, STEREO_CHANNELS},
 };
-use synapse_core::error_codes;
+use synapse_core::{AudioContext, SensorStatus, error_codes};
+use synapse_perception::ObservationInput;
 
 use crate::{
     m1::mcp_error,
@@ -20,6 +23,8 @@ const DEFAULT_LANGUAGE: &str = "en";
 const PCM_FORMAT: &str = "s16le";
 const WHISPER_TINY_MODEL_ID: &str = "whisper_tiny_int8";
 const BYTES_PER_SAMPLE: usize = 2;
+const SUMMARY_SECONDS: f32 = 1.0;
+const MAX_SUMMARY_EVENTS: usize = 5;
 
 const fn default_seconds() -> u32 {
     DEFAULT_SECONDS
@@ -128,6 +133,61 @@ pub fn tail_audio(
         .ensure_audio_runtime()
         .map_err(|error| mcp_error(error.code(), error.to_string()))?;
     tail_audio_from_runtime(&runtime, params.seconds)
+}
+
+pub fn populate_audio_summary(m3_state: &SharedM3State, input: &mut ObservationInput) {
+    let started = Instant::now();
+    let mut status = SensorStatus::Disabled;
+    if let Ok(mut state) = m3_state.lock() {
+        if state.enable_audio {
+            match state.ensure_audio_runtime() {
+                Ok(runtime) => {
+                    let loopback = runtime.loopback_status();
+                    if let Some(reason_code) = loopback.last_error_code {
+                        status = SensorStatus::DegradedSensorFailed { reason_code };
+                    } else if runtime.config().start_loopback && loopback.running {
+                        match audio_context_from_runtime(&runtime) {
+                            Ok(context) => {
+                                input.audio = context;
+                                status = SensorStatus::Healthy;
+                            }
+                            Err(error) => {
+                                status = SensorStatus::DegradedSensorFailed {
+                                    reason_code: error.code().to_owned(),
+                                };
+                            }
+                        }
+                    }
+                }
+                Err(error) => {
+                    status = SensorStatus::DegradedSensorFailed {
+                        reason_code: error.code().to_owned(),
+                    };
+                }
+            }
+        }
+    } else {
+        status = SensorStatus::DegradedSensorFailed {
+            reason_code: error_codes::TOOL_INTERNAL_ERROR.to_owned(),
+        };
+    }
+    input.audio_status = status;
+    input
+        .sensor_latency_ms
+        .insert("audio".to_owned(), started.elapsed().as_secs_f32() * 1000.0);
+}
+
+pub fn audio_context_from_runtime(runtime: &AudioRuntime) -> Result<AudioContext, AudioError> {
+    let window = runtime.tail_seconds(SUMMARY_SECONDS)?;
+    let mut context = runtime.detector_snapshot().context;
+    context.rms_db = window.rms_db;
+    if context.recent_events.len() > MAX_SUMMARY_EVENTS {
+        let keep_from = context.recent_events.len() - MAX_SUMMARY_EVENTS;
+        context.recent_events.drain(0..keep_from);
+    }
+    let direction = runtime.estimate_direction_tail(SUMMARY_SECONDS)?;
+    context.direction_estimate = (direction.confidence > 0.0).then_some(direction);
+    Ok(context)
 }
 
 pub fn tail_audio_from_runtime(
@@ -275,6 +335,33 @@ mod tests {
                 .iter()
                 .any(|byte| *byte != 0)
         );
+        Ok(())
+    }
+
+    #[test]
+    fn audio_context_summary_reports_rms_and_direction_without_pcm() -> anyhow::Result<()> {
+        let runtime = AudioRuntime::spawn(AudioConfig::default())?;
+        let ring = runtime.ring();
+        ring.set_format(AudioFormat {
+            sample_rate_hz: 48_000,
+            channels: 2,
+        });
+        let mut samples = Vec::with_capacity(48_000 * 2);
+        for _ in 0..48_000 {
+            samples.push(0.30);
+            samples.push(0.05);
+        }
+        ring.push_interleaved(&samples);
+
+        let context = audio_context_from_runtime(&runtime)?;
+
+        assert!(context.rms_db > -20.0);
+        let direction = context
+            .direction_estimate
+            .expect("asymmetric stereo should produce a direction estimate");
+        assert!(direction.azimuth_deg < 0.0);
+        assert!(direction.confidence > 0.0);
+        assert!(context.recent_events.is_empty());
         Ok(())
     }
 

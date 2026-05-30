@@ -177,7 +177,7 @@ Sub-structs:
 | `HudFieldError` | `{ code, detail }` |
 | `HudReading` | `{ raw_text, parsed: HudValue, confidence, stale_ms }` |
 | `HudValue` | untagged `Number(f64)` \| `Text(String)` \| `Enum(String)` \| `Null` |
-| `AudioContext` | `rms_db: f32`, `vad_speech_recent: bool`, `recent_events: Vec<AudioEvent>`, `direction_estimate: Option<DirectionEstimate>` |
+| `AudioContext` | Bounded summary metadata only: `rms_db: f32`, `vad_speech_recent: bool`, `recent_events: Vec<AudioEvent>` capped by live observation/reality paths, `direction_estimate: Option<DirectionEstimate>`; raw PCM and transcript text are not stored in observation/reality rows |
 | `AudioEvent` | `at`, `kind: String`, `azimuth_deg: Option<f32>`, `confidence` |
 | `DirectionEstimate` | `azimuth_deg: f32`, `confidence: f32` |
 | `ClipboardSummary` | `formats: Vec<String>`, `text_len: Option<u32>`, `text_excerpt: Option<String>` containing only hash/source metadata, `redacted: bool` |

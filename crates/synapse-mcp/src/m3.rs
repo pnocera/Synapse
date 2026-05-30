@@ -387,10 +387,11 @@ impl M3State {
             return Ok(Arc::clone(runtime));
         }
 
+        let start_loopback = audio_loopback_enabled()?;
         let config = AudioConfig {
             ring_seconds: DEFAULT_RING_SECONDS,
-            start_loopback: audio_loopback_enabled()?,
-            detectors_enabled: false,
+            start_loopback,
+            detectors_enabled: start_loopback,
             stt_model_path: None,
         };
         let runtime = match AudioRuntime::spawn(config) {

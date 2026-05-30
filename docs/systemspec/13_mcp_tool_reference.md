@@ -74,6 +74,13 @@ force rebase.
 | `since_event_seq` | `u64` | no | — | — | When set, `recent_events` filtered to `seq > since` |
 
 **Returns:** `synapse_core::Observation`.
+When `include` contains `audio` and the daemon was started with
+`--enable-audio` / `SYNAPSE_ENABLE_AUDIO=true`, the live path initializes the
+approved loopback runtime if needed and returns a bounded one-second
+`AudioContext` summary: RMS, VAD flag, at most five detector events, and an
+optional direction estimate. Loopback starts the lightweight detector processor
+by default, so VAD/events come from live runtime state. Raw PCM and transcript
+text are not persisted into observation or reality rows.
 When `include` contains `clipboard`, the live path samples the system clipboard
 into a redacted `ClipboardSummary` containing format names, optional text
 length, and hash-only excerpt metadata. Raw clipboard text must not be persisted
