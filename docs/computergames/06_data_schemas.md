@@ -501,6 +501,47 @@ Full observations remain the source for baseline and explicit audit/debug
 expansion. Routine context should prefer `RealityDelta` batches because they
 carry the change in reality plus source refs, not the unchanged surroundings.
 
+### 2.11 Profile quality reality evidence (#543)
+
+`profile_quality_refresh` stores bounded reality-quality metadata under
+`CF_PROFILES/profile_quality/v1/<profile_id>` in the `reality_evidence` object.
+It is derived from `CF_KV/reality/*` rows and contains counts/rates only:
+
+```rust
+pub struct ProfileQualityRealityEvidence {
+    pub kv_cf_name: String,                 // CF_KV
+    pub baseline_rows: u64,
+    pub head_rows: u64,
+    pub delta_rows: u64,
+    pub audit_rows: u64,
+    pub audited_delta_rows: u64,            // deltas covered by reality_audit
+    pub unaudited_delta_rows: u64,
+    pub in_sync_audit_rows: u64,
+    pub drift_audit_rows: u64,
+    pub rebase_required_rows: u64,
+    pub source_unavailable_audit_rows: u64,
+    pub delta_kind_counts: BTreeMap<String, u64>,
+    pub delta_path_counts: BTreeMap<String, u64>,
+    pub audit_drift_status_counts: BTreeMap<String, u64>,
+    pub source_surface_counts: BTreeMap<String, u64>,
+    pub drift_rate: f64,
+    pub rebase_rate: f64,
+    pub audited_delta_rate: f64,
+    pub no_op_ratio: Option<f64>,
+    pub no_op_ratio_source: String,
+    pub delta_first_supported: bool,
+    pub full_snapshot_required: bool,
+    pub calibration_source: String,          // "reality_audit" or "none"
+}
+```
+
+Delta volume is not rewarded unless periodic physical audits cover it.
+Unverified deltas, source-unavailable audits, or rebase-required drift set
+`full_snapshot_required`. Contribution/export summaries may include only these
+bounded counts, rates, hashes, and identifiers; they must not include raw
+screenshots, raw chat/log bodies, process paths, window titles, private account
+state, or unbounded filesystem paths.
+
 ---
 
 ## 3. Events

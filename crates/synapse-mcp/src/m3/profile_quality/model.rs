@@ -58,6 +58,8 @@ pub struct ProfileQualitySnapshot {
     pub versioning: ProfileQualityVersionSummary,
     #[serde(default)]
     pub runtime_evidence: ProfileQualityRuntimeEvidence,
+    #[serde(default)]
+    pub reality_evidence: ProfileQualityRealityEvidence,
     pub redaction: ProfileQualityRedaction,
     pub contribution: ProfileQualityContribution,
 }
@@ -184,6 +186,89 @@ impl Default for ProfileQualityRuntimeEvidence {
             observed_target_ids: BTreeMap::new(),
             observed_event_kinds: BTreeMap::new(),
             observed_log_event_kinds: BTreeMap::new(),
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileQualityRealityEvidence {
+    pub kv_cf_name: String,
+    pub reality_rows_scanned: u64,
+    pub reality_rows_decode_failed: u64,
+    pub reality_rows_other_profile: u64,
+    pub baseline_rows: u64,
+    pub head_rows: u64,
+    pub delta_rows: u64,
+    pub audit_rows: u64,
+    pub audited_delta_rows: u64,
+    pub unaudited_delta_rows: u64,
+    pub in_sync_audit_rows: u64,
+    pub drift_audit_rows: u64,
+    pub rebase_required_rows: u64,
+    pub source_unavailable_audit_rows: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_baseline_epoch_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_head_epoch_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_head_seq: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_audit_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_audit_status: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub latest_audit_compared_seq_end: Option<u64>,
+    pub delta_kind_counts: BTreeMap<String, u64>,
+    pub delta_path_counts: BTreeMap<String, u64>,
+    pub audit_drift_status_counts: BTreeMap<String, u64>,
+    pub source_surface_counts: BTreeMap<String, u64>,
+    pub drift_rate: f64,
+    pub rebase_rate: f64,
+    pub audited_delta_rate: f64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub no_op_ratio: Option<f64>,
+    pub no_op_ratio_source: String,
+    pub delta_first_supported: bool,
+    pub full_snapshot_required: bool,
+    pub calibration_source: String,
+}
+
+impl Default for ProfileQualityRealityEvidence {
+    fn default() -> Self {
+        Self {
+            kv_cf_name: "CF_KV".to_owned(),
+            reality_rows_scanned: 0,
+            reality_rows_decode_failed: 0,
+            reality_rows_other_profile: 0,
+            baseline_rows: 0,
+            head_rows: 0,
+            delta_rows: 0,
+            audit_rows: 0,
+            audited_delta_rows: 0,
+            unaudited_delta_rows: 0,
+            in_sync_audit_rows: 0,
+            drift_audit_rows: 0,
+            rebase_required_rows: 0,
+            source_unavailable_audit_rows: 0,
+            latest_baseline_epoch_id: None,
+            latest_head_epoch_id: None,
+            latest_head_seq: None,
+            latest_audit_id: None,
+            latest_audit_status: None,
+            latest_audit_compared_seq_end: None,
+            delta_kind_counts: BTreeMap::new(),
+            delta_path_counts: BTreeMap::new(),
+            audit_drift_status_counts: BTreeMap::new(),
+            source_surface_counts: BTreeMap::new(),
+            drift_rate: 0.0,
+            rebase_rate: 0.0,
+            audited_delta_rate: 0.0,
+            no_op_ratio: None,
+            no_op_ratio_source: "not_persisted_noop_observe_delta_writes_no_delta_row".to_owned(),
+            delta_first_supported: false,
+            full_snapshot_required: true,
+            calibration_source: "none".to_owned(),
         }
     }
 }

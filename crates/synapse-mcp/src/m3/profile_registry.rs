@@ -645,6 +645,13 @@ struct ProfileRegistryQualitySummaryRow {
     score_0_100: Option<u64>,
     sample_size: Option<u64>,
     quality_signal: Option<String>,
+    reality_delta_rows: Option<u64>,
+    reality_audit_rows: Option<u64>,
+    reality_audited_delta_rows: Option<u64>,
+    reality_rebase_required_rows: Option<u64>,
+    reality_drift_rate: Option<f64>,
+    delta_first_supported: Option<bool>,
+    full_snapshot_required: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
@@ -3639,6 +3646,27 @@ fn contribution_quality_summary(
             .pointer("/score/sample_size")
             .and_then(Value::as_u64),
         quality_signal: string_field(&decoded, "quality_signal"),
+        reality_delta_rows: decoded
+            .pointer("/reality_evidence/delta_rows")
+            .and_then(Value::as_u64),
+        reality_audit_rows: decoded
+            .pointer("/reality_evidence/audit_rows")
+            .and_then(Value::as_u64),
+        reality_audited_delta_rows: decoded
+            .pointer("/reality_evidence/audited_delta_rows")
+            .and_then(Value::as_u64),
+        reality_rebase_required_rows: decoded
+            .pointer("/reality_evidence/rebase_required_rows")
+            .and_then(Value::as_u64),
+        reality_drift_rate: decoded
+            .pointer("/reality_evidence/drift_rate")
+            .and_then(Value::as_f64),
+        delta_first_supported: decoded
+            .pointer("/reality_evidence/delta_first_supported")
+            .and_then(Value::as_bool),
+        full_snapshot_required: decoded
+            .pointer("/reality_evidence/full_snapshot_required")
+            .and_then(Value::as_bool),
     })
 }
 

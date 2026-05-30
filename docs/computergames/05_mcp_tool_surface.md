@@ -2212,9 +2212,10 @@ file bytes.
 ### 3.28g `profile_quality_refresh`
 
 Refreshes the local profile-registry quality snapshot for one profile from real
-stored action audit rows plus observation/event rows. This is a local-only
-read/aggregate/write/readback surface: it scans `CF_ACTION_LOG`,
-`CF_OBSERVATIONS`, and `CF_EVENTS`, writes the redacted snapshot to
+stored action audit rows, observation/event rows, and #536 reality rows. This
+is a local-only read/aggregate/write/readback surface: it scans
+`CF_ACTION_LOG`, `CF_OBSERVATIONS`, `CF_EVENTS`, and bounded
+`CF_KV/reality/*` rows, writes the redacted snapshot to
 `CF_PROFILES` at `profile_quality/v1/<profile_id>`, then reads that exact row
 back before returning.
 
@@ -2240,11 +2241,21 @@ length/prefix, and an explainable snapshot containing source row counts,
 ignored corrupt/stale rows, quality counts/rates, Wilson lower-bound score,
 compatibility counters, profile-schema-version recency/mixed-version counters,
 runtime observation/event evidence, compact event-kind and log-kind counters,
-an optional manual FSV evidence reference, redaction policy, and contribution
-policy. Export is always `false`; sharing requires a future explicit
-operator-approved path. The snapshot keeps bounded identifiers and counts only;
-it must not persist raw chat bodies, window titles, process paths, private
-session tickets, or full raw log lines.
+and `reality_evidence`: baseline/head/delta/audit row counts, audited vs
+unaudited delta counts, drift/rebase/source-unavailable audit rates,
+delta-kind/path counts, source-surface counts, latest bounded epoch/audit
+metadata, and compatibility flags for `delta_first_supported` vs
+`full_snapshot_required`. Delta rows do not raise quality by themselves:
+`audited_delta_rows` is counted only when a persisted `reality_audit` covers the
+delta sequence. No-op `observe_delta` calls persist no delta rows, so the
+snapshot records `no_op_ratio_source` instead of inventing a no-op ratio.
+
+The response also includes an optional manual FSV evidence reference, redaction
+policy, and contribution policy. Export is always `false`; sharing requires a
+future explicit operator-approved path. The snapshot keeps bounded identifiers
+and counts only; it must not persist raw chat bodies, window titles, process
+paths, private session tickets, full raw log lines, screenshots, or unbounded
+filesystem paths.
 
 ### 3.28h `profile_registry_search`
 

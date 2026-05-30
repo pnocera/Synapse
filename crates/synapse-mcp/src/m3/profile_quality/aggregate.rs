@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::Value;
 use sha2::{Digest, Sha256};
@@ -8,12 +8,12 @@ use synapse_storage::{cf, decode_json};
 
 use super::{
     ProfileCompatibilitySummary, ProfileQualityContribution, ProfileQualityCounts,
-    ProfileQualityRates, ProfileQualityRedaction, ProfileQualityRefreshParams,
-    ProfileQualityRuntimeEvidence, ProfileQualityScore, ProfileQualitySnapshot,
-    ProfileQualitySource, ProfileQualityVersionSummary, hex_encode,
+    ProfileQualityRates, ProfileQualityRealityEvidence, ProfileQualityRedaction,
+    ProfileQualityRefreshParams, ProfileQualityRuntimeEvidence, ProfileQualityScore,
+    ProfileQualitySnapshot, ProfileQualitySource, ProfileQualityVersionSummary, hex_encode,
 };
 
-const QUALITY_SCHEMA_VERSION: u32 = 2;
+const QUALITY_SCHEMA_VERSION: u32 = 3;
 const FUTURE_SKEW_NS: u64 = 60 * 1_000_000_000;
 const WILSON_Z_95: f64 = 1.959_963_984_540_054;
 const CONFIDENCE_FULL_SAMPLE: f64 = 20.0;
@@ -22,6 +22,7 @@ pub(super) struct ProfileQualityInputRows {
     pub action: Vec<(Vec<u8>, Vec<u8>)>,
     pub observations: Vec<(Vec<u8>, Vec<u8>)>,
     pub events: Vec<(Vec<u8>, Vec<u8>)>,
+    pub reality: Vec<(Vec<u8>, Vec<u8>)>,
 }
 
 #[derive(Debug)]
@@ -59,6 +60,44 @@ struct ParsedEventRow {
     target_id: Option<String>,
 }
 
+#[derive(Debug)]
+struct ParsedRealityRow {
+    profile_key: String,
+    kind: ParsedRealityRowKind,
+}
+
+#[derive(Debug)]
+enum ParsedRealityRowKind {
+    Baseline {
+        epoch_id: Option<String>,
+        source_surfaces: Vec<String>,
+    },
+    Head {
+        epoch_id: Option<String>,
+        head_seq: Option<u64>,
+    },
+    Delta {
+        epoch_id: Option<String>,
+        seq: Option<u64>,
+        kind: Option<String>,
+        path: Option<String>,
+        source_surfaces: Vec<String>,
+    },
+    Audit {
+        audit_id: Option<String>,
+        epoch_id: Option<String>,
+        compared_seq_end: Option<u64>,
+        drift_status: Option<String>,
+        rebase_required: bool,
+        source_surfaces: Vec<String>,
+    },
+}
+
+#[derive(Debug)]
+struct RealityParseError {
+    profile_key: Option<String>,
+}
+
 pub(super) fn build_snapshot(
     profile: &ProfileStatus,
     rows: ProfileQualityInputRows,
@@ -71,6 +110,7 @@ pub(super) fn build_snapshot(
         rows.action.len() as u64,
         rows.observations.len() as u64,
         rows.events.len() as u64,
+        rows.reality.len() as u64,
         generated_at_ns,
     );
     for (_key, value) in rows.action {
@@ -89,6 +129,13 @@ pub(super) fn build_snapshot(
         match parse_event_row(&value) {
             Ok(row) => builder.record_event_row(&row),
             Err(()) => builder.runtime_evidence.event_rows_decode_failed += 1,
+        }
+    }
+    for (key, value) in rows.reality {
+        match parse_reality_row(&key, &value) {
+            Ok(Some(row)) => builder.record_reality_row(&row),
+            Ok(None) => {}
+            Err(error) => builder.record_reality_decode_failure(error.profile_key.as_deref()),
         }
     }
     builder.finish()
@@ -172,6 +219,126 @@ fn parse_event_row(value: &[u8]) -> Result<ParsedEventRow, ()> {
     })
 }
 
+fn parse_reality_row(
+    key: &[u8],
+    value: &[u8],
+) -> Result<Option<ParsedRealityRow>, RealityParseError> {
+    let Ok(key) = std::str::from_utf8(key) else {
+        return Ok(None);
+    };
+    let Some(key_parts) = reality_key_parts(key) else {
+        return Ok(None);
+    };
+    let row = decode_json::<Value>(value).map_err(|_error| RealityParseError {
+        profile_key: Some(key_parts.profile_key.clone()),
+    })?;
+    let kind = match key_parts.row_kind.as_str() {
+        "baseline" => ParsedRealityRowKind::Baseline {
+            epoch_id: optional_string(&row, "epoch_id")
+                .or_else(|| Some(key_parts.epoch_or_id.clone())),
+            source_surfaces: source_surfaces(&row, "source_refs"),
+        },
+        "head" => ParsedRealityRowKind::Head {
+            epoch_id: optional_string(&row, "epoch_id"),
+            head_seq: row.get("head_seq").and_then(Value::as_u64),
+        },
+        "delta" => ParsedRealityRowKind::Delta {
+            epoch_id: optional_string(&row, "epoch_id")
+                .or_else(|| Some(key_parts.epoch_or_id.clone())),
+            seq: row.get("seq").and_then(Value::as_u64).or(key_parts.seq),
+            kind: optional_string(&row, "kind"),
+            path: optional_string(&row, "path"),
+            source_surfaces: source_surfaces(&row, "source_refs"),
+        },
+        "audit" => ParsedRealityRowKind::Audit {
+            audit_id: optional_string(&row, "audit_id")
+                .or_else(|| Some(key_parts.epoch_or_id.clone())),
+            epoch_id: optional_string(&row, "epoch_id"),
+            compared_seq_end: row.get("compared_seq_end").and_then(Value::as_u64),
+            drift_status: optional_string(&row, "drift_status"),
+            rebase_required: row
+                .get("rebase_required")
+                .and_then(Value::as_bool)
+                .unwrap_or(false),
+            source_surfaces: audit_source_surfaces(&row),
+        },
+        _ => return Ok(None),
+    };
+    Ok(Some(ParsedRealityRow {
+        profile_key: key_parts.profile_key,
+        kind,
+    }))
+}
+
+#[derive(Debug)]
+struct RealityKeyParts {
+    row_kind: String,
+    profile_key: String,
+    epoch_or_id: String,
+    seq: Option<u64>,
+}
+
+fn reality_key_parts(key: &str) -> Option<RealityKeyParts> {
+    let parts = key.split('/').collect::<Vec<_>>();
+    match parts.as_slice() {
+        ["reality", "baseline", "v1", profile_key, epoch_id] => Some(RealityKeyParts {
+            row_kind: "baseline".to_owned(),
+            profile_key: (*profile_key).to_owned(),
+            epoch_or_id: (*epoch_id).to_owned(),
+            seq: None,
+        }),
+        ["reality", "head", "v1", profile_key] => Some(RealityKeyParts {
+            row_kind: "head".to_owned(),
+            profile_key: (*profile_key).to_owned(),
+            epoch_or_id: String::new(),
+            seq: None,
+        }),
+        ["reality", "delta", "v1", profile_key, epoch_id, seq] => Some(RealityKeyParts {
+            row_kind: "delta".to_owned(),
+            profile_key: (*profile_key).to_owned(),
+            epoch_or_id: (*epoch_id).to_owned(),
+            seq: seq.parse::<u64>().ok(),
+        }),
+        ["reality", "audit", "v1", profile_key, audit_id] => Some(RealityKeyParts {
+            row_kind: "audit".to_owned(),
+            profile_key: (*profile_key).to_owned(),
+            epoch_or_id: (*audit_id).to_owned(),
+            seq: None,
+        }),
+        _ => None,
+    }
+}
+
+fn audit_source_surfaces(row: &Value) -> Vec<String> {
+    let mut surfaces = source_surfaces(row, "physical_source_refs");
+    if let Some(items) = row.get("drift_items").and_then(Value::as_array) {
+        for item in items {
+            surfaces.extend(source_surfaces(item, "source_refs"));
+        }
+    }
+    surfaces.sort();
+    surfaces.dedup();
+    surfaces
+}
+
+fn source_surfaces(row: &Value, field: &str) -> Vec<String> {
+    let mut surfaces = Vec::new();
+    if let Some(items) = row.get("source_surfaces").and_then(Value::as_array) {
+        surfaces.extend(items.iter().filter_map(Value::as_str).map(bounded_label));
+    }
+    if let Some(items) = row.get(field).and_then(Value::as_array) {
+        surfaces.extend(
+            items
+                .iter()
+                .filter_map(|item| item.get("surface").and_then(Value::as_str))
+                .map(bounded_label),
+        );
+    }
+    surfaces.sort();
+    surfaces.dedup();
+    surfaces
+}
+
 fn optional_string(row: &Value, field: &str) -> Option<String> {
     row.get(field)
         .and_then(Value::as_str)
@@ -210,6 +377,9 @@ struct SnapshotBuilder {
     compatibility: ProfileCompatibilitySummary,
     versioning: ProfileQualityVersionSummary,
     runtime_evidence: ProfileQualityRuntimeEvidence,
+    reality_evidence: ProfileQualityRealityEvidence,
+    reality_delta_seqs_by_epoch: BTreeMap<String, BTreeSet<u64>>,
+    reality_audit_max_seq_by_epoch: BTreeMap<String, u64>,
     generated_at_ns: u64,
     evidence_parts: Vec<String>,
     profile_label: String,
@@ -226,6 +396,7 @@ impl SnapshotBuilder {
         audit_rows_scanned: u64,
         observation_rows_scanned: u64,
         event_rows_scanned: u64,
+        reality_rows_scanned: u64,
         generated_at_ns: u64,
     ) -> Self {
         Self {
@@ -286,6 +457,13 @@ impl SnapshotBuilder {
                 event_rows_scanned,
                 ..ProfileQualityRuntimeEvidence::default()
             },
+            reality_evidence: ProfileQualityRealityEvidence {
+                kv_cf_name: cf::CF_KV.to_owned(),
+                reality_rows_scanned,
+                ..ProfileQualityRealityEvidence::default()
+            },
+            reality_delta_seqs_by_epoch: BTreeMap::new(),
+            reality_audit_max_seq_by_epoch: BTreeMap::new(),
             generated_at_ns,
             evidence_parts: Vec::new(),
             profile_label: profile.label.clone(),
@@ -438,6 +616,147 @@ impl SnapshotBuilder {
         self.evidence_parts.push(event_evidence_part(row));
     }
 
+    fn record_reality_decode_failure(&mut self, profile_key: Option<&str>) {
+        if profile_key == Some(&self.profile_id) {
+            self.reality_evidence.reality_rows_decode_failed += 1;
+        } else if profile_key.is_some() {
+            self.reality_evidence.reality_rows_other_profile += 1;
+        }
+    }
+
+    #[allow(clippy::too_many_lines)]
+    fn record_reality_row(&mut self, row: &ParsedRealityRow) {
+        if row.profile_key != self.profile_id {
+            self.reality_evidence.reality_rows_other_profile += 1;
+            return;
+        }
+        match &row.kind {
+            ParsedRealityRowKind::Baseline {
+                epoch_id,
+                source_surfaces,
+            } => {
+                self.reality_evidence.baseline_rows += 1;
+                self.reality_evidence
+                    .latest_baseline_epoch_id
+                    .clone_from(epoch_id);
+                self.record_reality_surfaces(source_surfaces);
+                self.evidence_parts.push(format!(
+                    "reality_baseline|{}|{}",
+                    row.profile_key,
+                    epoch_id.as_deref().unwrap_or("")
+                ));
+            }
+            ParsedRealityRowKind::Head { epoch_id, head_seq } => {
+                self.reality_evidence.head_rows += 1;
+                self.reality_evidence
+                    .latest_head_epoch_id
+                    .clone_from(epoch_id);
+                self.reality_evidence.latest_head_seq = *head_seq;
+                self.evidence_parts.push(format!(
+                    "reality_head|{}|{}|{}",
+                    row.profile_key,
+                    epoch_id.as_deref().unwrap_or(""),
+                    head_seq.map_or_else(String::new, |value| value.to_string())
+                ));
+            }
+            ParsedRealityRowKind::Delta {
+                epoch_id,
+                seq,
+                kind,
+                path,
+                source_surfaces,
+            } => {
+                self.reality_evidence.delta_rows += 1;
+                if let (Some(epoch_id), Some(seq)) = (epoch_id, seq) {
+                    self.reality_delta_seqs_by_epoch
+                        .entry(epoch_id.clone())
+                        .or_default()
+                        .insert(*seq);
+                }
+                if let Some(kind) = kind {
+                    increment(
+                        &mut self.reality_evidence.delta_kind_counts,
+                        bounded_label(kind),
+                    );
+                }
+                if let Some(path) = path {
+                    increment(
+                        &mut self.reality_evidence.delta_path_counts,
+                        bounded_label(path),
+                    );
+                }
+                self.record_reality_surfaces(source_surfaces);
+                self.evidence_parts.push(format!(
+                    "reality_delta|{}|{}|{}|{}|{}",
+                    row.profile_key,
+                    epoch_id.as_deref().unwrap_or(""),
+                    seq.map_or_else(String::new, |value| value.to_string()),
+                    kind.as_deref().unwrap_or(""),
+                    path.as_deref().unwrap_or("")
+                ));
+            }
+            ParsedRealityRowKind::Audit {
+                audit_id,
+                epoch_id,
+                compared_seq_end,
+                drift_status,
+                rebase_required,
+                source_surfaces,
+            } => {
+                self.reality_evidence.audit_rows += 1;
+                self.reality_evidence.latest_audit_id.clone_from(audit_id);
+                self.reality_evidence
+                    .latest_audit_status
+                    .clone_from(drift_status);
+                self.reality_evidence.latest_audit_compared_seq_end = *compared_seq_end;
+                if let (Some(epoch_id), Some(compared_seq_end)) = (epoch_id, compared_seq_end) {
+                    let current = self
+                        .reality_audit_max_seq_by_epoch
+                        .entry(epoch_id.clone())
+                        .or_default();
+                    *current = (*current).max(*compared_seq_end);
+                }
+                if let Some(status) = drift_status {
+                    let status = bounded_label(status);
+                    increment(
+                        &mut self.reality_evidence.audit_drift_status_counts,
+                        status.clone(),
+                    );
+                    match status.as_str() {
+                        "in_sync" => self.reality_evidence.in_sync_audit_rows += 1,
+                        "source_unavailable" => {
+                            self.reality_evidence.source_unavailable_audit_rows += 1;
+                            self.reality_evidence.drift_audit_rows += 1;
+                        }
+                        _ => self.reality_evidence.drift_audit_rows += 1,
+                    }
+                }
+                if *rebase_required {
+                    self.reality_evidence.rebase_required_rows += 1;
+                }
+                self.record_reality_surfaces(source_surfaces);
+                self.evidence_parts.push(format!(
+                    "reality_audit|{}|{}|{}|{}|{}|{}",
+                    row.profile_key,
+                    audit_id.as_deref().unwrap_or(""),
+                    epoch_id.as_deref().unwrap_or(""),
+                    compared_seq_end.map_or_else(String::new, |value| value.to_string()),
+                    drift_status.as_deref().unwrap_or(""),
+                    rebase_required
+                ));
+            }
+        }
+    }
+
+    fn record_reality_surfaces(&mut self, surfaces: &[String]) {
+        for surface in surfaces {
+            increment(
+                &mut self.reality_evidence.source_surface_counts,
+                bounded_label(surface),
+            );
+        }
+    }
+
     const fn is_action_stale_or_future(&mut self, ts_ns: u64) -> bool {
         if ts_ns > self.generated_at_ns.saturating_add(FUTURE_SKEW_NS) {
             self.source.audit_rows_future += 1;
@@ -568,11 +887,18 @@ impl SnapshotBuilder {
     fn finish(self) -> ProfileQualitySnapshot {
         let score = score_from_counts(&self.counts);
         let rates = rates_from_counts(&self.counts);
+        let mut reality_evidence = self.reality_evidence;
+        finalize_reality_evidence(
+            &mut reality_evidence,
+            &self.reality_delta_seqs_by_epoch,
+            &self.reality_audit_max_seq_by_epoch,
+        );
         let evidence_hash = evidence_hash(
             &self.profile_id,
             &self.evidence_parts,
             &self.source,
             &self.runtime_evidence,
+            &reality_evidence,
             self.manual_fsv_evidence_ref.as_deref(),
         );
         let mut versioning = self.versioning;
@@ -594,6 +920,7 @@ impl SnapshotBuilder {
             compatibility: self.compatibility,
             versioning,
             runtime_evidence: self.runtime_evidence,
+            reality_evidence,
             redaction: ProfileQualityRedaction {
                 local_only: true,
                 snapshot_redacts_process_path: true,
@@ -609,6 +936,11 @@ impl SnapshotBuilder {
                     "observation_id".to_owned(),
                     "event_id".to_owned(),
                     "event_kind".to_owned(),
+                    "reality_epoch_id".to_owned(),
+                    "reality_delta_kind".to_owned(),
+                    "reality_delta_path".to_owned(),
+                    "reality_audit_status".to_owned(),
+                    "reality_source_surface".to_owned(),
                 ],
             },
             contribution: ProfileQualityContribution {
@@ -657,6 +989,41 @@ fn rates_from_counts(counts: &ProfileQualityCounts) -> ProfileQualityRates {
         denied_rate: ratio(counts.denied_rows, terminal),
         backend_unavailable_rate: ratio(counts.backend_unavailable_rows, terminal),
     }
+}
+
+#[allow(clippy::cast_precision_loss)]
+fn finalize_reality_evidence(
+    evidence: &mut ProfileQualityRealityEvidence,
+    delta_seqs_by_epoch: &BTreeMap<String, BTreeSet<u64>>,
+    audit_max_seq_by_epoch: &BTreeMap<String, u64>,
+) {
+    let mut audited_delta_rows = 0_u64;
+    for (epoch_id, delta_seqs) in delta_seqs_by_epoch {
+        if let Some(compared_seq_end) = audit_max_seq_by_epoch.get(epoch_id) {
+            audited_delta_rows += delta_seqs
+                .iter()
+                .filter(|seq| *seq <= compared_seq_end)
+                .count() as u64;
+        }
+    }
+    evidence.audited_delta_rows = audited_delta_rows.min(evidence.delta_rows);
+    evidence.unaudited_delta_rows = evidence.delta_rows.saturating_sub(audited_delta_rows);
+    evidence.drift_rate = ratio(evidence.drift_audit_rows, evidence.audit_rows);
+    evidence.rebase_rate = ratio(evidence.rebase_required_rows, evidence.audit_rows);
+    evidence.audited_delta_rate = ratio(evidence.audited_delta_rows, evidence.delta_rows);
+    evidence.calibration_source = if evidence.audit_rows > 0 {
+        "reality_audit".to_owned()
+    } else {
+        "none".to_owned()
+    };
+    evidence.delta_first_supported = evidence.baseline_rows > 0
+        && evidence.head_rows > 0
+        && evidence.audit_rows > 0
+        && evidence.source_unavailable_audit_rows == 0;
+    evidence.full_snapshot_required = evidence.audit_rows == 0
+        || evidence.rebase_required_rows > 0
+        || evidence.source_unavailable_audit_rows > 0
+        || evidence.unaudited_delta_rows > 0;
 }
 
 #[allow(clippy::cast_precision_loss)]
@@ -726,6 +1093,7 @@ fn evidence_hash(
     parts: &[String],
     source: &ProfileQualitySource,
     runtime: &ProfileQualityRuntimeEvidence,
+    reality: &ProfileQualityRealityEvidence,
     manual_fsv_evidence_ref: Option<&str>,
 ) -> String {
     let mut hasher = Sha256::new();
@@ -740,6 +1108,12 @@ fn evidence_hash(
     hasher.update(runtime.event_rows_decode_failed.to_be_bytes());
     hasher.update(runtime.event_rows_stale.to_be_bytes());
     hasher.update(runtime.event_rows_future.to_be_bytes());
+    hasher.update(reality.reality_rows_decode_failed.to_be_bytes());
+    hasher.update(reality.baseline_rows.to_be_bytes());
+    hasher.update(reality.delta_rows.to_be_bytes());
+    hasher.update(reality.audit_rows.to_be_bytes());
+    hasher.update(reality.audited_delta_rows.to_be_bytes());
+    hasher.update(reality.rebase_required_rows.to_be_bytes());
     if let Some(value) = manual_fsv_evidence_ref {
         hasher.update(value.as_bytes());
     }
@@ -755,6 +1129,238 @@ fn increment(counts: &mut BTreeMap<String, u64>, key: String) {
     *counts.entry(key).or_default() += 1;
 }
 
+fn bounded_label(value: &str) -> String {
+    value
+        .chars()
+        .filter(|value| !value.is_control())
+        .take(96)
+        .collect()
+}
+
 fn is_log_event_kind(kind: &str) -> bool {
     kind.starts_with("everquest.log.")
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{collections::BTreeMap, path::PathBuf};
+
+    use serde_json::json;
+    use synapse_core::{Backend, PerceptionMode, ProfileBackends, ProfileUseScope};
+    use synapse_profiles::ProfileStatus;
+
+    use super::{
+        ProfileQualityInputRows, ProfileQualityRefreshParams, build_snapshot, parse_reality_row,
+    };
+
+    #[test]
+    fn reality_rows_become_calibrated_profile_quality_signals() {
+        let snapshot = build_snapshot(
+            &profile(),
+            ProfileQualityInputRows {
+                action: Vec::new(),
+                observations: Vec::new(),
+                events: Vec::new(),
+                reality: vec![
+                    row(
+                        "reality/baseline/v1/everquest.live/epoch-a",
+                        json!({
+                            "epoch_id": "epoch-a",
+                            "source_surfaces": ["window", "process", "game_log"]
+                        }),
+                    ),
+                    row(
+                        "reality/head/v1/everquest.live",
+                        json!({"epoch_id": "epoch-a", "head_seq": 2}),
+                    ),
+                    row(
+                        "reality/delta/v1/everquest.live/epoch-a/00000000000000000001",
+                        json!({
+                            "epoch_id": "epoch-a",
+                            "seq": 1,
+                            "kind": "log_cursor_changed",
+                            "path": "/events/log_cursor",
+                            "source_refs": [{"surface": "game_log"}]
+                        }),
+                    ),
+                    row(
+                        "reality/delta/v1/everquest.live/epoch-a/00000000000000000002",
+                        json!({
+                            "epoch_id": "epoch-a",
+                            "seq": 2,
+                            "kind": "runtime_event_changed",
+                            "path": "/events/runtime",
+                            "source_refs": [{"surface": "game_log"}]
+                        }),
+                    ),
+                    row(
+                        "reality/audit/v1/everquest.live/audit-a",
+                        json!({
+                            "audit_id": "audit-a",
+                            "epoch_id": "epoch-a",
+                            "compared_seq_end": 2,
+                            "drift_status": "in_sync",
+                            "rebase_required": false,
+                            "physical_source_refs": [
+                                {"surface": "window"},
+                                {"surface": "game_log"}
+                            ]
+                        }),
+                    ),
+                ],
+            },
+            &params(),
+            1_780_000_000_000,
+        );
+
+        let reality = snapshot.reality_evidence;
+        assert_eq!(reality.baseline_rows, 1);
+        assert_eq!(reality.delta_rows, 2);
+        assert_eq!(reality.audit_rows, 1);
+        assert_eq!(reality.audited_delta_rows, 2);
+        assert_eq!(reality.unaudited_delta_rows, 0);
+        assert_eq!(reality.in_sync_audit_rows, 1);
+        assert!(reality.delta_first_supported);
+        assert!(!reality.full_snapshot_required);
+        assert_eq!(reality.calibration_source, "reality_audit");
+        assert_eq!(
+            reality.delta_kind_counts.get("runtime_event_changed"),
+            Some(&1)
+        );
+        assert_eq!(reality.source_surface_counts.get("game_log"), Some(&4));
+    }
+
+    #[test]
+    fn unaudited_deltas_do_not_make_delta_first_supported() {
+        let snapshot = build_snapshot(
+            &profile(),
+            ProfileQualityInputRows {
+                action: Vec::new(),
+                observations: Vec::new(),
+                events: Vec::new(),
+                reality: vec![
+                    row(
+                        "reality/baseline/v1/everquest.live/epoch-b",
+                        json!({"epoch_id": "epoch-b"}),
+                    ),
+                    row(
+                        "reality/head/v1/everquest.live",
+                        json!({"epoch_id": "epoch-b", "head_seq": 1}),
+                    ),
+                    row(
+                        "reality/delta/v1/everquest.live/epoch-b/00000000000000000001",
+                        json!({
+                            "epoch_id": "epoch-b",
+                            "seq": 1,
+                            "kind": "foreground_changed",
+                            "path": "/foreground"
+                        }),
+                    ),
+                ],
+            },
+            &params(),
+            1_780_000_000_000,
+        );
+
+        let reality = snapshot.reality_evidence;
+        assert_eq!(reality.audit_rows, 0);
+        assert_eq!(reality.audited_delta_rows, 0);
+        assert_eq!(reality.unaudited_delta_rows, 1);
+        assert!(!reality.delta_first_supported);
+        assert!(reality.full_snapshot_required);
+        assert_eq!(reality.calibration_source, "none");
+    }
+
+    #[test]
+    fn rebase_required_audits_force_full_snapshot_required() {
+        let snapshot = build_snapshot(
+            &profile(),
+            ProfileQualityInputRows {
+                action: Vec::new(),
+                observations: Vec::new(),
+                events: Vec::new(),
+                reality: vec![row(
+                    "reality/audit/v1/everquest.live/audit-drift",
+                    json!({
+                        "audit_id": "audit-drift",
+                        "epoch_id": "epoch-c",
+                        "compared_seq_end": 1,
+                        "drift_status": "rebase_required",
+                        "rebase_required": true,
+                        "drift_items": [{
+                            "source_refs": [{"surface": "window"}]
+                        }]
+                    }),
+                )],
+            },
+            &params(),
+            1_780_000_000_000,
+        );
+
+        let reality = snapshot.reality_evidence;
+        assert_eq!(reality.audit_rows, 1);
+        assert_eq!(reality.drift_audit_rows, 1);
+        assert_eq!(reality.rebase_required_rows, 1);
+        assert!(reality.full_snapshot_required);
+        assert_eq!(
+            reality.audit_drift_status_counts.get("rebase_required"),
+            Some(&1)
+        );
+    }
+
+    #[test]
+    fn reality_parser_ignores_non_reality_keys() {
+        assert!(
+            parse_reality_row(b"profile_quality/v1/everquest.live", br#"{}"#)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    fn params() -> ProfileQualityRefreshParams {
+        ProfileQualityRefreshParams {
+            profile_id: "everquest.live".to_owned(),
+            max_audit_rows: 100,
+            stale_after_ns: 86_400_000_000_000,
+            manual_fsv_evidence_ref: Some("issue-543-test".to_owned()),
+        }
+    }
+
+    fn profile() -> ProfileStatus {
+        let mut metadata = BTreeMap::new();
+        metadata.insert(
+            "registry.quality_signal".to_owned(),
+            "profile_quality.everquest.live".to_owned(),
+        );
+        metadata.insert(
+            "registry.compatibility_target".to_owned(),
+            "everquest.live.level2".to_owned(),
+        );
+        ProfileStatus {
+            id: "everquest.live".to_owned(),
+            label: "EverQuest Live".to_owned(),
+            use_scope: ProfileUseScope::OperatorOwnedTest,
+            mode: PerceptionMode::A11yOnly,
+            detection_model_id: None,
+            detection_classes: Vec::new(),
+            hud_fields: Vec::new(),
+            keymap_actions: Vec::new(),
+            backends: ProfileBackends {
+                default: Backend::Auto,
+                keyboard_default: Backend::Auto,
+                mouse_default: Backend::Auto,
+                pad_default: Backend::Auto,
+            },
+            event_extensions: Vec::new(),
+            active: true,
+            schema_version: 2,
+            matches: Vec::new(),
+            metadata,
+            source_path: PathBuf::from("profiles/everquest.live.toml"),
+        }
+    }
+
+    fn row(key: &str, value: serde_json::Value) -> (Vec<u8>, Vec<u8>) {
+        (key.as_bytes().to_vec(), serde_json::to_vec(&value).unwrap())
+    }
 }

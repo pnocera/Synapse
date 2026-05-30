@@ -342,17 +342,24 @@ samples must show the same `session_id`/`profile_id` chain and the expected
 redaction fields; return values alone do not prove the row exists.
 
 `profile_quality_refresh` is the first profile-registry/audit-data scoring
-surface. It reads real `CF_ACTION_LOG`, `CF_OBSERVATIONS`, and `CF_EVENTS`
-rows, ignores stale/corrupt/non-matching rows for scoring, writes a redacted
-JSON snapshot to
+surface. It reads real `CF_ACTION_LOG`, `CF_OBSERVATIONS`, `CF_EVENTS`, and
+bounded `CF_KV/reality/*` rows, ignores stale/corrupt/non-matching rows for
+scoring, writes a redacted JSON snapshot to
 `CF_PROFILES` under `profile_quality/v1/<profile_id>`, and reads that exact row
 back before returning. The snapshot stores counts, rates, a Wilson 95% lower
 bound score for foreground-profile `ok` vs `error` outcomes, compatibility
 signals, profile-schema-version recency/mixed-version counters, source row
 range, runtime observation/event event-kind counts, compact log-kind counts, an
 optional manual FSV evidence reference, evidence hash, and a local-only
-contribution policy. It never exports or shares data by itself. Offline
-contribution bundles now use
+contribution policy. #543 adds `reality_evidence` to that snapshot: baseline,
+head, delta, and audit row counts; audited/unaudited delta counts; drift,
+rebase, and source-unavailable rates; bounded delta kind/path counters; source
+surface counters; and compatibility flags for delta-first observation versus
+full-snapshot-required profiles. Delta volume is not a positive quality signal
+unless a physical `reality_audit` covers the relevant delta sequence; unverified
+or drifted deltas set `full_snapshot_required`.
+
+It never exports or shares data by itself. Offline contribution bundles now use
 `profile_registry_export bundle_kind="contribution"` to package registry rows,
 redacted action-audit evidence summaries, and the quality summary under
 deterministic hashes, then `profile_registry_import` to stage the contribution

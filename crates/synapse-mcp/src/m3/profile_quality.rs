@@ -26,9 +26,10 @@ use model::{
 };
 pub use model::{
     ProfileCompatibilitySummary, ProfileQualityContribution, ProfileQualityCounts,
-    ProfileQualityRates, ProfileQualityRedaction, ProfileQualityRefreshParams,
-    ProfileQualityRefreshResponse, ProfileQualityRuntimeEvidence, ProfileQualityScore,
-    ProfileQualitySnapshot, ProfileQualitySource, ProfileQualityVersionSummary,
+    ProfileQualityRates, ProfileQualityRealityEvidence, ProfileQualityRedaction,
+    ProfileQualityRefreshParams, ProfileQualityRefreshResponse, ProfileQualityRuntimeEvidence,
+    ProfileQualityScore, ProfileQualitySnapshot, ProfileQualitySource,
+    ProfileQualityVersionSummary,
 };
 
 #[must_use]
@@ -69,12 +70,16 @@ pub fn refresh_profile_quality(
     let event_rows = runtime
         .storage_cf_tail_rows(cf::CF_EVENTS, params.max_audit_rows as usize)
         .map_err(|error| mcp_error(error.code(), error.to_string()))?;
+    let reality_rows = runtime
+        .storage_cf_tail_rows(cf::CF_KV, params.max_audit_rows as usize)
+        .map_err(|error| mcp_error(error.code(), error.to_string()))?;
     let computed_snapshot = build_snapshot(
         &profile,
         ProfileQualityInputRows {
             action: action_rows,
             observations: observation_rows,
             events: event_rows,
+            reality: reality_rows,
         },
         params,
         now_ns(),
