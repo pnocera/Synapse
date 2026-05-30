@@ -36,11 +36,12 @@ crates/synapse-mcp/
 ├── Cargo.toml                      # Binary crate; depends on every other library crate
 └── src/
     ├── main.rs                     # Process entrypoint, clap CLI, telemetry init, stdio/http dispatch
-    ├── server.rs                   # SynapseService: ServerHandler + #[tool_router] declaring 72 MCP tools
+    ├── server.rs                   # SynapseService: ServerHandler + #[tool_router] declaring 79 MCP tools
     ├── server/
     │   ├── action_audit.rs         # CF_ACTION_LOG start/result audit rows with profile/session context
     │   ├── audit_context.rs        # Profile activation/session/event audit context persistence helpers
     │   ├── context.rs              # Shared tool context helpers
+    │   ├── everquest_contextgraph.rs # EverQuest ContextGraph MCP ingest/search bridge rows
     │   ├── everquest_domain.rs     # EverQuest DynamicJEPA domain-pack + typed state/action/outcome transition rows
     │   ├── everquest_episode_export.rs # EverQuest ContextGraph/DynamicJEPA episode JSONL export
     │   ├── everquest_guard.rs      # EverQuest planner guard-decision rows

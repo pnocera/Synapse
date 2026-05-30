@@ -542,6 +542,34 @@ the physical `CF_KV` source rows and the JSONL file on disk. The export is a
 planning/model evidence surface and does not prove movement, combat, or level
 progress by itself.
 
+## ContextGraph Memory Retrieval
+
+#529 adds `everquest_contextgraph_ingest` and `everquest_contextgraph_search`.
+These tools do not read raw EQ logs directly. They ingest only #521 compact,
+redacted episode JSONL after verifying the caller-supplied artifact SHA-256 and
+episode schema/redaction flags. The runtime launches the real ContextGraph MCP
+stdio surface (`context-graph-mcp --transport stdio`), calls `store_memory`,
+`get_provenance_chain`, `get_audit_trail`, and `search_graph`, then writes
+Synapse bridge/search rows:
+
+- `CF_KV/everquest/contextgraph_ingest/v1/everquest.live/<export_sha>/<episode_id>`
+- `CF_KV/everquest/contextgraph_search/v1/everquest.live/<search_id>`
+
+Stored memory content carries fixed retrieval tags
+`game:everquest`, `character:Thenumberone`, `server:frostreaver`,
+`zone:neriaka`, `profile:everquest.live`, plus
+`source_episode_id=` and `source_export_sha256=` markers. It is a compact
+retrieval summary, not the full episode JSON, so the real sparse embedder stays
+under its token ceiling. Search fails closed by default when results do not
+cite those source markers. ContextGraph is the long-term retrieval surface;
+Synapse storage, visible UI, and physical EQ logs remain the gameplay SoT.
+
+Manual FSV must read the JSONL artifact and hash before the ingest trigger,
+call the real Synapse MCP tool, then separately inspect ContextGraph
+storage/audit/search readbacks and the Synapse `CF_KV` bridge rows. Required
+edges are ContextGraph unavailable, duplicate episode, malformed schema/hash,
+and private chat/session/target payload rejection.
+
 ## World-Model Prefix Rows
 
 #513 adds durable, compact EverQuest world-model storage prefixes and readback

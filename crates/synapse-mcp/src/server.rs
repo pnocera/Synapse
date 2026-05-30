@@ -110,6 +110,7 @@ mod action_audit;
 mod action_preflight;
 mod audit_context;
 mod context;
+mod everquest_contextgraph;
 mod everquest_domain;
 mod everquest_episode_export;
 mod everquest_guard;
@@ -242,6 +243,7 @@ impl SynapseService {
         Self::m1_tool_router()
             + Self::m2_tool_router()
             + Self::everquest_tool_router()
+            + Self::everquest_contextgraph_tool_router()
             + Self::everquest_domain_tool_router()
             + Self::everquest_episode_export_tool_router()
             + Self::everquest_guard_tool_router()

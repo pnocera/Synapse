@@ -12,6 +12,7 @@ Source files covered:
 - `crates/synapse-mcp/src/server/everquest_route.rs`
 - `crates/synapse-mcp/src/server/everquest_domain.rs`
 - `crates/synapse-mcp/src/server/everquest_trajectory.rs`
+- `crates/synapse-mcp/src/server/everquest_contextgraph.rs`
 - `crates/synapse-mcp/src/server/everquest_world_model.rs`
 - `crates/synapse-mcp/src/server/everquest_world_model/{model,validation}.rs`
 - `crates/synapse-mcp/src/server/everquest_surprise.rs`
@@ -26,7 +27,7 @@ Source files covered:
 - `crates/synapse-mcp/src/m3/{audio, audit_export, permissions, profile, profile_authoring, profile_quality, profile_registry, reflex, replay, subscribe}.rs`
 - `crates/synapse-core/src/types.rs`
 
-All 77 live tools are registered on `SynapseService` via
+All 79 live tools are registered on `SynapseService` via
 `#[tool(description=...)]` in `server.rs` and routed submodules. Tool
 descriptions are taken verbatim from the source. Every tool returns through
 `Json<T>` so the response shape exactly matches the deserialized response
@@ -562,7 +563,37 @@ The tool refuses zero-row exports, missing trajectory/domain/current-state rows,
 
 Manual FSV must read the source `CF_KV` rows and output path before the trigger, call the real MCP tool, then separately inspect the source rows and final JSONL file bytes afterward. The export is not a training script and does not replace physical EQ UI/log/action FSV.
 
-## 9m. `everquest_world_model_record`
+## 9m. `everquest_contextgraph_ingest` / `everquest_contextgraph_search`
+
+**Description:** Ingest redacted EverQuest episode JSONL into ContextGraph through its real MCP stdio tool surface, and query those memories with source episode/hash provenance.
+**Side effects:** `everquest_contextgraph_ingest` reads a #521 JSONL artifact, verifies the caller-supplied SHA-256, launches `context-graph-mcp --transport stdio`, calls ContextGraph `store_memory`, `get_provenance_chain`, and `get_audit_trail`, then writes `CF_KV/everquest/contextgraph_ingest/v1/everquest.live/<export_sha>/<episode_id>`. `everquest_contextgraph_search` calls ContextGraph `search_graph`, requires `source_episode_id=` and `source_export_sha256=` citations by default, then writes `CF_KV/everquest/contextgraph_search/v1/everquest.live/<search_id>`.
+
+| Parameter | Type | Required | Default | Description |
+|---|---|---|---|---|
+| `ingest_id` | `String` | ingest only | - | ASCII ingest id used for session/provenance |
+| `export_path` | `String` | ingest only | - | Absolute path to a #521 episode JSONL artifact |
+| `expected_export_sha256` | `String` | ingest only | - | Required SHA-256 for fail-closed artifact validation |
+| `search_id` | `String` | search only | - | ASCII id used in the search audit row key |
+| `query` | `String` | search only | - | Search query; EverQuest tags are appended by the tool |
+| `profile_id` | `String` | no | `everquest.live` | EverQuest profile id; other ids fail closed |
+| `contextgraph_storage_path` | `String` | yes | - | Absolute ContextGraph RocksDB path used as explicit SoT |
+| `contextgraph_data_root` | `Option<String>` | no | - | Optional explicit ContextGraph data root |
+| `contextgraph_command` | `String` | no | `context-graph-mcp` | Command or absolute path for the ContextGraph MCP binary |
+| `no_warm` | `bool` | no | `false` | Adds `--no-warm` for protocol/debug startup; store/search may still fail if models are unavailable |
+| `timeout_ms` | `u64` | no | `120000` | Per JSON-RPC request timeout |
+| `importance` | `f64` | ingest only | `0.78` | ContextGraph memory importance |
+| `top_k` | `u32` | search only | `8` | Search result cap, max 25 |
+| `min_similarity` | `f64` | search only | `0.0` | ContextGraph search threshold |
+| `require_provenance` | `bool` | search only | `true` | Reject search results that do not cite source episode/hash markers |
+
+**Returns:** `EverQuestContextGraphIngestResponse { ok, ingest_id, profile_id, export_path, export_sha256, export_line_count, contextgraph_command, contextgraph_storage_path, stored_count, duplicate_count, rows }` and `EverQuestContextGraphSearchResponse { ok, search_id, profile_id, query, contextgraph_command, contextgraph_storage_path, result_count, citation_count, citations, contextgraph_search_readback, synapse_readback }`.
+**Errors:** `TOOL_PARAMS_INVALID`, `STORAGE_READ_FAILED`, `STORAGE_WRITE_FAILED`, `STORAGE_SCHEMA_MISMATCH`, `STORAGE_CORRUPTED`, `MODEL_BACKEND_UNAVAILABLE`, `TOOL_INTERNAL_ERROR`.
+
+The ingest tool refuses empty/unreadable exports, hash mismatch, malformed JSONL, wrong schema/profile/record kind, incompatible ContextGraph metadata, unsafe redaction flags, and private chat/session/target payload markers before any ContextGraph mutation. Stored ContextGraph content is a bounded retrieval summary, not the full episode JSON, so the real sparse embedder stays under its token ceiling. Duplicate same-hash episode rows read the existing Synapse bridge row and do not store a second ContextGraph memory. ContextGraph JSON-RPC errors and tool-level `isError=true` are fail-closed.
+
+ContextGraph is retrieval/long-term memory only. Manual FSV must read the JSONL artifact, ContextGraph storage/audit/search SoT, and Synapse `CF_KV` bridge/search rows before and after the real MCP trigger. It does not replace physical EQ UI/log/action/storage verification for gameplay progress.
+
+## 9n. `everquest_world_model_record`
 
 **Description:** "Persist one compact EverQuest world-model row under an approved CF_KV prefix with exact readback"
 **Side effects:** validates one compact world-model payload, writes `CF_KV` under an approved EverQuest world-model prefix, then reads the exact row back before returning.
@@ -588,7 +619,7 @@ Planner-eligible learned transition volumes use `row_kind=transition` with a com
 
 The tool rejects invalid profile ids, invalid row ids, non-object or empty payloads, oversized payloads, missing source refs, malformed hashes, duplicate create writes, replace-without-existing-row, and payloads that appear to contain raw chat/message bodies.
 
-## 9n. `everquest_world_model_inspect`
+## 9o. `everquest_world_model_inspect`
 
 **Description:** "Inspect approved EverQuest world-model CF_KV prefixes, selected keys, counts, and redacted samples"
 **Side effects:** none beyond reading `CF_KV`.
@@ -606,7 +637,7 @@ The tool rejects invalid profile ids, invalid row ids, non-object or empty paylo
 
 Manual FSV for both #513 tools must read `CF_KV` before the trigger, call the real MCP tool with known synthetic world-model data, then separately read selected keys, prefix counts, and storage/WAL state afterward. These tools are storage/readback surfaces, not FSV scripts and not gameplay-progress proof.
 
-## 9o. `everquest_surprise_detect`
+## 9p. `everquest_surprise_detect`
 
 **Description:** "Compare predicted EverQuest outcome with observed state/log evidence and persist a compact surprise world-model row"
 **Side effects:** reads the persisted current-state row by default or a provided observed override, compares it to a compact prediction, writes `CF_KV/everquest/surprise/v1/everquest.live/<surprise_id>` through the approved world-model row path, then reads that exact row back. It does not execute input.
@@ -627,7 +658,7 @@ Manual FSV for both #513 tools must read `CF_KV` before the trigger, call the re
 
 Manual FSV must read physical EQ log/current-state/storage before the trigger, call this real MCP tool with known expected/observed inputs, then separately inspect `everquest_world_model_inspect`, `storage_inspect`, and DB/WAL bytes afterward. The row is repair evidence only, not gameplay progress proof.
 
-## 9p. `everquest_world_summary`
+## 9q. `everquest_world_summary`
 
 **Description:** "Persist one compact EverQuest world-state summary for context injection with map/log/storage provenance and chat redaction"
 **Side effects:** reads the persisted current-state row by default or a provided synthetic override, builds bounded map context from local EQ map files, writes `CF_KV/everquest/world_summary/v1/everquest.live/<summary_id>`, then reads that exact row back. It does not execute input.
@@ -651,7 +682,7 @@ Manual FSV must read physical EQ log/current-state/storage before the trigger, c
 
 Manual FSV must read physical EQ map/log/current-state/storage before the trigger, call this real MCP tool with known expected outputs, then separately inspect `storage_inspect` and DB/WAL bytes for the exact summary key. The row is compact context evidence only and not movement, combat, or level-progress proof.
 
-## 9q. `everquest_predictive_model_fit`
+## 9r. `everquest_predictive_model_fit`
 
 **Description:** "Fit a transparent EverQuest action-conditioned predictive baseline from verified trajectory/domain rows with exact CF_KV readback"
 **Side effects:** reads #512 trajectory rows and linked #511 DynamicJEPA rows, writes `CF_KV/everquest/predictive_model/v1/everquest.live/<model_id>`, computes a stable model hash, then reads that exact row back.
@@ -670,7 +701,7 @@ Manual FSV must read physical EQ map/log/current-state/storage before the trigge
 **Returns:** `EverQuestPredictiveModelFitResponse { ok, row_key, stored_value_len_bytes, model }`. The model row records status (`trained`, `no_verified_trajectories`, or `insufficient_transition_support`), training counts, conflict counts, source trajectory/transition keys, state-action entries, action fallbacks, global fallback, confidence thresholds, model hash, and evidence-boundary flags.
 **Errors:** `TOOL_PARAMS_INVALID`, `STORAGE_READ_FAILED`, `STORAGE_WRITE_FAILED`, `STORAGE_CORRUPTED`, `TOOL_INTERNAL_ERROR`.
 
-## 9r. `everquest_predictive_model_predict`
+## 9s. `everquest_predictive_model_predict`
 
 **Description:** "Persist one EverQuest predictive-model next-outcome prediction row with calibrated abstention and exact CF_KV readback"
 **Side effects:** reads the model row and DynamicJEPA state row, ranks candidate actions, writes `CF_KV/everquest/prediction/v1/everquest.live/<prediction_id>`, then reads that exact row back.
@@ -693,7 +724,7 @@ Manual FSV must read physical EQ map/log/current-state/storage before the trigge
 
 Manual FSV for both #522 tools must read trajectory/domain/state/model/prediction `CF_KV` rows before the trigger, call the real MCP tool with known inputs, then separately inspect the durable rows afterward. The happy path must compare one prediction to a later observed outcome through the real action-prior sample surface; edges must include no data, conflicting data, stale artifact hash, and uncertainty above threshold.
 
-## 9s. `everquest_action_prior_record`
+## 9t. `everquest_action_prior_record`
 
 **Description:** "Persist one EverQuest action-prior prediction/outcome sample with computed correctness and exact CF_KV readback"
 **Side effects:** validates a redacted prediction/outcome sample, computes correctness, writes `CF_KV/everquest/action_prior_eval/v1/everquest.live/<sample_id>`, then reads that exact row back before returning.
@@ -713,7 +744,7 @@ Manual FSV for both #522 tools must read trajectory/domain/state/model/predictio
 **Returns:** `EverQuestActionPriorRecordResponse { ok, row_key, stored_value_len_bytes, sample }`. `sample.correctness.class` is one of `correct_top1`, `correct_top3`, `correct_context`, `wrong`, `abstained`, or `unknown_actual`; it also carries calibration bucket, useful flag, overconfident-wrong flag, and the evidence boundary that scorecards are not FSV.
 **Errors:** `TOOL_PARAMS_INVALID`, `STORAGE_WRITE_FAILED`, `STORAGE_READ_FAILED`, `STORAGE_CORRUPTED`, `TOOL_INTERNAL_ERROR`.
 
-## 9t. `everquest_action_prior_scorecard`
+## 9u. `everquest_action_prior_scorecard`
 
 **Description:** "Aggregate persisted EverQuest action-prior samples into a floor-not-ceiling competence scorecard with exact CF_KV readback"
 **Side effects:** reads named eval rows from `CF_KV`, writes `CF_KV/everquest/action_prior_scorecard/v1/everquest.live/<window_id>`, then reads that exact row back before returning.

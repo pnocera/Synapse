@@ -17,14 +17,16 @@
    rows, #514 adds EverQuest planner guard-decision rows, #511 adds the
    EverQuest DynamicJEPA domain normalizer, #512 adds linked trajectory rows
    from action/observation/event/log evidence, #521 adds the
-   ContextGraph-compatible DynamicJEPA episode exporter, #513 adds EverQuest
+   ContextGraph-compatible DynamicJEPA episode exporter, #529 adds
+   ContextGraph ingestion/search bridge tools for exported EverQuest memories,
+   #513 adds EverQuest
    world-model record/inspect storage surfaces, #515 adds the EverQuest
    surprise detector row writer, #516 adds the compact EverQuest world-summary
    context row writer, #531 adds EverQuest action-prior sample/scorecard
    tools, #522 adds transparent EverQuest predictive-model fit/predict rows,
    #535 adds the narrow EverQuest safe slash-command plus survival readiness
    row surfaces, and #538 adds the delta-first reality baseline/delta/audit
-   tools, bringing the live surface to 77. Any
+   tools, bringing the live surface to 79. Any
    further agent-facing tools require an ADR-approved cap change.
    Overlapping tools merge. Profile and parameter knobs are the escape hatches.
 2. **One tool, one verb.** No `do_everything(action_kind, ...)` mega-tools.
@@ -66,7 +68,8 @@ also gates `/loc` and the safe command tool, #510 adds
 `everquest_memory_consult`, #514 adds `everquest_planner_guard`, #527 adds
 `everquest_route_plan`, #525 adds `everquest_map_sensor`, #511 adds
 `everquest_domain_normalize`, #512 adds `everquest_trajectory_record`, #521 adds
-`everquest_episode_export`, #513 adds `everquest_world_model_record` plus
+`everquest_episode_export`, #529 adds `everquest_contextgraph_ingest` plus
+`everquest_contextgraph_search`, #513 adds `everquest_world_model_record` plus
 `everquest_world_model_inspect`, #515 adds `everquest_surprise_detect`, #516 adds
 `everquest_world_summary`, #522 adds `everquest_predictive_model_fit` plus
 `everquest_predictive_model_predict`, and #531 adds
@@ -151,19 +154,21 @@ daemon through standard MCP `tools/list`.
 | 64 | `everquest_domain_normalize` | write/read | stores the EverQuest DynamicJEPA domain pack plus typed state/action/outcome/transition rows |
 | 65 | `everquest_trajectory_record` | write/read | stores one ordered trajectory from linked action/observation/event/log/state evidence and writes a JSONL provenance artifact |
 | 66 | `everquest_episode_export` | read/write | exports redacted trajectory/domain rows to ContextGraph-compatible DynamicJEPA episode JSONL and reads the file back |
-| 67 | `everquest_world_model_record` | write/read | stores one compact world-model row under an approved `CF_KV` prefix with exact readback |
-| 68 | `everquest_world_model_inspect` | read | inspects approved EverQuest world-model prefixes, selected keys, counts, and redacted samples |
-| 69 | `everquest_surprise_detect` | write/read | compares predicted EverQuest outcome against observed state/log evidence and stores a compact surprise row |
-| 70 | `everquest_world_summary` | write/read | stores one compact world-state summary row for context injection with map/log/storage provenance and chat redaction |
-| 71 | `everquest_predictive_model_fit` | write/read | fits a transparent action-conditioned predictive baseline from verified trajectory/domain rows and reads the model row back |
-| 72 | `everquest_predictive_model_predict` | write/read | stores one calibrated next-outcome prediction row with abstention and exact readback |
-| 73 | `everquest_action_prior_record` | write/read | stores one prediction/outcome sample under `CF_KV` with computed correctness and exact readback |
-| 74 | `everquest_action_prior_scorecard` | write/read | aggregates stored samples into a floor-not-ceiling competence scorecard row and reads it back |
-| 75 | `reality_baseline` | write/read | captures or reuses a compact reality baseline, persists `CF_KV/reality/baseline/*` and `CF_KV/reality/head/*`, and reads them back |
-| 76 | `observe_delta` | write/read | returns ordered reality deltas since a cursor, persists changed `CF_KV/reality/delta/*` rows, updates head, and publishes `reality_delta` SSE events |
-| 77 | `reality_audit` | write/read | re-reads physical reality, compares it to the caller's assumed epoch/hash, persists `CF_KV/reality/audit/*`, and returns drift/rebase guidance |
+| 67 | `everquest_contextgraph_ingest` | write/read | ingests redacted episode JSONL through ContextGraph MCP, then persists Synapse bridge rows with fingerprint/provenance/audit readback |
+| 68 | `everquest_contextgraph_search` | write/read | searches ContextGraph EverQuest memories, requires source episode/hash provenance, and persists a search audit row |
+| 69 | `everquest_world_model_record` | write/read | stores one compact world-model row under an approved `CF_KV` prefix with exact readback |
+| 70 | `everquest_world_model_inspect` | read | inspects approved EverQuest world-model prefixes, selected keys, counts, and redacted samples |
+| 71 | `everquest_surprise_detect` | write/read | compares predicted EverQuest outcome against observed state/log evidence and stores a compact surprise row |
+| 72 | `everquest_world_summary` | write/read | stores one compact world-state summary row for context injection with map/log/storage provenance and chat redaction |
+| 73 | `everquest_predictive_model_fit` | write/read | fits a transparent action-conditioned predictive baseline from verified trajectory/domain rows and reads the model row back |
+| 74 | `everquest_predictive_model_predict` | write/read | stores one calibrated next-outcome prediction row with abstention and exact readback |
+| 75 | `everquest_action_prior_record` | write/read | stores one prediction/outcome sample under `CF_KV` with computed correctness and exact readback |
+| 76 | `everquest_action_prior_scorecard` | write/read | aggregates stored samples into a floor-not-ceiling competence scorecard row and reads it back |
+| 77 | `reality_baseline` | write/read | captures or reuses a compact reality baseline, persists `CF_KV/reality/baseline/*` and `CF_KV/reality/head/*`, and reads them back |
+| 78 | `observe_delta` | write/read | returns ordered reality deltas since a cursor, persists changed `CF_KV/reality/delta/*` rows, updates head, and publishes `reality_delta` SSE events |
+| 79 | `reality_audit` | write/read | re-reads physical reality, compares it to the caller's assumed epoch/hash, persists `CF_KV/reality/audit/*`, and returns drift/rebase guidance |
 
-M3 live count: 30 tools. Current live count: 77
+M3 live count: 30 tools. Current live count: 79
 tools.
 
 Deferred ideas from earlier drafts (`describe` and `read_hud`) are still not
@@ -189,6 +194,8 @@ domain-pack normalizer;
 `everquest_trajectory_record` is the #512 ordered trajectory row/export tool;
 `everquest_episode_export` is the #521 ContextGraph/DynamicJEPA episode JSONL
 export tool;
+`everquest_contextgraph_ingest` and `everquest_contextgraph_search` are the
+#529 ContextGraph memory/provenance bridge tools;
 `everquest_world_model_record` and `everquest_world_model_inspect` are the
 #513 approved-prefix storage/readback tools;
 `everquest_surprise_detect` is the #515 prediction-vs-observation surprise row
@@ -238,7 +245,7 @@ Errors: `OBSERVE_NO_PERCEPTION_AVAILABLE` (all sensors down), `OBSERVE_INTERNAL`
 ### 3.1a `reality_baseline`, `observe_delta`, `reality_audit` (live, #536/#538)
 
 These are the live delta-first reality surfaces registered by
-`server/reality.rs` and counted in the live 77-tool surface.
+`server/reality.rs` and counted in the live 79-tool surface.
 
 - `reality_baseline` captures or reads a compact baseline for the current
   profile/session. It persists `CF_KV/reality/baseline/v1/<profile>/<epoch>`
@@ -1245,6 +1252,58 @@ only.
 Manual FSV must read the source `CF_KV` rows and target JSONL path before the
 trigger, call this real MCP tool with known trajectory row keys, and separately
 inspect the same rows plus final JSONL bytes afterward.
+
+### 3.13l1 `everquest_contextgraph_ingest` / `everquest_contextgraph_search`
+
+```json
+{
+  "name": "everquest_contextgraph_ingest",
+  "input_schema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": ["ingest_id", "export_path", "expected_export_sha256", "contextgraph_storage_path"],
+    "properties": {
+      "ingest_id": {"type": "string"},
+      "profile_id": {"type": "string", "default": "everquest.live"},
+      "export_path": {"type": "string"},
+      "expected_export_sha256": {"type": "string"},
+      "contextgraph_storage_path": {"type": "string"},
+      "contextgraph_data_root": {"type": "string"},
+      "contextgraph_command": {"type": "string", "default": "context-graph-mcp"},
+      "no_warm": {"type": "boolean", "default": false},
+      "timeout_ms": {"type": "integer", "default": 120000},
+      "importance": {"type": "number", "default": 0.78}
+    }
+  }
+}
+```
+
+`everquest_contextgraph_ingest` is the #529 bridge from #521 JSONL artifacts
+into the real `ChrisRoyse/contextgraph` MCP tool surface. It reads the local
+episode JSONL file, verifies the caller-supplied SHA-256, validates schema
+version, record kind, ContextGraph compatibility metadata, and redaction flags,
+then launches `context-graph-mcp --transport stdio` with the explicit
+`CONTEXT_GRAPH_STORAGE_PATH`. It calls ContextGraph `store_memory`,
+`get_provenance_chain`, and `get_audit_trail`, then persists
+`CF_KV/everquest/contextgraph_ingest/v1/everquest.live/<export_sha>/<episode>`
+bridge rows with fingerprint, source episode id, source export hash, storage
+path, tags, and readback hashes. Stored ContextGraph content is a bounded
+retrieval summary of the episode, not the full JSONL row, so the real sparse
+embedder stays under its token ceiling. Duplicate same-hash episode rows return
+the existing Synapse bridge row without storing a second ContextGraph memory.
+
+The tool fails closed before ContextGraph mutation on missing/unreadable JSONL,
+hash mismatch, malformed JSONL, wrong schema/record kind/profile, incompatible
+ContextGraph block, unsafe redaction, or private chat/session/target payload
+markers. ContextGraph unavailable, missing tools, JSON-RPC errors, missing
+fingerprint ids, and tool-level `isError=true` also fail closed.
+
+`everquest_contextgraph_search` queries the same ContextGraph storage with
+EverQuest tags, requires returned content/provenance to cite
+`source_episode_id=` and `source_export_sha256=` by default, and persists
+`CF_KV/everquest/contextgraph_search/v1/everquest.live/<search_id>`.
+ContextGraph is retrieval/long-term memory only; Synapse storage, EQ logs, and
+visible UI remain the gameplay SoT for manual FSV.
 
 ### 3.13m `everquest_world_model_record`
 
@@ -2926,6 +2985,27 @@ profile-authoring and audit-export defaults below.
 | `everquest_episode_export` | `issue_refs` | `[]` | #521 |
 | `everquest_episode_export` | `output_path` | omitted; defaults to `<export_id>.jsonl` under local export root | #521 |
 | `everquest_episode_export` | `overwrite` | `false` | #521 |
+| `everquest_contextgraph_ingest` | `ingest_id` | required; no default | #529 |
+| `everquest_contextgraph_ingest` | `profile_id` | `"everquest.live"` | #529 |
+| `everquest_contextgraph_ingest` | `export_path` | required absolute JSONL path | #529 |
+| `everquest_contextgraph_ingest` | `expected_export_sha256` | required SHA-256 hex | #529 |
+| `everquest_contextgraph_ingest` | `contextgraph_storage_path` | required absolute ContextGraph RocksDB path | #529 |
+| `everquest_contextgraph_ingest` | `contextgraph_data_root` | omitted; optional explicit ContextGraph data root | #529 |
+| `everquest_contextgraph_ingest` | `contextgraph_command` | `"context-graph-mcp"` | #529 |
+| `everquest_contextgraph_ingest` | `no_warm` | `false` | #529 |
+| `everquest_contextgraph_ingest` | `timeout_ms` | `120000` | #529 |
+| `everquest_contextgraph_ingest` | `importance` | `0.78` | #529 |
+| `everquest_contextgraph_search` | `search_id` | required; no default | #529 |
+| `everquest_contextgraph_search` | `profile_id` | `"everquest.live"` | #529 |
+| `everquest_contextgraph_search` | `query` | required; no default | #529 |
+| `everquest_contextgraph_search` | `contextgraph_storage_path` | required absolute ContextGraph RocksDB path | #529 |
+| `everquest_contextgraph_search` | `contextgraph_data_root` | omitted; optional explicit ContextGraph data root | #529 |
+| `everquest_contextgraph_search` | `contextgraph_command` | `"context-graph-mcp"` | #529 |
+| `everquest_contextgraph_search` | `no_warm` | `false` | #529 |
+| `everquest_contextgraph_search` | `timeout_ms` | `120000` | #529 |
+| `everquest_contextgraph_search` | `top_k` | `8` | #529 |
+| `everquest_contextgraph_search` | `min_similarity` | `0.0` | #529 |
+| `everquest_contextgraph_search` | `require_provenance` | `true` | #529 |
 | `everquest_world_model_record` | `row_kind` | required; no default | #513 |
 | `everquest_world_model_record` | `row_id` | required; no default | #513 |
 | `everquest_world_model_record` | `profile_id` | `"everquest.live"` | #513 |
