@@ -1030,7 +1030,37 @@ fn parse_hp_mana_from_hud_text(raw: &str) -> Option<(u32, u32, u32, u32)> {
 }
 
 fn parse_resource_pair(token: &str) -> Option<(u32, u32)> {
-    let (current, max) = token.split_once('/')?;
+    if let Some((current, max)) = token.split_once('/') {
+        let current = current
+            .trim_matches(|ch: char| !ch.is_ascii_digit())
+            .parse::<u32>()
+            .ok()?;
+        let max = max
+            .trim_matches(|ch: char| !ch.is_ascii_digit())
+            .parse::<u32>()
+            .ok()?;
+        return Some((current, max));
+    }
+    parse_ocr_slashless_resource_pair(token)
+}
+
+fn parse_ocr_slashless_resource_pair(token: &str) -> Option<(u32, u32)> {
+    let digits = token
+        .chars()
+        .filter(char::is_ascii_digit)
+        .collect::<String>();
+    if digits.len() < 4 || digits.len() > 5 {
+        return None;
+    }
+    let separator_index = digits.len().saturating_sub(3);
+    if digits.as_bytes().get(separator_index).copied()? != b'1' {
+        return None;
+    }
+    let (current, rest) = digits.split_at(separator_index);
+    let max = rest.strip_prefix('1')?;
+    if current.is_empty() || max.is_empty() {
+        return None;
+    }
     let current = current
         .trim_matches(|ch: char| !ch.is_ascii_digit())
         .parse::<u32>()
@@ -1039,6 +1069,9 @@ fn parse_resource_pair(token: &str) -> Option<(u32, u32)> {
         .trim_matches(|ch: char| !ch.is_ascii_digit())
         .parse::<u32>()
         .ok()?;
+    if max == 0 || current > max {
+        return None;
+    }
     Some((current, max))
 }
 
@@ -2092,6 +2125,29 @@ mod tests {
             .collect::<Vec<_>>();
 
         assert_eq!(keys, ["/", "l", "o", "c", "enter"]);
+    }
+
+    #[test]
+    fn survival_parser_accepts_inventory_resource_ocr_slash_loss() {
+        let parsed = parse_hp_mana_from_hud_text(
+            "Inventory Thenumberone 1 Wizard 30/30 28128 20120 6129 4/30 NEXT LEVEL 0.000%",
+        )
+        .unwrap_or_else(|| panic!("expected OCR slash-loss resources to parse"));
+
+        assert_eq!(parsed, (30, 30, 28, 28));
+    }
+
+    #[test]
+    fn survival_parser_accepts_zero_current_ocr_slash_loss() {
+        let parsed = parse_hp_mana_from_hud_text("Inventory 30/30 0128 NEXT LEVEL")
+            .unwrap_or_else(|| panic!("expected zero-current OCR slash-loss resource to parse"));
+
+        assert_eq!(parsed, (30, 30, 0, 28));
+    }
+
+    #[test]
+    fn survival_parser_ignores_unbounded_numeric_text() {
+        assert!(parse_hp_mana_from_hud_text("NEXT LEVEL 0.000% STR 60 STA 80").is_none());
     }
 
     #[test]

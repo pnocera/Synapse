@@ -767,7 +767,9 @@ without a separate issue and explicit operator approval.
 single compact row to
 `CF_KV/everquest/survival_readiness/v1/everquest.live/latest`. The row fuses
 foreground/profile state, `everquest.chat_input_state`, visible HUD resource
-text (`HP/Mana` pairs when readable), and the physical EQ log tail. It detects
+text (`HP/Mana` pairs when readable), and the physical EQ log tail. Resource
+OCR accepts normal slash pairs such as `28/28` and the observed slash-loss form
+where the separator is read as `1`, such as `28128` for `28/28`. It detects
 food/drink absence from the authoritative log signal `You are out of food and
 drink` without persisting raw chat bodies, and records hunger/thirst timestamps
 as compact booleans/timestamps.
