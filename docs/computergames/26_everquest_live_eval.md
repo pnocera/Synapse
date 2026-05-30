@@ -160,8 +160,10 @@ are hard failures.
 gameplay input. It writes
 `CF_KV/everquest/survival_readiness/v1/everquest.live/latest` from current
 foreground/profile state, `everquest.chat_input_state`, visible HUD HP/mana
-text, and the physical EQ log tail. HP/mana parsing accepts normal `current/max`
-OCR and the observed slash-loss form where `28/28` is read as `28128`.
+text, and a bounded recent physical EQ log window large enough to keep
+own-player posture proof from being displaced by normal hunger/thirst spam.
+HP/mana parsing accepts normal `current/max` OCR and the observed slash-loss
+form where `28/28` is read as `28128`.
 Food/drink absence is detected from the
 physical `You are out of food and drink` log signal; positive item counting from
 bags/merchant windows is not implied. Merchant/economy/item acquisition remains

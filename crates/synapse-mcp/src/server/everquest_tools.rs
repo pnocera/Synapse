@@ -32,7 +32,7 @@ const LOC_INTER_KEY_DELAY: Duration = Duration::from_millis(20);
 const SAFE_COMMAND_LOG_DELAY: Duration = Duration::from_millis(650);
 const MAX_LOC_LOG_BYTES: usize = 64 * 1024;
 const MAX_LOC_LOG_EVENTS: usize = 128;
-const MAX_SURVIVAL_LOG_BYTES: usize = 64 * 1024;
+const MAX_SURVIVAL_LOG_BYTES: usize = 2 * 1024 * 1024;
 const LOC_POLL_INTERVAL: Duration = Duration::from_millis(100);
 const LOC_TIMEOUT: Duration = Duration::from_secs(3);
 const CHAT_STATE_ROW_KIND: &str = "everquest.chat_input_state";
@@ -2239,6 +2239,42 @@ mod tests {
         assert_eq!(
             log.latest_posture_summary.as_deref(),
             Some("standing_casting")
+        );
+        assert_eq!(posture_readiness(&log).is_sitting, Some(false));
+        Ok(())
+    }
+
+    #[test]
+    fn survival_log_readback_keeps_posture_beyond_old_64k_tail() -> anyhow::Result<()> {
+        let dir = tempfile::tempdir()?;
+        let path = dir.path().join("eqlog_Thenumberone_frostreaver.txt");
+        let filler = "x".repeat((64 * 1024) + 512);
+        std::fs::write(
+            &path,
+            format!(
+                "[Sat May 30 07:34:49 2026] You begin casting Minor Shielding.\r\n\
+                 {filler}\r\n\
+                 [Sat May 30 08:51:06 2026] You are thirsty.\r\n\
+                 [Sat May 30 08:51:06 2026] You are hungry.\r\n\
+                 [Sat May 30 08:51:06 2026] You are out of food and drink.\r\n"
+            ),
+        )?;
+
+        let log = read_survival_log_readback(&path)
+            .unwrap_or_else(|error| panic!("expected survival log readback: {error:?}"));
+
+        assert!(log.bytes_read > 64 * 1024);
+        assert_eq!(
+            log.latest_cast_timestamp.as_deref(),
+            Some("Sat May 30 07:34:49 2026")
+        );
+        assert_eq!(
+            log.latest_posture_summary.as_deref(),
+            Some("standing_casting")
+        );
+        assert_eq!(
+            log.latest_out_of_food_drink_timestamp.as_deref(),
+            Some("Sat May 30 08:51:06 2026")
         );
         assert_eq!(posture_readiness(&log).is_sitting, Some(false));
         Ok(())
