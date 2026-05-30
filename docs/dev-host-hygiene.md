@@ -57,6 +57,34 @@ repeat the readback. FSV triggers Synapse behavior through the real MCP
 `tools/call` when a tool exists, and the verdict comes from a separate physical
 SoT read after the call.
 
+## Exa MCP host-global setup
+
+Exa is a host prerequisite for agent web research. On this configured Windows
+host, future agents must treat Exa as already provisioned for the current
+Windows user and must not ask the operator for the key while the local source of
+truth can be read.
+
+Authoritative local readbacks:
+
+* `HKCU\Environment\EXA_API_KEY` is the primary user-scoped environment value.
+* `C:\Users\hotra\.codex\secrets\exa_api_key.dpapi` is the current-user DPAPI
+  fallback.
+* `C:\Users\hotra\.codex\bin\exa-mcp-server.ps1` is the Codex wrapper. It
+  resolves the key in this order: process environment, User environment,
+  Machine environment, DPAPI fallback.
+* `C:\Users\hotra\.codex\config.toml` points `[mcp_servers.exa]` at the wrapper
+  by absolute path.
+* `C:\Users\hotra\.codex\bin` should be first in the User `Path`, and
+  `%APPDATA%\npm` should be present for the global `exa-mcp-server` npm package.
+
+Never commit, log, or paste the raw key. Verification evidence should print only
+presence, length, a short SHA-256 prefix, the wrapper/config/package paths, MCP
+`initialize`/`tools/list` success, and a live Exa API result shape. If the
+current Codex session reports `Transport closed`, treat that as stale client
+transport state: use the wrapper or restart the Codex session. Do not request
+the key from the operator unless both the user environment and DPAPI fallback
+are physically absent after direct readback.
+
 ## Coordinates: `act_aim` / `act_click({x,y})` / `act_drag` / `act_scroll`
 
 Synapse interprets all `{x, y}` mouse coordinates as **physical (DPI-aware) pixels** — the same units `GetCursorPos` returns from a per-monitor-DPI-aware process, and the same units UI Automation bounding boxes use. This matches the daemon's own DPI awareness (synapse-mcp is built as per-monitor V2) and `mouse_coordinates.rs::normalize_absolute_mouse_point` which feeds `MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK`.
