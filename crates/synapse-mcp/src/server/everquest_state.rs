@@ -218,16 +218,16 @@ impl SynapseService {
             mark_field_not_actionable(&mut target, reason);
             mark_field_not_actionable(&mut consider, reason);
         }
-        let mut hazards = hazards_for_state(
-            &focus,
-            &ui_context,
-            &zone,
-            &zone_short_name,
-            &location,
-            &level,
-            &xp_percent,
-            &batch,
-        );
+        let mut hazards = hazards_for_state(&HazardInputs {
+            focus: &focus,
+            ui_context: &ui_context,
+            zone: &zone,
+            zone_short_name: &zone_short_name,
+            location: &location,
+            level: &level,
+            xp_percent: &xp_percent,
+            batch: &batch,
+        });
         if let Some(cursor) = self.m1_state()?.everquest_log_cursor.clone()
             && cursor.path == active.log.path
             && cursor.offset > batch.file_len_bytes
@@ -680,16 +680,30 @@ fn latest_summary_field(
         )
 }
 
-fn hazards_for_state(
-    focus: &EverQuestFocusState,
-    ui_context: &EverQuestUiContextReadback,
-    zone: &EverQuestStateField<String>,
-    zone_short_name: &EverQuestStateField<String>,
-    location: &EverQuestStateField<EverQuestStateLocation>,
-    level: &EverQuestStateField<u32>,
-    xp_percent: &EverQuestStateField<f32>,
-    batch: &synapse_everquest::EverQuestLogTailBatch,
-) -> Vec<EverQuestStateHazard> {
+/// Borrowed inputs for hazard derivation, grouped so the function stays within
+/// the `clippy::too_many_arguments` limit. All fields are `Copy` references.
+struct HazardInputs<'a> {
+    focus: &'a EverQuestFocusState,
+    ui_context: &'a EverQuestUiContextReadback,
+    zone: &'a EverQuestStateField<String>,
+    zone_short_name: &'a EverQuestStateField<String>,
+    location: &'a EverQuestStateField<EverQuestStateLocation>,
+    level: &'a EverQuestStateField<u32>,
+    xp_percent: &'a EverQuestStateField<f32>,
+    batch: &'a synapse_everquest::EverQuestLogTailBatch,
+}
+
+fn hazards_for_state(inputs: &HazardInputs<'_>) -> Vec<EverQuestStateHazard> {
+    let &HazardInputs {
+        focus,
+        ui_context,
+        zone,
+        zone_short_name,
+        location,
+        level,
+        xp_percent,
+        batch,
+    } = inputs;
     let mut hazards = Vec::new();
     if !focus.is_everquest_foreground {
         hazards.push(EverQuestStateHazard {
@@ -753,10 +767,12 @@ fn mark_field_not_actionable<T>(field: &mut EverQuestStateField<T>, reason: &str
         return;
     }
     field.confidence = field.confidence.min(0.25);
-    field.note = Some(match field.note.take() {
-        Some(note) => format!("{note}; {reason}"),
-        None => reason.to_owned(),
-    });
+    field.note = Some(
+        field
+            .note
+            .take()
+            .map_or_else(|| reason.to_owned(), |note| format!("{note}; {reason}")),
+    );
 }
 
 fn field_hazard<T>(code: &str, field: &EverQuestStateField<T>) -> EverQuestStateHazard {
@@ -949,16 +965,16 @@ mod tests {
             events: Vec::new(),
         };
 
-        let hazards = hazards_for_state(
-            &focus,
-            &ui_context,
-            &zone,
-            &zone_short_name,
-            &location,
-            &field_none("HUD level unavailable"),
-            &field_none("HUD XP percent unavailable"),
-            &batch,
-        );
+        let hazards = hazards_for_state(&HazardInputs {
+            focus: &focus,
+            ui_context: &ui_context,
+            zone: &zone,
+            zone_short_name: &zone_short_name,
+            location: &location,
+            level: &field_none("HUD level unavailable"),
+            xp_percent: &field_none("HUD XP percent unavailable"),
+            batch: &batch,
+        });
 
         assert!(hazards.iter().any(|hazard| {
             hazard.code == "login_screen_visible"

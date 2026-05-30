@@ -32,6 +32,23 @@ impl ServerHandler for SynapseService {
         }
     }
 
+    async fn list_tools(
+        &self,
+        _request: Option<rmcp::model::PaginatedRequestParams>,
+        _context: rmcp::service::RequestContext<rmcp::RoleServer>,
+    ) -> Result<rmcp::model::ListToolsResult, ErrorData> {
+        // Normalize schemas before they reach the client: schemars emits a bare
+        // boolean `true` schema for `serde_json::Value` fields, which strict MCP
+        // clients reject (failing the whole tools/list). See
+        // `super::schema_sanitize`.
+        let tools = super::schema_sanitize::sanitize_tools(self.tool_router.list_all());
+        Ok(rmcp::model::ListToolsResult {
+            tools,
+            meta: None,
+            next_cursor: None,
+        })
+    }
+
     fn get_info(&self) -> ServerInfo {
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
             .with_server_info(Implementation::new(

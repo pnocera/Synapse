@@ -1,8 +1,57 @@
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, AtomicU8, Ordering};
 
 use crate::ActionResult;
 
 static OPERATOR_RELEASE_EPOCH: AtomicU64 = AtomicU64::new(0);
+
+/// Process-global record of how the operator panic hotkey resolved at startup,
+/// so liveness/health surfaces can report a degraded kill-switch instead of the
+/// failure being invisible. Lock-free: written once during startup, read by
+/// `/health`.
+static OPERATOR_HOTKEY_STATUS: AtomicU8 = AtomicU8::new(OperatorHotkeyStatus::Unknown as u8);
+
+/// Resolution of the operator panic hotkey for this process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OperatorHotkeyStatus {
+    /// Startup has not recorded a result yet.
+    Unknown = 0,
+    /// The global hotkey is registered and the kill-switch is armed.
+    Registered = 1,
+    /// Disabled by explicit operator environment override.
+    DisabledByEnv = 2,
+    /// Registration failed (e.g. another process owns the combo). The
+    /// kill-switch is NOT armed; this is a degraded safety state.
+    Unavailable = 3,
+}
+
+/// Records the resolved operator hotkey status for later health readback.
+pub fn set_operator_hotkey_status(status: OperatorHotkeyStatus) {
+    OPERATOR_HOTKEY_STATUS.store(status as u8, Ordering::Release);
+}
+
+/// Reads the resolved operator hotkey status.
+#[must_use]
+pub fn operator_hotkey_status() -> OperatorHotkeyStatus {
+    match OPERATOR_HOTKEY_STATUS.load(Ordering::Acquire) {
+        1 => OperatorHotkeyStatus::Registered,
+        2 => OperatorHotkeyStatus::DisabledByEnv,
+        3 => OperatorHotkeyStatus::Unavailable,
+        _ => OperatorHotkeyStatus::Unknown,
+    }
+}
+
+impl OperatorHotkeyStatus {
+    /// Stable lowercase label for health/diagnostics output.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Unknown => "unknown",
+            Self::Registered => "registered",
+            Self::DisabledByEnv => "disabled_by_env",
+            Self::Unavailable => "unavailable",
+        }
+    }
+}
 
 #[must_use]
 pub fn operator_release_epoch() -> u64 {

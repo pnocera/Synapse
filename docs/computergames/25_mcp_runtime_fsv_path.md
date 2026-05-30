@@ -25,6 +25,20 @@ install, or launch the repo-owned `synapse-mcp` process with an issue-local DB
 and log directory, then repeat the preflight reads. Missing or closed MCP
 runtime state is setup work, not permission to bypass Synapse.
 
+**Client-parity for `tools/list` (#548/#549, AGENTS.md D1).** The `tools/list`
+preflight read MUST go through a client that performs the same JSON-Schema
+validation the production MCP client does. A hand-rolled HTTP/stdio caller that
+skips client-side schema validation will accept tool schemas the real client
+rejects and report a working surface that is actually unusable. Known failure:
+`serde_json::Value` tool fields make `schemars` emit a bare boolean `true`
+schema, which strict clients reject (`fetching tools failed: ... Invalid
+input`), disabling every tool while a bypassing caller sees success. Confirm the
+real wired `synapse` client loads the full `tools/list` with no schema error,
+and keep `server::schema_sanitize` and its regression test green. A `-32000`
+connect failure is frequently the operator panic hotkey conflict in #549 (a
+leaked/duplicate instance owning `Ctrl+Alt+Shift+P`); read
+`/health` `action.operator_hotkey` and the daemon logs rather than guessing.
+
 When an MCP tool exists for the behavior under review, the FSV trigger is the
 real MCP `tools/call`. Direct CLI calls, helper binaries, unit tests,
 benchmarks, scripts, direct RocksDB writes, or code-level invocations may

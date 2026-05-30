@@ -135,6 +135,7 @@ mod m2_tools;
 mod m3_tools;
 mod m4_tools;
 mod reality;
+mod schema_sanitize;
 mod target_policy;
 #[cfg(test)]
 mod tests;

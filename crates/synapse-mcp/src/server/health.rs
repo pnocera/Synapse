@@ -225,13 +225,15 @@ impl SynapseService {
             Ok(state) => match state.backend_resolution_readback() {
                 Ok((source, policy)) => {
                     let emitter_available = state.emitter_available();
+                    let operator_hotkey = synapse_action::operator_hotkey_status().label();
                     SubsystemHealth {
                         status: if emitter_available { "ok" } else { "error" }.to_owned(),
                         detail: Some(format!(
-                            "emitter_available={} recording_enabled={} hardware_hid={} allow_shell_patterns={} allow_launch_patterns={}",
+                            "emitter_available={} recording_enabled={} hardware_hid={} operator_hotkey={} allow_shell_patterns={} allow_launch_patterns={}",
                             emitter_available,
                             state.recording_enabled(),
                             state.hardware_hid().unwrap_or("disabled"),
+                            operator_hotkey,
                             self.m4_config.allow_shell_count(),
                             self.m4_config.allow_launch_count()
                         )),

@@ -1,6 +1,9 @@
 use std::time::{Duration, Instant};
 
-use synapse_action::{ActionError, OperatorHotkeyGuard, RELEASE_ALL_HANDLE};
+use synapse_action::{
+    ActionError, OperatorHotkeyGuard, OperatorHotkeyStatus, RELEASE_ALL_HANDLE,
+    set_operator_hotkey_status,
+};
 use synapse_core::error_codes;
 
 use crate::m3::SharedM3State;
@@ -9,6 +12,14 @@ pub mod agreement;
 pub mod hardware_consent;
 
 pub const DISABLE_OPERATOR_HOTKEY_ENV: &str = "SYNAPSE_MCP_DISABLE_OPERATOR_HOTKEY";
+/// When set truthy, a failure to register the operator panic hotkey aborts
+/// startup instead of degrading. Off by default so a leaked/duplicate instance
+/// holding the global hotkey cannot brick the MCP server (the failure surfaced
+/// as JSON-RPC `-32000` to clients and broke the editor-wired stdio child).
+pub const REQUIRE_OPERATOR_HOTKEY_ENV: &str = "SYNAPSE_MCP_REQUIRE_OPERATOR_HOTKEY";
+
+/// Operator-facing remediation for an unavailable panic hotkey.
+const OPERATOR_HOTKEY_REMEDIATION: &str = "another process already owns Ctrl+Alt+Shift+P (most often a leaked or duplicate synapse-mcp instance); stop the other instance to arm the kill-switch, set SYNAPSE_MCP_DISABLE_OPERATOR_HOTKEY=1 to run intentionally without it, or set SYNAPSE_MCP_REQUIRE_OPERATOR_HOTKEY=1 to make this a hard startup failure";
 const OPERATOR_RELEASE_ALL_TIMEOUT: Duration = Duration::from_millis(50);
 
 #[derive(Debug)]
@@ -35,23 +46,59 @@ pub fn install_operator_hotkey(
             env = DISABLE_OPERATOR_HOTKEY_ENV,
             "operator hotkey disabled by explicit environment override"
         );
+        set_operator_hotkey_status(OperatorHotkeyStatus::DisabledByEnv);
         return Ok(None);
     }
-    synapse_action::install_operator_hotkey(move || handle_operator_hotkey(&m3_state)).map(Some)
+    match synapse_action::install_operator_hotkey(move || handle_operator_hotkey(&m3_state)) {
+        Ok(guard) => {
+            set_operator_hotkey_status(OperatorHotkeyStatus::Registered);
+            Ok(Some(guard))
+        }
+        Err(error) => {
+            set_operator_hotkey_status(OperatorHotkeyStatus::Unavailable);
+            if operator_hotkey_required_by_env()? {
+                // Strict mode: caller propagates and startup fails closed.
+                return Err(error);
+            }
+            // Default: do NOT abort the whole MCP server because the global
+            // kill-switch could not bind. Log loudly with exact cause and
+            // remediation, record degraded status for /health, and continue so
+            // the (mostly read-only) tool surface stays usable. Input-emitting
+            // tools remain guarded by their own preflight/consent paths.
+            tracing::error!(
+                code = error_codes::ACTION_BACKEND_UNAVAILABLE,
+                component = "operator_hotkey",
+                hotkey = "ctrl+alt+shift+p",
+                status = OperatorHotkeyStatus::Unavailable.label(),
+                error = %error,
+                remediation = OPERATOR_HOTKEY_REMEDIATION,
+                require_env = REQUIRE_OPERATOR_HOTKEY_ENV,
+                disable_env = DISABLE_OPERATOR_HOTKEY_ENV,
+                "operator panic hotkey unavailable; continuing in degraded safety mode without the kill-switch"
+            );
+            Ok(None)
+        }
+    }
+}
+
+fn operator_hotkey_required_by_env() -> synapse_action::ActionResult<bool> {
+    parse_bool_env(REQUIRE_OPERATOR_HOTKEY_ENV)
 }
 
 fn operator_hotkey_disabled_by_env() -> synapse_action::ActionResult<bool> {
-    let Some(raw) = std::env::var_os(DISABLE_OPERATOR_HOTKEY_ENV) else {
+    parse_bool_env(DISABLE_OPERATOR_HOTKEY_ENV)
+}
+
+fn parse_bool_env(name: &str) -> synapse_action::ActionResult<bool> {
+    let Some(raw) = std::env::var_os(name) else {
         return Ok(false);
     };
     let value = raw.to_string_lossy();
     match value.trim().to_ascii_lowercase().as_str() {
         "1" | "true" | "yes" | "on" => Ok(true),
-        "0" | "false" | "no" | "off" => Ok(false),
+        "" | "0" | "false" | "no" | "off" => Ok(false),
         _ => Err(ActionError::BackendUnavailable {
-            detail: format!(
-                "{DISABLE_OPERATOR_HOTKEY_ENV} must be one of 1/true/yes/on or 0/false/no/off"
-            ),
+            detail: format!("{name} must be one of 1/true/yes/on or 0/false/no/off"),
         }),
     }
 }

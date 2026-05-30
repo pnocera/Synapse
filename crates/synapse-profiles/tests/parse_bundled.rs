@@ -180,7 +180,7 @@ fn bundled_everquest_profile_targets_inventory_panel() -> Result<(), Box<dyn std
     assert!(matches!(
         next_level_percent.parser,
         HudParser::Regex { ref pattern, group }
-            if pattern.contains("NEXT") && pattern.contains("%") && group == 1
+            if pattern.contains("NEXT") && pattern.contains('%') && group == 1
     ));
     assert!(matches!(
         next_level_percent.region,
