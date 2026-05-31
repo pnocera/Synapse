@@ -1,11 +1,10 @@
 # RECOVERY NOTES - Synapse
 
 Resume by:
-1. Re-read `docs/AICodingAgentSuperPrompt.md`, `AGENTS.md`, #351, open issue queue, and this `STATE/*` directory.
-2. Continue #589 first. Code removal is already in local commit `e0e9993`; remaining work is stale systemspec docs, checks, manual FSV, issue comment/close, then push with `[skip ci]`.
-3. Clean `docs/systemspec` source files, rerun `docs/systemspec/bundle.ps1`, and re-run `rg` for old live HID surfaces. Retired-link stubs may still mention the removed terms only as historical absence.
-4. Supporting checks already passed (`cargo fmt`, `cargo check -p synapse-mcp`, focused tests, docs check). Treat as regression evidence only.
-5. Perform manual #589 FSV with a repo-built real `synapse-mcp`: process/bind SoT, authenticated health, strict client-parity `tools/list`, real `tools/call` for removed hardware backend behavior, and separate SoT readbacks before/after happy path plus at least 3 edge cases. Existing installed-binary `synapse-mcp` processes are not sufficient.
-6. Run any final focused checks needed after FSV, then amend/commit with `[skip ci]` before any push. Update/close #589 and continue #590, #585, and #588 context closure.
+1. Re-read `docs/AICodingAgentSuperPrompt.md`, `C:\Users\hotra\Downloads\AICodingAgentSuperPrompt.md`, `AGENTS.md`, #351, open issue queue, and this `STATE/*` directory.
+2. #589 manual FSV has been captured against repo-built PID `56908` on `127.0.0.1:7791` using official MCP Inspector CLI plus real MCP `tools/call` for `health`, `storage_inspect`, and `act_press`.
+3. The #589 repo-built HTTP daemon was stopped after evidence capture; port 7791 readback is closed. Commit current dirty files with `[skip ci]`.
+4. Post the #589 RESOLVED comment with the FSV evidence from `STATE/CURRENT_STATE.md`, close #589, and continue #590.
+5. Remaining open queue after #589: #590, #585, then #588 context closure.
 
 Do not use GitHub Actions/CI. Do not create FSV scripts or harnesses. For Synapse behavior FSV, prove the real `synapse-mcp` runtime and client-parity tool list before a real tool call, then read the physical SoT separately.

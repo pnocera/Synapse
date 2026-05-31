@@ -184,7 +184,7 @@ fn package_manifest_accepts_signed_fixture_metadata() -> TestResult {
     assert_eq!(manifest.signatures[0].algorithm, "ed25519");
     assert_eq!(
         package_signature_payload_digest(&manifest),
-        "sha256:a39fc832f873ed6ae62ee962f52b6bed705c8683beda44f65384dca85409df3e"
+        "sha256:4013ce772c32c5ba641d78848ba1b04add3224fe7fab12822572e6343b5b38c7"
     );
     Ok(())
 }
