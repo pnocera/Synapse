@@ -1,16 +1,17 @@
 # RECOVERY NOTES - Synapse
 
-## Current Resume Point - 2026-06-01T08:19:00-05:00
-- #614 is closed.
-  - Commit: `72918cd fix(mcp): harden reality delta full loop (#614) [skip ci]`.
-  - RESOLVED evidence: https://github.com/ChrisRoyse/Synapse/issues/614#issuecomment-4592935089
-  - Closure readback: issue state `CLOSED`, closed at `2026-06-01T13:16:36Z`.
-- Active issue is #615 `scenario(stress): reality high-fanout delta coalescing + snapshot-budget-exceeded`.
+## Current Resume Point - 2026-06-01T09:28:31-05:00
+- #615 `scenario(stress): reality high-fanout delta coalescing + snapshot-budget-exceeded` is ready for commit and issue closure.
   - START comment: https://github.com/ChrisRoyse/Synapse/issues/615#issuecomment-4592942496
-  - Live queue after #614 closure: #594 plus #595-#604 and #615-#634.
-  - #615 requires high-fanout UIA structure coalescing, reused-element field-change coalescing, snapshot-budget-exceeded rebase guidance, CF_KV/source_refs readbacks, and threshold/low-fanout/mixed/empty/boundary/invalid edges through real MCP tools.
-- Current next action: inspect high-fanout/coalescing implementation and existing tests, then decide whether code needs patching before isolated daemon FSV.
-- Host note: Windows still reports an orphan `127.0.0.1:7840 LISTENING` row for non-existent PID `82340`; use another port for #615 isolated daemons unless it clears.
+  - Patch: `crates/synapse-mcp/src/server/reality.rs` excludes incidental focus and parent `children_count` changes from the UIA high-fanout coalescing threshold while still preserving full changed-id metadata on emitted aggregate deltas.
+  - Manual MCP FSV evidence is captured under `.runs\615\fanout-fsv-20260601T0844-patched`.
+  - Repo-built daemon evidence: PID `64500`, bind `127.0.0.1:7843`, binary `C:\code\Synapse\target\release\synapse-mcp.exe`, strict Inspector `tools/list` returned 80 tools.
+  - Physical target evidence: PID `79124`, title `Issue615FanoutTarget`, separate OS UIA reads confirmed item counts/names after real MCP `act_click` triggers.
+  - Acceptance evidence captured: Show7 stayed per-element, Show8 coalesced, Rename8 coalesced to `uia_elements_changed`, Mixed8 coalesced, Show80/Clear returned `delta_snapshot_budget_exceeded` with no `CF_KV` row growth, empty/no-change wrote no rows, invalid `depth=0` failed closed with unchanged storage, and Clear after Show8 produced one disappear coalesced delta.
+  - Cleanup completed: real MCP `release_all`, stopped target PID `79124`, stopped daemon PID `64500`, and `127.0.0.1:7843` has no listener.
+  - Final checks passed: `cargo fmt --check`; `cargo check -p synapse-mcp -j 2`; `cargo test -p synapse-mcp server::reality::tests --bin synapse-mcp -- --nocapture` (17 passed); `cargo test -p synapse-mcp --bin synapse-mcp schema_sanitize -- --nocapture` (3 passed); `cargo build --release -p synapse-mcp -j 2`; `git diff --check` with line-ending warnings only.
+  - Final release binary readback: `target\release\synapse-mcp.exe`, length `46334464`, SHA256 `0EDEBFD08BB324FDCD835727A005C4A161D86C7C6BE5EE34E72FBBA96C8D8894`, timestamp `2026-06-01T14:28:17.6122521Z`.
+- Current next action: commit with `[skip ci]`, push, post #615 RESOLVED evidence, close #615, refresh live queue, and continue to #616 unless the queue changes.
 
 ## #614 Closure Checkpoint
 - Final supporting checks passed after FSV: `cargo fmt --check`; `cargo check -p synapse-mcp -j 2`; `cargo test -p synapse-mcp server::reality::tests --bin synapse-mcp -- --nocapture` (14 passed); `cargo test -p synapse-mcp --bin synapse-mcp schema_sanitize -- --nocapture` (3 passed); `cargo build --release -p synapse-mcp -j 2`; `git diff --check` with line-ending warnings only.

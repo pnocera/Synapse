@@ -221,3 +221,18 @@ Evidence:
 
 Outcome:
 - Next action is code/test inspection for UIA high-fanout coalescing and snapshot budget behavior before launching a repo-built isolated daemon for manual MCP FSV.
+
+# 2026-06-01T09:28:31-05:00 - #615 threshold pressure must ignore incidental UIA metadata churn
+
+Decision: Count only structural changes and material coalescing field changes toward the UIA high-fanout threshold; keep incidental focus and parent `children_count` changes out of threshold pressure while retaining full changed-id metadata on emitted aggregate deltas.
+
+Evidence:
+- The first manual Show7 boundary run physically created 7 item buttons, but `observe_delta` emitted `uia_structure_changed` because focus movement and parent `children_count` changes inflated `fanout_count` to the threshold.
+- Code readback showed `uia_element_fanout` used all `changed_uia_element_ids`, so incidental UIA metadata could turn a low-fanout structural change into a high-fanout coalesced delta.
+- #615 requires exact 7 vs 8 threshold behavior, low-fanout per-element rows, and high-fanout coalescing.
+
+Outcome:
+- Added `coalescing_uia_element_change_count` and `compact_element_has_coalescing_field_change`.
+- Added supporting regressions for incidental changes below threshold, exact threshold coalescing, and mixed structure+field churn.
+- Manual MCP FSV with repo-built daemon PID `64500` on `127.0.0.1:7843` proved Show7 per-element, Show8 coalesced, Rename8 coalesced, Mixed8 coalesced, Show80/Clear snapshot-budget rebase with no row growth, empty/no-change, invalid depth, and disappear8 behavior.
+- Final checks and release build passed; next action is commit, RESOLVED comment, and close #615.

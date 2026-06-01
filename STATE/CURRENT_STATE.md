@@ -1,5 +1,35 @@
 # CURRENT STATE - Synapse
 
+## 2026-06-01T09:28:31-05:00
+- Active issue #615 `scenario(stress): reality high-fanout delta coalescing + snapshot-budget-exceeded` has implementation, manual MCP FSV, cleanup, final supporting checks, and diff review complete; commit/push/comment/close are next.
+- Patch in `crates/synapse-mcp/src/server/reality.rs`:
+  - `uia_element_fanout` still records all changed UIA ids in aggregate metadata, but high-fanout threshold pressure now counts only structural changes plus material coalescing field changes.
+  - Incidental focus and parent `children_count` changes no longer push a 7-appear boundary case over the coalescing threshold.
+  - Added regression coverage for incidental changes below threshold, exact threshold coalescing, and mixed appear+field churn.
+- Manual FSV run directory: `.runs\615\fanout-fsv-20260601T0844-patched`.
+  - Repo-built daemon PID `64500`, binary `C:\code\Synapse\target\release\synapse-mcp.exe`, bind `127.0.0.1:7843`, isolated DB `.runs\615\fanout-fsv-20260601T0844-patched\db`, token `synapse-615-patched-token`.
+  - Process/socket/auth/client-parity readbacks passed: process path matched repo release binary; socket listened on `127.0.0.1:7843`; auth `/health ok=true`; official MCP Inspector strict `tools/list` returned 80 tools including `reality_baseline`, `observe_delta`, `act_click`, `act_launch`, `storage_inspect`, and `release_all`.
+  - Physical target PID `79124`, title `Issue615FanoutTarget`, was launched by real MCP `act_launch`; separate OS UIA reads of the target window were used as the physical SoT for item counts/names after each click.
+  - Show7 boundary/low-fanout: before UIA item count 0; real MCP `act_click` Show7; after UIA item count 7 (`Item 0..Item 6`); `observe_delta` returned 7 per-element `uia_element_appeared` deltas, 0 `uia_structure_changed`, source_refs `a11y_uia`.
+  - Show8 threshold: before item count 0; real MCP `act_click` Show8; after item count 8; `observe_delta` returned one `uia_structure_changed` with `appeared_count=8`, no per-element appeared rows, capped IDs/hash, source_refs `a11y_uia`; `storage_inspect` showed the `CF_KV` `reality/delta/v1/powershell/issue615-show8-static-.../00000000000000000005` row shape.
+  - Rename8 reused-element churn: before `Item 0..7`; real MCP `act_click` Rename8; after `Renamed 0..7`; `observe_delta` returned one `uia_elements_changed`, no per-element name rows, `changed_count=10`, source_refs `a11y_uia`.
+  - Mixed appear+field churn: before 4 items; real MCP `act_click` Mixed8; after 8 items (`Mixed Renamed 0..3`, `Mixed New 4..7`); `observe_delta` returned one `uia_structure_changed`, `appeared_count=4`, `changed_count=7`, source_refs `a11y_uia`.
+  - Snapshot budget exceeded: before Show80 item count 80 and `CF_KV=62`; real MCP `act_click` Clear; after item count 0 and `CF_KV=62`; `observe_delta` returned `delta_snapshot_budget_exceeded: coalesced delta batch 7770 bytes exceeds compact snapshot 7738 bytes; capture reality_baseline to rebase`, `rebase_required=true`, 0 deltas, 0 rows written.
+  - Empty/no-change edge: before item count 0 and `CF_KV=63`; `observe_delta` returned `reason=no_changes`, 0 deltas, 0 rows; after `CF_KV=63`.
+  - Structurally invalid edge: `observe_delta depth=0` through strict Inspector returned MCP error `depth must be between 1 and 6`; `CF_KV` and `CF_ACTION_LOG` counts were unchanged.
+  - Disappear8 symmetry: before 8 items; real MCP `act_click` Clear; after item count 0; `observe_delta` returned one `uia_structure_changed` with `disappeared_count=8`, capped IDs/hash, source_refs `a11y_uia`.
+- Cleanup readback: real MCP `release_all` completed; stopped target PID `79124`; stopped isolated daemon PID `64500`; port `127.0.0.1:7843` no longer listens.
+- Final supporting checks after FSV passed:
+  - `cargo fmt --check`
+  - `cargo check -p synapse-mcp -j 2`
+  - `cargo test -p synapse-mcp server::reality::tests --bin synapse-mcp -- --nocapture` (17 passed)
+  - `cargo test -p synapse-mcp --bin synapse-mcp schema_sanitize -- --nocapture` (3 passed)
+  - `cargo build --release -p synapse-mcp -j 2`
+  - `git diff --check` exited 0 with line-ending warnings only.
+- Final release binary readback: `target\release\synapse-mcp.exe`, length `46334464`, SHA256 `0EDEBFD08BB324FDCD835727A005C4A161D86C7C6BE5EE34E72FBBA96C8D8894`, `LastWriteTimeUtc=2026-06-01T14:28:17.6122521Z`.
+- Diff review completed for `crates/synapse-mcp/src/server/reality.rs` and `STATE/*`.
+- Next: commit with `[skip ci]`, post #615 RESOLVED evidence, close #615, refresh the queue, and continue to #616 unless the queue changes.
+
 ## 2026-06-01T08:19:00-05:00
 - #614 `scenario(stress): reality baseline->delta->audit full loop across all sensors` is closed.
   - Commit: `72918cd fix(mcp): harden reality delta full loop (#614) [skip ci]`.

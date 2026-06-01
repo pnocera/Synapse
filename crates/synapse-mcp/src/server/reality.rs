@@ -2269,9 +2269,11 @@ fn uia_element_fanout(
         .cloned()
         .collect::<Vec<_>>();
     let changed_ids = changed_uia_element_ids(maps, foreground_translation);
+    let coalescing_changed_count =
+        coalescing_uia_element_change_count(maps, foreground_translation);
     let changed_id_set = changed_ids.iter().cloned().collect::<BTreeSet<_>>();
     let structural_count = appeared_ids.len().saturating_add(disappeared_ids.len());
-    let fanout_count = structural_count.saturating_add(changed_ids.len());
+    let fanout_count = structural_count.saturating_add(coalescing_changed_count);
     UiaElementFanout {
         appeared_ids,
         disappeared_ids,
@@ -2302,6 +2304,30 @@ fn changed_uia_element_ids(
         })
         .cloned()
         .collect()
+}
+
+fn coalescing_uia_element_change_count(
+    maps: &UiaElementMaps,
+    foreground_translation: Option<RectTranslation>,
+) -> usize {
+    maps.before_by_id
+        .keys()
+        .filter(|element_id| {
+            match (
+                maps.before_by_id.get(*element_id),
+                maps.after_by_id.get(*element_id),
+            ) {
+                (Some(before_element), Some(after_element)) => {
+                    compact_element_has_coalescing_field_change(
+                        before_element,
+                        after_element,
+                        foreground_translation,
+                    )
+                }
+                _ => false,
+            }
+        })
+        .count()
 }
 
 fn maybe_push_uia_structure_change(
@@ -2451,6 +2477,22 @@ fn compact_element_has_field_change(
         || before.focused != after.focused
         || before.patterns != after.patterns
         || before.children_count != after.children_count
+        || before.depth != after.depth
+}
+
+fn compact_element_has_coalescing_field_change(
+    before: &CompactElement,
+    after: &CompactElement,
+    foreground_translation: Option<RectTranslation>,
+) -> bool {
+    before.name_sha256 != after.name_sha256
+        || (!same_rect_translation(&before.bbox, &after.bbox, foreground_translation)
+            && before.bbox != after.bbox)
+        || before.parent != after.parent
+        || before.role != after.role
+        || before.automation_id != after.automation_id
+        || before.enabled != after.enabled
+        || before.patterns != after.patterns
         || before.depth != after.depth
 }
 
@@ -3894,6 +3936,239 @@ mod tests {
                 .filter(|delta| delta.kind == "uia_element_appeared")
                 .count(),
             count
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observe_delta_ignores_incidental_uia_changes_for_fanout_threshold()
+    -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+        let service = service_with_db(temp.path())?;
+        let mut before = synthetic_input("Low Fanout With Incidental Changes");
+        before.elements = vec![
+            AccessibleNode {
+                element_id: ElementId::parse("0x1234:0100")?,
+                parent: None,
+                name: "Item Panel".to_owned(),
+                role: "Pane".to_owned(),
+                automation_id: Some("ItemPanel".to_owned()),
+                value: None,
+                bbox: Rect {
+                    x: 10,
+                    y: 10,
+                    w: 600,
+                    h: 300,
+                },
+                enabled: true,
+                focused: false,
+                patterns: vec![],
+                children_count: 0,
+                depth: 1,
+            },
+            AccessibleNode {
+                element_id: ElementId::parse("0x1234:0101")?,
+                parent: None,
+                name: "Clear".to_owned(),
+                role: "Button".to_owned(),
+                automation_id: Some("Clear".to_owned()),
+                value: None,
+                bbox: Rect {
+                    x: 10,
+                    y: 320,
+                    w: 80,
+                    h: 30,
+                },
+                enabled: true,
+                focused: true,
+                patterns: vec![UiaPattern::Invoke],
+                children_count: 0,
+                depth: 1,
+            },
+            AccessibleNode {
+                element_id: ElementId::parse("0x1234:0102")?,
+                parent: None,
+                name: "Show7".to_owned(),
+                role: "Button".to_owned(),
+                automation_id: Some("Show7".to_owned()),
+                value: None,
+                bbox: Rect {
+                    x: 100,
+                    y: 320,
+                    w: 80,
+                    h: 30,
+                },
+                enabled: true,
+                focused: false,
+                patterns: vec![UiaPattern::Invoke],
+                children_count: 0,
+                depth: 1,
+            },
+        ];
+        install_synthetic_input(&service, before.clone())?;
+        service
+            .reality_baseline(Parameters(RealityBaselineParams {
+                profile_id: Some("synthetic".to_owned()),
+                epoch_id: Some("uia-low-fanout-incidental-epoch".to_owned()),
+                force_new_epoch: true,
+                include: vec![ObserveSlot::Elements],
+                depth: DEFAULT_DEPTH,
+                max_elements: DEFAULT_MAX_ELEMENTS,
+            }))
+            .await?;
+
+        let mut after = before;
+        after.elements[0].children_count = u32::try_from(UIA_STRUCTURE_COALESCE_THRESHOLD - 1)?;
+        after.elements[1].focused = false;
+        after.elements[2].focused = true;
+        after
+            .elements
+            .extend(synthetic_elements(UIA_STRUCTURE_COALESCE_THRESHOLD - 1)?);
+        install_synthetic_input(&service, after)?;
+        let deltas = service
+            .observe_delta(Parameters(ObserveDeltaParams {
+                profile_id: Some("synthetic".to_owned()),
+                since_epoch: Some("uia-low-fanout-incidental-epoch".to_owned()),
+                since_seq: Some(0),
+                include: vec![ObserveSlot::Elements],
+                depth: DEFAULT_DEPTH,
+                max_elements: DEFAULT_MAX_ELEMENTS,
+                max_deltas: DEFAULT_MAX_DELTAS,
+            }))
+            .await?;
+
+        assert!(
+            !deltas
+                .0
+                .deltas
+                .iter()
+                .any(|delta| delta.kind == "uia_structure_changed")
+        );
+        assert_eq!(
+            deltas
+                .0
+                .deltas
+                .iter()
+                .filter(|delta| delta.kind == "uia_element_appeared")
+                .count(),
+            UIA_STRUCTURE_COALESCE_THRESHOLD - 1
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observe_delta_coalesces_exact_uia_threshold() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+        let service = service_with_db(temp.path())?;
+        install_synthetic_input(&service, synthetic_input("Threshold Window"))?;
+        service
+            .reality_baseline(Parameters(RealityBaselineParams {
+                profile_id: Some("synthetic".to_owned()),
+                epoch_id: Some("uia-threshold-epoch".to_owned()),
+                force_new_epoch: true,
+                include: vec![ObserveSlot::Elements],
+                depth: DEFAULT_DEPTH,
+                max_elements: DEFAULT_MAX_ELEMENTS,
+            }))
+            .await?;
+
+        let mut after = synthetic_input("Threshold Window");
+        after.elements = synthetic_elements(UIA_STRUCTURE_COALESCE_THRESHOLD)?;
+        install_synthetic_input(&service, after)?;
+        let deltas = service
+            .observe_delta(Parameters(ObserveDeltaParams {
+                profile_id: Some("synthetic".to_owned()),
+                since_epoch: Some("uia-threshold-epoch".to_owned()),
+                since_seq: Some(0),
+                include: vec![ObserveSlot::Elements],
+                depth: DEFAULT_DEPTH,
+                max_elements: DEFAULT_MAX_ELEMENTS,
+                max_deltas: DEFAULT_MAX_DELTAS,
+            }))
+            .await?;
+
+        assert_eq!(deltas.0.deltas.len(), 1);
+        let structure_delta = deltas
+            .0
+            .deltas
+            .iter()
+            .find(|delta| delta.kind == "uia_structure_changed")
+            .ok_or_else(|| anyhow::anyhow!("missing threshold structure delta"))?;
+        assert_eq!(
+            structure_delta
+                .after
+                .get("appeared_count")
+                .and_then(Value::as_u64),
+            Some(u64::try_from(UIA_STRUCTURE_COALESCE_THRESHOLD)?)
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn observe_delta_coalesces_mixed_uia_structure_and_field_churn() -> anyhow::Result<()> {
+        let temp = TempDir::new()?;
+        let service = service_with_db(temp.path())?;
+        let mut before = synthetic_input("Mixed Fanout Window");
+        before.elements = synthetic_elements(4)?;
+        install_synthetic_input(&service, before.clone())?;
+        service
+            .reality_baseline(Parameters(RealityBaselineParams {
+                profile_id: Some("synthetic".to_owned()),
+                epoch_id: Some("uia-mixed-fanout-epoch".to_owned()),
+                force_new_epoch: true,
+                include: vec![ObserveSlot::Elements],
+                depth: DEFAULT_DEPTH,
+                max_elements: DEFAULT_MAX_ELEMENTS,
+            }))
+            .await?;
+
+        let mut after = before;
+        for (index, element) in after.elements.iter_mut().enumerate() {
+            element.name = format!("Mixed Renamed Item {index}");
+        }
+        after
+            .elements
+            .extend(synthetic_elements(8)?.into_iter().skip(4));
+        install_synthetic_input(&service, after)?;
+        let deltas = service
+            .observe_delta(Parameters(ObserveDeltaParams {
+                profile_id: Some("synthetic".to_owned()),
+                since_epoch: Some("uia-mixed-fanout-epoch".to_owned()),
+                since_seq: Some(0),
+                include: vec![ObserveSlot::Elements],
+                depth: DEFAULT_DEPTH,
+                max_elements: DEFAULT_MAX_ELEMENTS,
+                max_deltas: DEFAULT_MAX_DELTAS,
+            }))
+            .await?;
+
+        assert_eq!(deltas.0.deltas.len(), 1);
+        let structure_delta = deltas
+            .0
+            .deltas
+            .iter()
+            .find(|delta| delta.kind == "uia_structure_changed")
+            .ok_or_else(|| anyhow::anyhow!("missing mixed structure delta"))?;
+        assert_eq!(
+            structure_delta
+                .after
+                .get("appeared_count")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert_eq!(
+            structure_delta
+                .after
+                .get("changed_count")
+                .and_then(Value::as_u64),
+            Some(4)
+        );
+        assert!(
+            !deltas
+                .0
+                .deltas
+                .iter()
+                .any(|delta| delta.kind == "uia_element_name_changed")
         );
         Ok(())
     }
