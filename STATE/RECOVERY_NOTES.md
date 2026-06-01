@@ -1,5 +1,16 @@
 # RECOVERY NOTES - Synapse
 
+## Current Resume Point - 2026-06-01T13:16:11-05:00
+- #620 is closed.
+  - Commit: `6895746 fix(mcp): apply profile runtime config (#620) [skip ci]`.
+  - RESOLVED evidence: https://github.com/ChrisRoyse/Synapse/issues/620#issuecomment-4595282935
+  - Closure readback: state `CLOSED`, closed at `2026-06-01T18:15:30Z`.
+  - Worktree was clean after push/closure before this state-only update.
+- Active issue is #621 `scenario(stress): registry scale - install/search/export/import/rollback, digest, poison quarantine`.
+  - START comment: https://github.com/ChrisRoyse/Synapse/issues/621#issuecomment-4595287040
+  - Claimed with `status:in-progress`, `agent:codex`, assigned to `ChrisRoyse`.
+  - Current exact next action: inspect profile registry implementation, manifest/schema files, storage row formats, and supporting tests. Then build release and run an isolated repo-built daemon for manual MCP FSV using official Inspector strict `tools/list`.
+
 ## Current Resume Point - 2026-06-01T13:04:31-05:00
 - Active issue is #620.
 - #620 implementation is patched locally; manual MCP behavior evidence, final supporting checks, release build, and diff review are complete. Commit, RESOLVED comment, closure, and queue continuation are next.

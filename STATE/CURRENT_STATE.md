@@ -1,5 +1,20 @@
 # CURRENT STATE - Synapse
 
+## 2026-06-01T13:16:11-05:00
+- #620 `scenario(stress): activate all 30 profiles - keymap/HUD/capture/mode apply` is closed.
+  - Commit: `6895746 fix(mcp): apply profile runtime config (#620) [skip ci]`.
+  - RESOLVED evidence: https://github.com/ChrisRoyse/Synapse/issues/620#issuecomment-4595282935
+  - Closure readback: issue state `CLOSED`, closed at `2026-06-01T18:15:30Z`.
+  - Manual FSV run directory: `.runs\620\profile-fsv-20260601T1238-clean`.
+  - Final release binary SHA256: `7940237DE08DB7DF92D7D79944F6DF9FF3120A001AD0FA7C991DD28FCF81F578`.
+- Post-close git readback: `main...origin/main`, clean, HEAD `6895746`.
+- Active issue is now #621 `scenario(stress): registry scale - install/search/export/import/rollback, digest, poison quarantine`.
+  - START comment: https://github.com/ChrisRoyse/Synapse/issues/621#issuecomment-4595287040
+  - #621 is assigned to `ChrisRoyse` and labeled `status:in-progress`, `agent:codex`.
+  - Live queue after #620 closure: #594 plus #595-#604 and #621-#634.
+  - #621 requires real MCP profile registry triggers and separate storage/profile-registry SoT readbacks for digest enforcement, scale search/report/export/import, rollback rewrite, poison quarantine, and edges: digest mismatch, disable then inspect, conflicting import, rollback with no prior, >1000 contribution rows, empty/boundary/structurally invalid inputs.
+  - Next: inspect profile registry manifest/schema/storage implementation and supporting tests before launching a repo-built isolated daemon for manual MCP FSV.
+
 ## 2026-06-01T13:04:31-05:00
 - Active issue remains #620 `scenario(stress): activate all 30 profiles - keymap/HUD/capture/mode apply`.
 - #620 implementation patch is in the worktree and not yet committed. It applies profile runtime config beyond action backend resolution:

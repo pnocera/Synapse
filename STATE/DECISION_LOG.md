@@ -385,3 +385,16 @@ Evidence:
 Outcome:
 - #620 evidence records the HUD spec SoT and foreground-control gap explicitly.
 - No extra profile-runtime patch is needed for HUD specs; final checks/commit/issue closure are next.
+
+# 2026-06-01T13:16:11-05:00 - #621 follows #620 in the profile/registry campaign
+
+Decision: Take #621 next after closing #620 because it is the next open H-profile/registry child under #594.
+
+Evidence:
+- `gh issue view 620` read back `state=CLOSED`, `closedAt=2026-06-01T18:15:30Z`.
+- Live queue after #620 closure lists #594 plus #595-#604 and #621-#634 open.
+- #621 is open, has no prior comments, and requires profile registry install/search/export/import/rollback/digest/quarantine evidence.
+- Posted #621 START comment at https://github.com/ChrisRoyse/Synapse/issues/621#issuecomment-4595287040 and labeled it `status:in-progress`, `agent:codex`.
+
+Outcome:
+- Next action is code/schema/test inspection for profile registry storage, manifest digest, export/import, rollback, disable/inspect, and quarantine paths before launching a repo-built isolated daemon for manual MCP FSV.
