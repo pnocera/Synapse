@@ -4,19 +4,14 @@ Resume by:
 1. Re-read `docs/AICodingAgentSuperPrompt.md`, `C:\Users\hotra\Downloads\AICodingAgentSuperPrompt.md`, `AGENTS.md`, #351, the open issue queue, and `STATE/*`.
 2. Treat the old all-clear state as stale. #594 remains the open parent context; #589/#590/#588/#585/#635/#605/#606 are closed with RESOLVED evidence.
 3. #606 closed at commit `6975d14` with evidence comment https://github.com/ChrisRoyse/Synapse/issues/606#issuecomment-4587883204.
-4. Active issue is #607: `scenario(stress): act_launch fleet - all 30 profiles, foreground incl. console apps`.
-   - START comment: https://github.com/ChrisRoyse/Synapse/issues/607#issuecomment-4587884557
-   - Issue body requires proving `act_launch` starts/foregrounds every bundled-profile app, with `observe` resolving the app profile; explicitly cover cmd/powershell/Windows Terminal; SoT is foreground HWND/process plus `CF_PROCESS_HISTORY`/`CF_ACTION_LOG`.
-   - Edges: app already running, wait-title never matches, launch denied by restrictive policy, rapid relaunch, invalid/empty params.
-5. Current #607 implementation patch is in the worktree:
-   - `crates/synapse-mcp/src/m4.rs`: launch request details, process-history row encode/key helpers, launch timeout max validation, focused tests.
-   - `crates/synapse-mcp/src/server/m4_tools.rs`: `act_launch` writes request audit details and successful spawn rows to `CF_PROCESS_HISTORY`.
-   - `crates/synapse-reflex/src/storage.rs`: `storage_put_process_history_rows`.
-   - `crates/synapse-mcp/src/m3/audit_retention.rs`: `process_history` retention policy.
-6. Readback after compaction:
-   - live `profile_list include_inactive=true` reports 29 bundled profiles; `rg --files crates/synapse-profiles/profiles` shows 29 `.toml` profile files. Treat this as the fleet-count SoT despite #607 wording saying 30.
-   - installed wired `storage_inspect` still has `CF_PROCESS_HISTORY=0`, proving the pre-fix gap.
-7. Next #607 step: launch an isolated repo-built daemon from the patched release binary, prove process/socket/auth/health/strict Inspector `tools/list`, then run manual FSV for `act_launch` happy path, console apps, all locally available/acquirable profiles, and required edge cases. Record any app gap only after all reversible local acquisition/setup is exhausted.
+4. #607 is closed with commit `8ce49e4` and RESOLVED evidence https://github.com/ChrisRoyse/Synapse/issues/607#issuecomment-4588670440.
+5. Active issue is #608: `scenario(stress): 32-reflex saturation - priority, exclusive, starvation`.
+   - START comment: https://github.com/ChrisRoyse/Synapse/issues/608#issuecomment-4588672100
+   - Issue body requires registering 32 concurrent reflexes, 33rd fail-closed, priority/exclusive arbitration, starvation detection after `STARVATION_AFTER`, and SoT readbacks from `reflex_list`, `reflex_history`, and `CF_REFLEX_AUDIT`.
+   - Edges: priority `0` and `1000` bounds, duplicate registration, cancel mid-fire, all 32 firing same tick / sample cap, empty/boundary/structurally invalid params.
+6. Next #608 step: inspect reflex scheduler/runtime/register/list/history/action-dispatch code, then launch an isolated repo-built daemon, prove process/socket/auth/health/strict Inspector `tools/list`, and run manual FSV with separate SoT readbacks.
+
+Closed #607 reference notes:
 
 Current #607 resume point as of 2026-05-31T16:15:13-05:00:
 - The latest patch also touches `crates/synapse-a11y/src/platform/windows/window.rs` plus `cmd.toml`/`powershell.toml`.

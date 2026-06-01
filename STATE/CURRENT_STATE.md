@@ -1,5 +1,18 @@
 # CURRENT STATE - Synapse
 
+## 2026-05-31T19:17:16-05:00
+- #607 `scenario(stress): act_launch fleet - all 30 profiles, foreground incl. console apps` is closed.
+  - Commit: `8ce49e4 fix(mcp): harden act_launch foregrounding (#607) [skip ci]`
+  - RESOLVED evidence: https://github.com/ChrisRoyse/Synapse/issues/607#issuecomment-4588670440
+  - Closure readback: `gh issue close 607` succeeded; refreshed open queue no longer lists #607.
+  - Post-close git readback: `git status --short --branch` is clean and `main...origin/main`.
+- Active issue is now #608 `scenario(stress): 32-reflex saturation - priority, exclusive, starvation`.
+  - START comment: https://github.com/ChrisRoyse/Synapse/issues/608#issuecomment-4588672100
+  - Issue acceptance requires real MCP `tools/call` triggers for reflex saturation/priority/exclusive/starvation behavior and separate SoT readbacks from `reflex_list`, `reflex_history`, `CF_REFLEX_AUDIT`, daemon logs/process state, and physical action state where applicable.
+  - Required edges: priority `0` and `1000` bounds, duplicate registration, cancel mid-fire, all 32 firing same tick / sample cap, plus empty/boundary/structurally invalid params.
+  - Next: inspect reflex scheduler/runtime/register/list/history/action-dispatch code paths, then launch an isolated repo-built daemon for #608 MCP precondition and manual FSV.
+- Current live open queue after closing #607: #594 parent plus #595-#604 and #608-#634.
+
 ## 2026-05-31T18:49:37-05:00
 - Active issue remains #607 `scenario(stress): act_launch fleet - all 30 profiles, foreground incl. console apps`.
 - Post-compaction wake-up was completed again:
