@@ -428,3 +428,19 @@ Evidence:
 
 Outcome:
 - Next action is implementation/test inspection before launching a repo-built isolated daemon for #622 manual MCP FSV.
+
+# 2026-06-01T14:28:42-05:00 - #622 authoring and quality loop passes without product-code patch
+
+Decision: Resolve #622 with manual MCP FSV evidence and no product-code patch.
+
+Evidence:
+- Isolated repo-built daemon PID `59440` on `127.0.0.1:7850` passed process/socket/auth/health and official Inspector strict `tools/list` with 80 tools.
+- Real observe/action/replay/reality triggers produced the required evidence rows/files; separate readbacks showed `CF_ACTION_LOG=2`, `CF_OBSERVATIONS=2`, `CF_EVENTS=3`, `CF_KV=2`, and replay SHA256 `61AB2CC29986048235197AA336CCC34B86F9794445683C72223FE53AE6BABC1F`.
+- Authoring generate/list/inspect/accept/reject/export paths persisted expected `CF_PROFILES` candidate rows, accepted/rejected states, rejection reason, and exported accepted bundle SHA256 `D2790BD9118B9DB5790C4B56D382EA3872146688AD7057FA59EA23427AF9E37B`.
+- Edges failed closed with unchanged SoT: zero evidence, accept already accepted, reject accepted, missing export, `profile_authoring_list limit=0`, malformed candidate id, and over-max `max_audit_rows=10001`.
+- 10000-row boundary was exercised with real `storage_put_probe_rows` and `profile_authoring_generate max_audit_rows=10000`; separate storage/inspect readbacks confirmed `CF_ACTION_LOG=10002` and `issue622.max` scanned/relevant 10000 rows.
+- `profile_quality_refresh` persisted `profile_quality/v1/issue622.authoring`; separate `profile_registry_report` readbacks confirmed score/sample/scanned/relevant counts, stale expiry behavior, invalid-param failure, and final non-stale restored score.
+- Cleanup stopped the isolated daemon and port `7850`; final supporting checks and release build passed with SHA256 `236992450A49D3177C1FCBF1D06F567C30CC54AA5F217C1F0D59BFDBADF23E01`.
+
+Outcome:
+- #622 is ready for RESOLVED comment and closure.

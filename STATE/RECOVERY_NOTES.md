@@ -1,5 +1,29 @@
 # RECOVERY NOTES - Synapse
 
+## Current Resume Point - 2026-06-01T14:28:42-05:00
+- Active issue #622 has manual MCP FSV, cleanup, and supporting checks complete; no product-code patch was required.
+- FSV evidence directory: `.runs\622\authoring-fsv-20260601T1350`.
+  - Repo-built daemon was PID `59440`, bind `127.0.0.1:7850`, isolated DB `.runs\622\authoring-fsv-20260601T1350\db`, strict Inspector tools-list count 80.
+  - Covered behavior:
+    - zero-evidence authoring generate failed closed with no candidate row;
+    - real observe/action/replay/reality evidence produced action/observation/event/KV rows and replay SHA256 `61AB2CC29986048235197AA336CCC34B86F9794445683C72223FE53AE6BABC1F`;
+    - generate/list/inspect wrote candidate `issue622.accept` proposing `matches.add_exe=["powershell.exe"]`;
+    - accept wrote state `accepted` and note, re-accept was idempotent;
+    - export wrote 2883-byte accepted bundle SHA256 `D2790BD9118B9DB5790C4B56D382EA3872146688AD7057FA59EA23427AF9E37B`;
+    - generate/reject wrote candidate `issue622.reject` with reason `issue622 reject reason`;
+    - rejecting accepted, exporting missing candidate, list `limit=0`, malformed candidate id, and over-max `max_audit_rows=10001` all failed closed with storage unchanged;
+    - 10000-row boundary used real `storage_put_probe_rows` to grow `CF_ACTION_LOG` `2 -> 10002`, then `profile_authoring_generate issue622.max max_audit_rows=10000` scanned/relevant 10000 rows and wrote a candidate row;
+    - `profile_quality_refresh` wrote `profile_quality/v1/issue622.authoring`; separate report readback showed score `21`, sample size `1`, scanned action rows `10002`, relevant action rows `2`, observation rows `2`, event rows `3`;
+    - stale edge (`stale_after_ns=1`) persisted stale evidence (`audit_rows_stale=2`, score `0`), invalid quality params failed closed, and a final non-stale refresh restored score `21`.
+  - Cleanup completed: `release_all` zero, daemon stopped, port `7850` closed.
+- Supporting checks passed: fmt, diff check, MCP check, profile quality tool test, replay record tool test, schema sanitize, m3 tools-list, release build; `cargo test -p synapse-mcp profile_authoring -- --nocapture` compiled but had no matching tests.
+- Final release binary SHA256: `236992450A49D3177C1FCBF1D06F567C30CC54AA5F217C1F0D59BFDBADF23E01`.
+- Exact next actions:
+  1. Commit state update with `[skip ci]`.
+  2. Post #622 RESOLVED evidence and close #622.
+  3. Refresh live queue.
+  4. Take the next open issue unless GitHub state changes.
+
 ## Current Resume Point - 2026-06-01T13:43:30-05:00
 - #621 is closed.
   - RESOLVED evidence: https://github.com/ChrisRoyse/Synapse/issues/621#issuecomment-4595473988

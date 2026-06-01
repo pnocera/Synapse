@@ -1,5 +1,35 @@
 # CURRENT STATE - Synapse
 
+## 2026-06-01T14:28:42-05:00
+- Active issue #622 `scenario(stress): authoring loop - generate/accept/reject/export + quality_refresh` has manual MCP FSV and supporting checks complete; no product-code patch was required.
+- Manual FSV run directory: `.runs\622\authoring-fsv-20260601T1350`.
+  - Repo-built daemon: PID `59440`, binary `C:\code\Synapse\target\release\synapse-mcp.exe`, bind `127.0.0.1:7850`, isolated DB `.runs\622\authoring-fsv-20260601T1350\db`, profile dir `.runs\622\authoring-fsv-20260601T1350\profiles`, token `synapse-622-token`.
+  - MCP precondition/readback passed: process path matched the repo release binary; socket `127.0.0.1:7850` listened under PID `59440`; authenticated `/health` returned `ok=true` with active profile `issue622.authoring`; official MCP Inspector strict `tools/list` exited 0 with 80 tools and all #622 tools present. Inspector stderr contained only `unknown format "uint*"` schema warnings, not schema rejection.
+  - Initial isolated SoT: storage started empty; after profile activation and before the zero-evidence edge, separate storage readback showed `CF_PROFILES=0`, `CF_ACTION_LOG=0`, `CF_OBSERVATIONS=0`, `CF_EVENTS=1`, `CF_KV=0`; profile `issue622.authoring` was active in health/profile_list readbacks.
+  - Zero-evidence edge: `profile_authoring_generate candidate_id=issue622.zero max_audit_rows=0 max_replay_rows=0` failed closed with insufficient evidence; separate `profile_authoring_inspect` found no row and storage stayed `CF_PROFILES=0`.
+  - Real evidence production: real Inspector `observe`, `act_clipboard write`, `act_press keys=[shift]`, `replay_record`, and `reality_baseline` produced physical evidence; separate readbacks showed `CF_ACTION_LOG=2`, `CF_OBSERVATIONS=2`, `CF_EVENTS=3`, `CF_KV=2`, and replay file SHA256 `61AB2CC29986048235197AA336CCC34B86F9794445683C72223FE53AE6BABC1F`.
+  - Happy authoring path: `profile_authoring_generate candidate_id=issue622.accept` scanned 2 action rows and 1 replay row, wrote `CF_PROFILES/profile_authoring/v1/candidate/issue622.accept`, and proposed `matches.add_exe=["powershell.exe"]`; separate inspect/list/storage readbacks confirmed the candidate row.
+  - Accept path: `profile_authoring_accept issue622.accept` wrote state `accepted`, `accepted_at_ns=1780340769774384800`, and note `issue622 manual accept`; re-accepting the same candidate returned `wrote_row=false` and separate readbacks showed the row unchanged.
+  - Export path: `profile_authoring_export issue622.accept` wrote `.runs\622\authoring-fsv-20260601T1350\exports\issue622.accept.json`, 2883 bytes, SHA256 `D2790BD9118B9DB5790C4B56D382EA3872146688AD7057FA59EA23427AF9E37B`; parsed file readback showed candidate `issue622.accept`, state `accepted`, and `matches.add_exe=["powershell.exe"]`.
+  - Reject path: `profile_authoring_generate candidate_id=issue622.reject` then `profile_authoring_reject reason="issue622 reject reason"` wrote state `rejected`; separate inspect/storage readbacks showed `CF_PROFILES=2`, accepted + rejected candidate rows, and the stored rejection reason.
+  - Edge coverage: rejecting the accepted candidate failed closed and left it accepted; exporting missing `issue622.missing` failed closed and wrote no file; `profile_authoring_list limit=0` failed closed; malformed candidate id `bad/slash` failed closed; `max_audit_rows=10001` failed closed and no `issue622.overmax` row was written.
+  - 10k boundary: real `storage_put_probe_rows` inserted 10000 synthetic `CF_ACTION_LOG` rows (`2 -> 10002`); `profile_authoring_generate candidate_id=issue622.max max_audit_rows=10000` scanned/relevant 10000 rows and wrote a candidate row with `matches.add_exe=["powershell.exe"]`; separate inspect/storage readbacks showed `CF_PROFILES=3` and `CF_ACTION_LOG=10002`.
+  - Quality refresh happy path: before report had zero quality snapshots; `profile_quality_refresh profile_id=issue622.authoring max_audit_rows=50000 stale_after_ns=86400000000000` wrote `CF_PROFILES/profile_quality/v1/issue622.authoring`; separate storage/report readbacks showed `CF_PROFILES=4`, one quality snapshot, score `21`, sample size `1`, action rows scanned `10002`, profile-relevant action rows `2`, observation rows `2`, event rows `3`.
+  - Quality edges: `stale_after_ns=1` rewrote the persisted quality row with score `0`, sample size `0`, `audit_rows_stale=2`, and `stale_evidence_present=true`; invalid `max_audit_rows=0` and `stale_after_ns=0` failed closed and left storage unchanged. Final non-stale refresh restored the quality row to score `21`, sample size `1`, `audit_rows_stale=0`.
+  - Cleanup: real Inspector `release_all` returned zero held keys/buttons/pads; daemon PID `59440` was stopped; port `127.0.0.1:7850` no longer listens. Log scan found no panic/internal-error lines; the only error lines were the discarded first-start broad shell regex config failure and expected operator-hotkey collision with the active chat runtime.
+- Supporting checks passed:
+  - `cargo fmt --check`
+  - `git diff --check`
+  - `cargo check -p synapse-mcp -j 2`
+  - `cargo test -p synapse-mcp --test m5_profile_quality_tool -- --nocapture`
+  - `cargo test -p synapse-mcp --test m3_replay_record_tool -- --nocapture`
+  - `cargo test -p synapse-mcp profile_authoring -- --nocapture` (compiled; no matching tests)
+  - `cargo test -p synapse-mcp --bin synapse-mcp schema_sanitize -- --nocapture`
+  - `cargo test -p synapse-mcp --test m3_tools_list -- --nocapture`
+  - `cargo build --release -p synapse-mcp -j 2`
+- Final release binary readback: `target\release\synapse-mcp.exe`, length `46406144`, SHA256 `236992450A49D3177C1FCBF1D06F567C30CC54AA5F217C1F0D59BFDBADF23E01`, `LastWriteTimeUtc=2026-06-01T19:28:18Z`.
+- Next: commit state update with `[skip ci]`, post #622 RESOLVED evidence, close #622, refresh queue, and take the next open issue unless GitHub changes.
+
 ## 2026-06-01T13:43:30-05:00
 - #621 `scenario(stress): registry scale - install/search/export/import/rollback, digest, poison quarantine` is closed.
   - No product-code patch was required.
