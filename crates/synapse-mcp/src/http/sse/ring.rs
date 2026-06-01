@@ -8,7 +8,7 @@ use std::{
 
 use serde::Serialize;
 use synapse_core::Event;
-use synapse_reflex::{SUBSCRIBER_QUEUE_CAPACITY, SubscriberHandle};
+use synapse_reflex::{EVENTS_DROPPED_METRIC, SUBSCRIBER_QUEUE_CAPACITY, SubscriberHandle};
 
 use super::lossy;
 
@@ -56,16 +56,26 @@ impl Subscription {
     }
 
     pub(super) fn push_events(&self, events: Vec<Event>) {
+        let mut ring_dropped = 0_u64;
         let Ok(mut ring) = self.ring.lock() else {
             return;
         };
         for event in events {
             if ring.len() == SUBSCRIBER_QUEUE_CAPACITY {
                 ring.pop_front();
-                lossy::record_dropped(&self.dropped_total, &self.lossy_pending, 1);
+                ring_dropped = ring_dropped.saturating_add(1);
             }
             let stream_seq = self.next_stream_seq.fetch_add(1, Ordering::AcqRel);
             ring.push_back(BufferedEvent { stream_seq, event });
+        }
+        drop(ring);
+        if ring_dropped > 0 {
+            self.record_dropped(ring_dropped);
+            metrics::counter!(
+                EVENTS_DROPPED_METRIC,
+                "subscription_id" => self.id().to_owned()
+            )
+            .increment(ring_dropped);
         }
     }
 

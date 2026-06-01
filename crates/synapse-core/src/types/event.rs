@@ -176,11 +176,8 @@ impl EventFilter {
                 }
             }
             Self::Not { arg } => arg.validate_with_max_depth(max_depth)?,
-            Self::All
-            | Self::None
-            | Self::Kind { .. }
-            | Self::Source { .. }
-            | Self::Data { .. } => {}
+            Self::Data { path, predicate } => validate_data_filter(path, predicate)?,
+            Self::All | Self::None | Self::Kind { .. } | Self::Source { .. } => {}
         }
         Ok(())
     }
@@ -194,6 +191,14 @@ pub enum EventFilterValidationError {
     EmptyOr,
     #[error("event filter depth {depth} exceeds maximum {max_depth}")]
     DepthExceeded { depth: u32, max_depth: u32 },
+    #[error("event data filter path '{path}' is invalid: {reason}")]
+    InvalidDataPath { path: String, reason: String },
+    #[error("event data filter regex at '{path}' is invalid: {detail}")]
+    InvalidRegex {
+        path: String,
+        pattern: String,
+        detail: String,
+    },
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
@@ -215,4 +220,54 @@ impl DataPredicate {
     pub fn matches(&self, value: Option<&serde_json::Value>) -> bool {
         crate::filter::matches_data_predicate(self, value)
     }
+}
+
+fn validate_data_filter(
+    path: &str,
+    predicate: &DataPredicate,
+) -> Result<(), EventFilterValidationError> {
+    validate_json_pointer(path)?;
+    if let DataPredicate::Regex { pattern } = predicate {
+        regex::Regex::new(pattern).map_err(|error| EventFilterValidationError::InvalidRegex {
+            path: path.to_owned(),
+            pattern: pattern.to_owned(),
+            detail: error.to_string(),
+        })?;
+    }
+    Ok(())
+}
+
+fn validate_json_pointer(path: &str) -> Result<(), EventFilterValidationError> {
+    if path.is_empty() {
+        return Ok(());
+    }
+    if !path.starts_with('/') {
+        return Err(EventFilterValidationError::InvalidDataPath {
+            path: path.to_owned(),
+            reason: "path must be empty or start with '/'".to_owned(),
+        });
+    }
+
+    let mut chars = path.chars();
+    while let Some(ch) = chars.next() {
+        if ch != '~' {
+            continue;
+        }
+        match chars.next() {
+            Some('0' | '1') => {}
+            Some(value) => {
+                return Err(EventFilterValidationError::InvalidDataPath {
+                    path: path.to_owned(),
+                    reason: format!("invalid '~{value}' escape; use '~0' or '~1'"),
+                });
+            }
+            None => {
+                return Err(EventFilterValidationError::InvalidDataPath {
+                    path: path.to_owned(),
+                    reason: "trailing '~' escape".to_owned(),
+                });
+            }
+        }
+    }
+    Ok(())
 }

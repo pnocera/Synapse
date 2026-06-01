@@ -81,6 +81,38 @@ fn event_filter_validation_edges_have_readback() {
             max_depth: EVENT_FILTER_MAX_DEPTH,
         })
     );
+
+    let invalid_path = EventFilter::Data {
+        path: "field".to_owned(),
+        predicate: DataPredicate::Exists,
+    };
+    println!(
+        "readback=event_filter_validation edge=invalid_path before=path:{}",
+        "field"
+    );
+    let invalid_path_after = invalid_path.validate();
+    println!("readback=event_filter_validation edge=invalid_path after={invalid_path_after:?}");
+    assert_eq!(
+        invalid_path_after,
+        Err(EventFilterValidationError::InvalidDataPath {
+            path: "field".to_owned(),
+            reason: "path must be empty or start with '/'".to_owned(),
+        })
+    );
+
+    let invalid_regex = EventFilter::Data {
+        path: "/field".to_owned(),
+        predicate: DataPredicate::Regex {
+            pattern: "[".to_owned(),
+        },
+    };
+    println!("readback=event_filter_validation edge=invalid_regex before=pattern:[");
+    let invalid_regex_after = invalid_regex.validate();
+    println!("readback=event_filter_validation edge=invalid_regex after={invalid_regex_after:?}");
+    assert!(matches!(
+        invalid_regex_after,
+        Err(EventFilterValidationError::InvalidRegex { .. })
+    ));
 }
 
 #[test]

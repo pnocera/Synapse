@@ -3522,6 +3522,7 @@ dependencies = [
  "hyper",
  "image",
  "insta",
+ "metrics",
  "notify",
  "regex",
  "rmcp",

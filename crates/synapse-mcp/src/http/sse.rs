@@ -200,7 +200,7 @@ impl SseState {
                 Some(last_id)
                     if subscription
                         .latest_seq()
-                        .is_some_and(|latest_seq| last_id <= latest_seq) =>
+                        .map_or(last_id == 0, |latest_seq| last_id <= latest_seq) =>
                 {
                     return Ok(subscription);
                 }

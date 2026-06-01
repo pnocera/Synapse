@@ -73,6 +73,22 @@ async fn subscribe_schema_defaults_and_edges() -> anyhow::Result<()> {
         .await?;
     assert_eq!(bad_filter["data"]["code"], "TOOL_PARAMS_INVALID");
 
+    let bad_regex_filter = client
+        .tools_call_error(
+            "subscribe",
+            json!({"filter": {"op": "data", "path": "/field", "predicate": {"op": "regex", "pattern": "["}}}),
+        )
+        .await?;
+    assert_eq!(bad_regex_filter["data"]["code"], "TOOL_PARAMS_INVALID");
+
+    let bad_path_filter = client
+        .tools_call_error(
+            "subscribe",
+            json!({"filter": {"op": "data", "path": "field", "predicate": {"op": "exists"}}}),
+        )
+        .await?;
+    assert_eq!(bad_path_filter["data"]["code"], "TOOL_PARAMS_INVALID");
+
     for _ in 0..64 {
         let response = client.tools_call("subscribe", json!({})).await?;
         let payload = structured(&response)?;
