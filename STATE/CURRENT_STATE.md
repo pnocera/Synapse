@@ -1,5 +1,84 @@
 # CURRENT STATE - Synapse
 
+## 2026-05-31T21:12:06-05:00
+- Active issue remains #608 `scenario(stress): 32-reflex saturation - priority, exclusive, starvation`; implementation and final manual FSV evidence are now captured, with issue comment/closure next.
+- Post-compaction wake-up was completed again:
+  - Re-read `docs/AICodingAgentSuperPrompt.md`, `C:\Users\hotra\Downloads\AICodingAgentSuperPrompt.md`, `AGENTS.md`, `STATE/*`, #608, #594, #351, live decision/context issue lists, open issue queue, and git status/log/branch.
+  - Live queue is #594 plus #595-#604 and #608-#634; #608 still has only the START comment.
+  - Wired configured `mcp__synapse` client works through the actual tool surface: `health`, `storage_inspect`, `reflex_list`, `reflex_history`, and `observe` returned; installed stdio runtime PID remains healthy with DB `C:\Users\hotra\AppData\Local\synapse\db`.
+- Final #608 supporting checks passed after the stateful-arbitration patch:
+  - `cargo fmt`, `cargo fmt --check`
+  - `cargo check -p synapse-reflex`, `cargo check -p synapse-mcp`, `cargo check -p synapse-core`
+  - `cargo test -p synapse-reflex --test scheduler_behavior -- --nocapture` (20 passed)
+  - Focused duplicate/exclusive/priority/cancel/stateful starvation tests passed sequentially.
+  - `cargo test -p synapse-mcp --test m3_reflex_register_tool reflex_register_schema_defaults_and_edges -- --nocapture`
+  - `cargo test -p synapse-mcp schema_sanitize -- --nocapture`
+  - `cargo build --release -p synapse-mcp` passed; final binary `C:\code\Synapse\target\release\synapse-mcp.exe` SHA256 `A9D2C94C2A05DDEBF01A7A9DAFD2D97BCF09DEF6B1461F1FDAC1EBF593EB24C8`, length `46237184`, timestamp `2026-05-31 20:54:41`.
+  - Earlier parallel test attempts hit Windows linker `LNK1104` because multiple scheduler test binaries linked concurrently; affected tests were rerun sequentially and passed.
+- Final manual #608 FSV evidence used repo-built isolated HTTP daemons and official MCP Inspector strict `tools/list` / real `tools/call`, with separate SoT reads:
+  - Cap/invalid daemon PID `34784`, bind `127.0.0.1:7823`, run `.runs\608\final-fsv-20260531T2058`: unauth health 401; auth health 200; strict Inspector `tools/list` succeeded with 80 tools. Baseline `reflex_list` total/active 0, `CF_REFLEX_AUDIT=0`, `CF_ACTION_LOG=0`.
+  - Duplicate active registration failed closed with `REFLEX_PARAMS_INVALID` and left one active row: list total/active 1, `CF_REFLEX_AUDIT=1`, `CF_ACTION_LOG=0`.
+  - 32-reflex ceiling accepted 30 `on_event`, one `hold_button`, and one `combo`, including priority boundaries 0 and 1000. After-read: `reflex_list` total/active 32, `CF_REFLEX_AUDIT=32`, `CF_ACTION_LOG=0`, health reflex ok with `sample_count=4096`, `sample_limit=4096`.
+  - 33rd registration failed closed with `scheduler reflex cap 32 exceeded by 33`; after-read remained total/active 32, no cap33 row, `CF_REFLEX_AUDIT=32`, `CF_ACTION_LOG=0`.
+  - Cleanup `release_all` disabled all 32 and neutralized one pad; after-read total 32, active 0, disabled 32, `CF_REFLEX_AUDIT=64`, `CF_ACTION_LOG=1`, health active 0 and sample ring 4096/4096.
+  - Empty params, priority 1001, and structurally invalid aim target all failed before adding rows; after-read remained total 32, active 0, disabled 32, `CF_REFLEX_AUDIT=64`, `CF_ACTION_LOG=1`.
+  - Stateful priority/exclusive/starvation daemon PID `59948`, bind `127.0.0.1:7824`, run `.runs\608\final-starvation-20260531T2125`: strict Inspector `tools/list` succeeded. Registered two exclusive `aim_track` reflexes. After wait, winner priority 10 active/fire_count `23619`, loser priority 100 starved/fire_count `0`, loser `last_error_code=REFLEX_STARVED`; history contained one starved row with resource `mouse_cursor`; storage `CF_REFLEX_AUDIT=3`. Cancelling the winner mid-fire let the loser become active and fire (`fire_count=4967`); history then count 4 with active/starved/cancelled rows; storage `CF_REFLEX_AUDIT=4`.
+  - Same-tick daemon PID `70124`, bind `127.0.0.1:7825`, run `.runs\608\final-sametick-20260531T2135`: unauth health 401; auth health ok; strict Inspector `tools/list` succeeded. Registered 32 `hold_button` reflexes; after one tick, `reflex_list` total/active/hold_button 32, min/max fire_count 1/1, `CF_REFLEX_AUDIT=32`, health active 32 and sample ring 4096/4096, daemon log readback showed `dispatched_actions=32` on tick_index 0.
+  - Same-tick cleanup used real Inspector `release_all`, returned `neutralized_pads=3`, then after-read showed total 32, active 0, disabled 32, hold_button 32, min/max fire_count 1/1, `CF_REFLEX_AUDIT=64`, `CF_ACTION_LOG=1`, health active 0 and sample ring 4096/4096. PID `70124` was stopped and port `7825` is closed.
+- Current worktree still contains #608 code/state changes. Next: run final diff/readback checks, commit with `[skip ci]`, push, post #608 RESOLVED evidence, close #608, update state, then refresh the queue and claim the next open issue.
+
+## 2026-05-31T20:38:43-05:00
+- Active issue remains #608 `scenario(stress): 32-reflex saturation - priority, exclusive, starvation`.
+- Post-compaction wake-up was completed again:
+  - Re-read `docs/AICodingAgentSuperPrompt.md`, `C:\Users\hotra\Downloads\AICodingAgentSuperPrompt.md`, `AGENTS.md`, `STATE/*`, live #608/#594/#351, decision/context issue lists, open issue queue, and git status/log/branch.
+  - Live queue is still #594 plus #595-#604 and #608-#634; #608 has only the START comment.
+  - Wired configured `mcp__synapse` client is usable: `health`, `storage_inspect`, `reflex_list`, `reflex_history`, and `observe` all returned through the real client. Installed stdio runtime reports ok with DB `C:\Users\hotra\AppData\Local\synapse\db`, active profile `notepad`, and reflex active_count 0.
+- Cleanup after the pre-compaction #608 aim-starvation run:
+  - Isolated daemon PID `64832`, bind `127.0.0.1:7822`, binary `C:\code\Synapse\target\release\synapse-mcp.exe`, was still alive.
+  - `release_all` returned zero held inputs, but `reflex_list` still showed both active `aim_track` reflexes with identical `fire_count=224560`; this confirmed the stateful-controller arbitration gap.
+  - Explicit `reflex_cancel` calls cancelled IDs `019e80c9-1987-7b53-bddc-e3363bfc4352` and `019e80c9-440c-7401-b914-43ac088cd555`; after-read showed total 2, active 0, cancelled 2; PID `64832` was stopped and port `7822` is closed.
+- Root cause fixed in the #608 worktree:
+  - `scheduler_stateful.rs` now creates conflict candidates for active stateful drivers (`aim_track`, `hold_move`, `hold_button`, combo) before dispatch, using their actual reserved resources where possible.
+  - `scheduler_tick.rs` now aggregates conflict losers across the tick and records starvation once per tick, preventing a later empty arbitration pass from resetting a stateful loser before it reaches `STARVATION_AFTER`.
+  - Added supporting regression `stateful_aim_track_conflicts_by_priority_and_starves_loser`.
+- Supporting checks after the stateful patch:
+  - `cargo fmt`
+  - `cargo check -p synapse-reflex`
+  - `cargo test -p synapse-reflex --test scheduler_behavior stateful_aim_track_conflicts_by_priority_and_starves_loser -- --nocapture`
+  - `cargo test -p synapse-reflex --test scheduler_behavior lower_priority_number_wins_cursor_conflict_and_starves_loser -- --nocapture`
+  - `cargo test -p synapse-reflex --test scheduler_behavior cancelling_winner_allows_starved_loser_to_fire_again -- --nocapture`
+  - `cargo test -p synapse-reflex --test scheduler_behavior exclusive_mouse_reflex_blocks_lower_priority_same_device_class -- --nocapture`
+  - `cargo test -p synapse-reflex --test scheduler_behavior scheduler_rejects_duplicate_reflex_ids -- --nocapture`
+  - `cargo test -p synapse-reflex duplicate_active_reflex_definition_is_rejected -- --nocapture`
+  - `cargo check -p synapse-mcp`
+  - `cargo check -p synapse-core`
+  - `cargo test -p synapse-mcp --test m3_reflex_register_tool reflex_register_schema_defaults_and_edges -- --nocapture`
+  - `cargo test -p synapse-mcp schema_sanitize -- --nocapture`
+  - Two parallel scheduler test attempts hit Windows linker `LNK1104` because multiple `scheduler_behavior` test binaries linked concurrently; reruns of the affected tests passed sequentially.
+- Next #608 action: run `cargo fmt --check`, rebuild release `synapse-mcp`, launch a fresh isolated repo-built daemon on a new port such as `7823`, prove process/socket/auth/health/strict Inspector `tools/list`, then rerun manual #608 FSV on the final binary: 32 cap/33rd fail-closed as needed, stateful priority/exclusive/starvation, cancel recovery, invalid/empty/boundary params, and same-tick/sample-limit readbacks.
+
+## 2026-05-31T19:32:35-05:00
+- Post-compaction wake-up completed for active #608:
+  - Re-read `docs/AICodingAgentSuperPrompt.md`, `C:\Users\hotra\Downloads\AICodingAgentSuperPrompt.md`, `AGENTS.md`, `STATE/ACTIVE_OBJECTIVE.md`, `STATE/CURRENT_STATE.md`, `STATE/RECOVERY_NOTES.md`, and tails of `STATE/DECISION_LOG.md` / `STATE/HEARTBEAT.md`.
+  - Re-read live GitHub #608, #594, #351, open issue queue, and decision/context issue lists. #608 is still open with only the START comment; #594 remains the open parent context.
+  - Git readback: branch `main`, HEAD `495766d docs(state): record issue 607 closure [skip ci]`, worktree has only #608 patch files in `synapse-core`, `synapse-mcp`, and `synapse-reflex`.
+  - Wired configured Synapse MCP client loaded the tool surface and worked: `health`, `profile_list include_inactive=true`, `storage_inspect`, `observe depth=0`, `reflex_list include_expired=true`, and `reflex_history limit=10` all returned. Process SoT shows installed stdio daemon PID `45712` at `C:\Users\hotra\.cargo\bin\synapse-mcp.exe`; stale TCP row remains on `127.0.0.1:7814` owned by absent PID `61024`, so do not reuse that port.
+- Current #608 patch in worktree:
+  - `synapse-reflex` conflict resolver now preserves exact resource conflicts and adds same-device-class conflicts only when both candidates are `exclusive=true`; combo steps now contribute conflict resources.
+  - Duplicate scheduler reflex IDs fail closed in `validate_reflexes`; duplicate active runtime registrations with the same trigger/actions/driver/priority/lifetime/exclusive/debounce fail closed.
+  - Reflex health exposes retained scheduler `sample_count` and `sample_limit` for manual tick-ring SoT readback.
+  - Supporting regressions added for exclusive mouse starvation, duplicate scheduler IDs, duplicate active runtime registration, and duplicate MCP `reflex_register`.
+- Supporting checks passed so far:
+  - `cargo fmt`
+  - `cargo check -p synapse-reflex`
+  - `cargo test -p synapse-reflex --test scheduler_behavior exclusive_mouse_reflex_blocks_lower_priority_same_device_class -- --nocapture`
+  - `cargo test -p synapse-reflex --test scheduler_behavior scheduler_rejects_duplicate_reflex_ids -- --nocapture`
+  - `cargo test -p synapse-reflex duplicate_active_reflex_definition_is_rejected -- --nocapture`
+  - `cargo test -p synapse-mcp --test m3_reflex_register_tool reflex_register_schema_defaults_and_edges -- --nocapture`
+  - `cargo check -p synapse-mcp`
+  - `cargo check -p synapse-core`
+- Next #608 action: run final formatting/schema checks as needed, build repo release `synapse-mcp`, launch an isolated HTTP daemon on a fresh port such as `7816`, prove process/socket/auth/health/strict Inspector `tools/list`, then manually FSV 32-reflex saturation, 33rd fail-closed, duplicate/priority-bound/invalid edges, exclusive starvation, cancel recovery, and same-tick/sample-limit behavior through real MCP `tools/call` plus separate SoT readbacks.
+
 ## 2026-05-31T19:17:16-05:00
 - #607 `scenario(stress): act_launch fleet - all 30 profiles, foreground incl. console apps` is closed.
   - Commit: `8ce49e4 fix(mcp): harden act_launch foregrounding (#607) [skip ci]`

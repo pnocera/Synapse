@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashSet, VecDeque},
     sync::{Arc, Mutex, atomic::AtomicBool},
     thread,
     time::Duration,
@@ -84,7 +84,7 @@ impl SchedulerConfig {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ScheduledReflex {
     pub reflex_id: ReflexId,
     pub trigger: SchedulerTrigger,
@@ -223,7 +223,7 @@ impl ScheduledReflex {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ScheduledReflexDriver {
     Actions,
     AimTrack(AimTrackParams),
@@ -482,7 +482,13 @@ pub(crate) fn validate_reflexes(reflexes: &[ScheduledReflex]) -> ReflexResult<()
             ),
         });
     }
+    let mut seen_ids = HashSet::with_capacity(reflexes.len());
     for reflex in reflexes {
+        if !seen_ids.insert(reflex.reflex_id.as_str()) {
+            return Err(ReflexError::ParamsInvalid {
+                detail: format!("duplicate reflex id: {}", reflex.reflex_id),
+            });
+        }
         if reflex.priority > MAX_REFLEX_PRIORITY {
             return Err(ReflexError::PriorityInvalid {
                 detail: format!(

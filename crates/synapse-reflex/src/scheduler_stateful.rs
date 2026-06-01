@@ -1,18 +1,22 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
-use synapse_core::{Event, error_codes};
+use synapse_core::{
+    Action, ButtonAction, Event, Point, ReflexAimAxis, ReflexButtonTarget, error_codes,
+};
 
 use super::RuntimeState;
 use crate::{
     ReflexError,
+    conflict::{ConflictCandidate, ConflictLoser, resolve_conflicts},
     dispatch::ReflexActionDispatchContext,
     kinds::{
-        aim_track::{AimTrackContext, AimTrackOutput},
-        combo::{ComboContext, ComboOutput},
+        aim_track::{AimTrackContext, AimTrackOutput, AimTrackTarget},
+        combo::{ComboContext, ComboOutput, ComboPhase},
         hold_button::{HoldButtonOutput, HoldButtonPhase},
         hold_lifetime::HoldLifetimeContext,
         hold_move::{HoldMoveOutput, HoldMovePhase},
     },
+    scheduler::ScheduledReflexDriver,
 };
 
 pub(super) fn step_stateful_controllers(
@@ -21,10 +25,16 @@ pub(super) fn step_stateful_controllers(
     elapsed: Duration,
     dispatched_actions: &mut usize,
     dispatch_blocked: &mut bool,
+    starvation_losers: &mut Vec<ConflictLoser>,
 ) {
     let controls = super::lock_controls(&runtime.controls).clone();
+    let selection = resolve_stateful_conflicts(runtime, &controls);
+    starvation_losers.extend(selection.losers);
     for index in 0..runtime.reflexes.len() {
         if !controls.get(index).is_some_and(|control| control.active) {
+            continue;
+        }
+        if selection.blocked_slots.contains(&index) {
             continue;
         }
 
@@ -63,6 +73,205 @@ pub(super) fn step_stateful_controllers(
             }
         }
     }
+}
+
+#[derive(Clone, Debug, Default)]
+struct StatefulConflictSelection {
+    blocked_slots: HashSet<usize>,
+    losers: Vec<ConflictLoser>,
+}
+
+fn resolve_stateful_conflicts(
+    runtime: &RuntimeState,
+    controls: &[super::ReflexControl],
+) -> StatefulConflictSelection {
+    let mut plans = Vec::new();
+    for index in 0..runtime.reflexes.len() {
+        if !controls.get(index).is_some_and(|control| control.active) {
+            continue;
+        }
+        let actions = stateful_conflict_actions(runtime, index);
+        if actions.is_empty() {
+            continue;
+        }
+        plans.push(StatefulConflictPlan {
+            reflex_index: index,
+            actions,
+        });
+    }
+
+    let candidates = plans
+        .iter()
+        .enumerate()
+        .map(|(candidate_index, plan)| {
+            let runtime_reflex = &runtime.reflexes[plan.reflex_index];
+            let control = &controls[plan.reflex_index];
+            ConflictCandidate::new(
+                candidate_index,
+                plan.reflex_index,
+                runtime_reflex.reflex.reflex_id.clone(),
+                control.priority,
+                runtime_reflex.registration_order,
+                runtime_reflex.reflex.exclusive,
+                &plan.actions,
+            )
+        })
+        .collect::<Vec<_>>();
+    let resolution = resolve_conflicts(&candidates);
+    let blocked_slots = resolution
+        .losers
+        .iter()
+        .map(|loser| loser.loser_slot)
+        .collect::<HashSet<_>>();
+
+    StatefulConflictSelection {
+        blocked_slots,
+        losers: resolution.losers,
+    }
+}
+
+#[derive(Clone, Debug)]
+struct StatefulConflictPlan {
+    reflex_index: usize,
+    actions: Vec<Action>,
+}
+
+fn stateful_conflict_actions(runtime: &RuntimeState, index: usize) -> Vec<Action> {
+    match &runtime.reflexes[index].reflex.driver {
+        ScheduledReflexDriver::Actions => Vec::new(),
+        ScheduledReflexDriver::AimTrack(_) => aim_track_conflict_actions(runtime, index),
+        ScheduledReflexDriver::HoldMove(_) => hold_move_conflict_actions(runtime, index),
+        ScheduledReflexDriver::HoldButton(_) => hold_button_conflict_actions(runtime, index),
+        ScheduledReflexDriver::Combo(_) => combo_conflict_actions(runtime, index),
+    }
+}
+
+fn aim_track_conflict_actions(runtime: &RuntimeState, index: usize) -> Vec<Action> {
+    let Some(controller) = runtime.aim_track_states.get(index).and_then(Option::as_ref) else {
+        return Vec::new();
+    };
+    let params = controller.params();
+    let Some(target) = aim_static_target(&params.target) else {
+        return Vec::new();
+    };
+    let Ok(cursor) = synapse_action::backend::software::cursor_position() else {
+        return Vec::new();
+    };
+    if !aim_outside_deadzone(cursor, target, params.axis, params.deadzone_px) {
+        return Vec::new();
+    }
+    vec![Action::MouseMoveRelative {
+        dx: 0.0,
+        dy: 0.0,
+        backend: params.backend,
+    }]
+}
+
+fn hold_move_conflict_actions(runtime: &RuntimeState, index: usize) -> Vec<Action> {
+    let Some(controller) = runtime.hold_move_states.get(index).and_then(Option::as_ref) else {
+        return Vec::new();
+    };
+    if !matches!(
+        controller.phase(),
+        HoldMovePhase::Pending | HoldMovePhase::Holding
+    ) {
+        return Vec::new();
+    }
+    controller
+        .params()
+        .keys
+        .iter()
+        .cloned()
+        .map(|key| Action::KeyDown {
+            key,
+            backend: controller.params().backend,
+        })
+        .collect()
+}
+
+fn hold_button_conflict_actions(runtime: &RuntimeState, index: usize) -> Vec<Action> {
+    let Some(controller) = runtime
+        .hold_button_states
+        .get(index)
+        .and_then(Option::as_ref)
+    else {
+        return Vec::new();
+    };
+    if !matches!(
+        controller.phase(),
+        HoldButtonPhase::Pending | HoldButtonPhase::Holding
+    ) {
+        return Vec::new();
+    }
+    vec![hold_button_action(
+        &controller.params().button,
+        controller.params().backend,
+    )]
+}
+
+fn combo_conflict_actions(runtime: &RuntimeState, index: usize) -> Vec<Action> {
+    let Some(controller) = runtime.combo_states.get(index).and_then(Option::as_ref) else {
+        return Vec::new();
+    };
+    if !matches!(
+        controller.phase(),
+        ComboPhase::Pending | ComboPhase::Running
+    ) {
+        return Vec::new();
+    }
+    let ScheduledReflexDriver::Combo(params) = &runtime.reflexes[index].reflex.driver else {
+        return Vec::new();
+    };
+    vec![Action::Combo {
+        steps: params.steps.clone(),
+        backend: params.backend,
+    }]
+}
+
+fn hold_button_action(button: &ReflexButtonTarget, backend: synapse_core::Backend) -> Action {
+    match button {
+        ReflexButtonTarget::Mouse { button } => Action::MouseButton {
+            button: *button,
+            action: ButtonAction::Down,
+            hold_ms: 0,
+            backend,
+        },
+        ReflexButtonTarget::Pad { pad, button } => Action::PadButton {
+            pad: *pad,
+            button: *button,
+            action: ButtonAction::Down,
+            hold_ms: 0,
+        },
+    }
+}
+
+fn aim_static_target(target: &AimTrackTarget) -> Option<Point> {
+    match target {
+        AimTrackTarget::Point(point) => Some(*point),
+        AimTrackTarget::ElementRect(rect) => Some(Point {
+            x: rect.x.saturating_add(rect.w / 2),
+            y: rect.y.saturating_add(rect.h / 2),
+        }),
+        AimTrackTarget::EntityId(_) | AimTrackTarget::TrackId(_) | AimTrackTarget::ElementId(_) => {
+            None
+        }
+    }
+}
+
+fn aim_outside_deadzone(
+    cursor: Point,
+    target: Point,
+    axis: ReflexAimAxis,
+    deadzone_px: f32,
+) -> bool {
+    let mut dx = f64::from(target.x) - f64::from(cursor.x);
+    let mut dy = f64::from(target.y) - f64::from(cursor.y);
+    match axis {
+        ReflexAimAxis::Xy => {}
+        ReflexAimAxis::XOnly => dy = 0.0,
+        ReflexAimAxis::YOnly => dx = 0.0,
+    }
+    dx.hypot(dy) > f64::from(deadzone_px)
 }
 
 #[derive(Clone, Debug)]

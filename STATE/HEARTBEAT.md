@@ -35,3 +35,6 @@
 - 2026-05-31T18:49:37-05:00 iteration #607-final8-evidence: re-read wake context after compaction, verified wired Synapse MCP client, recorded final8 launch matrix/edge evidence, and patched WordPad/IE profile host-gap metadata.
 - 2026-05-31T19:14:50-05:00 iteration #607-final-checks: stopped FSV-owned processes, cleaned generated EverQuest artifacts, fixed clippy findings, passed final checks/release build, and completed diff review.
 - 2026-05-31T19:17:16-05:00 iteration #607-close-608-start: pushed #607 commit 8ce49e4, posted RESOLVED evidence, closed #607, refreshed queue, and posted #608 START.
+- 2026-05-31T19:32:35-05:00 iteration #608-post-compact-patch-checks: re-read wake context/issues, verified wired Synapse MCP tools, patched exclusive/duplicate/sample-ring gaps, and passed focused supporting checks.
+- 2026-05-31T20:38:43-05:00 iteration #608-stateful-arbitration: cleaned stale aim-starvation daemon, confirmed both aim_track reflexes had fired equally, patched stateful conflict arbitration plus once-per-tick starvation accounting, and passed focused supporting checks.
+- 2026-05-31T21:12:06-05:00 iteration #608-final-fsv: completed final manual FSV evidence for cap/33rd/duplicates/invalids/starvation/cancel/same-tick, cleaned PID 70124, verified port 7825 closed, and recorded state before commit/closure.

@@ -1,7 +1,7 @@
 use std::{error::Error, sync::Arc};
 
 use synapse_action::ActionHandle;
-use synapse_core::{Action, EventFilter, ReflexState, StoredReflexAudit};
+use synapse_core::{Action, EventFilter, ReflexState, StoredReflexAudit, error_codes};
 use synapse_storage::{Db, cf, decode_json};
 use tempfile::tempdir;
 use tokio::sync::mpsc;
@@ -141,6 +141,49 @@ fn cancelled_reflex_does_not_resurrect_on_later_registration() -> Result<(), Box
             .find(|status| status.id == "reflex-runtime-cancelled-first")
             .map(|status| status.state),
         None
+    );
+    Ok(())
+}
+
+#[test]
+fn duplicate_active_reflex_definition_is_rejected() -> Result<(), Box<dyn Error>> {
+    let temp = tempdir()?;
+    let db = Arc::new(Db::open(&temp.path().join("db"), TEST_SCHEMA_VERSION)?);
+    let (action_handle, _action_rx) = ActionHandle::channel();
+    let mut runtime = ReflexRuntime::spawn(Arc::clone(&db), action_handle, EventBus::default())?;
+    let first = ScheduledReflex::on_event(
+        "reflex-runtime-duplicate-a",
+        EventFilter::Kind {
+            kind: "support-duplicate".to_owned(),
+        },
+        vec![Action::ReleaseAll],
+    );
+    let duplicate = ScheduledReflex::on_event(
+        "reflex-runtime-duplicate-b",
+        EventFilter::Kind {
+            kind: "support-duplicate".to_owned(),
+        },
+        vec![Action::ReleaseAll],
+    );
+
+    runtime.register(&first)?;
+    let error = runtime
+        .register(&duplicate)
+        .expect_err("duplicate active reflex definition must be rejected");
+
+    assert_eq!(error.code(), error_codes::REFLEX_PARAMS_INVALID);
+    assert_eq!(runtime.list(false)?.len(), 1);
+    let audits = db
+        .scan_cf(cf::CF_REFLEX_AUDIT)?
+        .iter()
+        .map(|(_key, value)| decode_json::<StoredReflexAudit>(value))
+        .collect::<Result<Vec<_>, _>>()?;
+    assert_eq!(
+        audits
+            .iter()
+            .filter(|audit| audit.details["kind"].as_str() == Some(REFLEX_REGISTERED_KIND))
+            .count(),
+        1
     );
     Ok(())
 }

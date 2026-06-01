@@ -28,6 +28,7 @@ pub(super) fn tick(runtime: &mut RuntimeState, elapsed: Duration, degraded: bool
     let events = runtime.subscription.drain();
     let mut dispatched_actions = 0_usize;
     let mut dispatch_blocked = false;
+    let mut starvation_losers = Vec::new();
     step_active_combos(
         runtime,
         elapsed,
@@ -41,6 +42,7 @@ pub(super) fn tick(runtime: &mut RuntimeState, elapsed: Duration, degraded: bool
             elapsed,
             &mut dispatched_actions,
             &mut dispatch_blocked,
+            &mut starvation_losers,
         );
     }
 
@@ -48,10 +50,15 @@ pub(super) fn tick(runtime: &mut RuntimeState, elapsed: Duration, degraded: bool
         dispatch_triggered_reflexes(
             runtime,
             &events,
-            elapsed,
             &mut dispatched_actions,
             &mut dispatch_blocked,
+            &mut starvation_losers,
         );
+    }
+
+    if !dispatch_blocked || !starvation_losers.is_empty() {
+        let controls = super::lock_controls(&runtime.controls).clone();
+        record_starvation(runtime, &starvation_losers, elapsed, &controls);
     }
 
     record_tick_sample(
@@ -67,9 +74,9 @@ pub(super) fn tick(runtime: &mut RuntimeState, elapsed: Duration, degraded: bool
 fn dispatch_triggered_reflexes(
     runtime: &mut RuntimeState,
     events: &[Event],
-    elapsed: Duration,
     dispatched_actions: &mut usize,
     dispatch_blocked: &mut bool,
+    starvation_losers: &mut Vec<ConflictLoser>,
 ) {
     let now = Instant::now();
     let controls = super::lock_controls(&runtime.controls).clone();
@@ -86,12 +93,13 @@ fn dispatch_triggered_reflexes(
                 trigger.reflex_id.clone(),
                 control.priority,
                 runtime_reflex.registration_order,
+                runtime_reflex.reflex.exclusive,
                 &trigger.actions,
             )
         })
         .collect::<Vec<_>>();
     let resolution = resolve_conflicts(&candidates);
-    record_starvation(runtime, &resolution.losers, elapsed, &controls);
+    starvation_losers.extend(resolution.losers);
 
     let mut guard = OnEventTickGuard::default();
 

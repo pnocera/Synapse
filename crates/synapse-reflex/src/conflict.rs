@@ -1,6 +1,8 @@
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
-use synapse_core::{Action, Key, MouseButton, PadButton, PadId, ReflexId, Stick, Trigger};
+use synapse_core::{
+    Action, ComboInput, Key, MouseButton, PadButton, PadId, ReflexId, Stick, Trigger,
+};
 
 pub const REFLEX_STARVED_KIND: &str = "reflex_starved";
 pub const STARVATION_AFTER: Duration = Duration::from_secs(2);
@@ -18,6 +20,17 @@ pub(crate) enum ConflictResource {
 }
 
 impl ConflictResource {
+    fn device_class(&self) -> ConflictDeviceClass {
+        match self {
+            Self::KeyboardText | Self::Key(_) => ConflictDeviceClass::Keyboard,
+            Self::MouseCursor | Self::MouseButton(_) => ConflictDeviceClass::Mouse,
+            Self::PadButton { pad, .. }
+            | Self::PadStick { pad, .. }
+            | Self::PadTrigger { pad, .. }
+            | Self::PadReport { pad } => ConflictDeviceClass::Pad { pad: *pad },
+        }
+    }
+
     fn conflicts_with(&self, other: &Self) -> bool {
         if keyboard_conflict(self, other)
             || matches!((self, other), (Self::MouseCursor, Self::MouseCursor))
@@ -81,6 +94,23 @@ impl ConflictResource {
     }
 }
 
+#[derive(Copy, Clone, Debug, Eq, Hash, PartialEq)]
+enum ConflictDeviceClass {
+    Keyboard,
+    Mouse,
+    Pad { pad: PadId },
+}
+
+impl ConflictDeviceClass {
+    fn label(self) -> String {
+        match self {
+            Self::Keyboard => "keyboard".to_owned(),
+            Self::Mouse => "mouse".to_owned(),
+            Self::Pad { pad } => format!("pad:{pad}"),
+        }
+    }
+}
+
 const fn keyboard_conflict(left: &ConflictResource, right: &ConflictResource) -> bool {
     matches!(
         (left, right),
@@ -115,6 +145,7 @@ pub(crate) struct ConflictCandidate {
     pub reflex_id: ReflexId,
     pub priority: u32,
     pub registration_order: usize,
+    pub exclusive: bool,
     pub resources: Vec<ConflictResource>,
 }
 
@@ -126,6 +157,7 @@ impl ConflictCandidate {
         reflex_id: ReflexId,
         priority: u32,
         registration_order: usize,
+        exclusive: bool,
         actions: &[Action],
     ) -> Self {
         Self {
@@ -134,6 +166,7 @@ impl ConflictCandidate {
             reflex_id,
             priority,
             registration_order,
+            exclusive,
             resources: action_resources(actions),
         }
     }
@@ -169,7 +202,7 @@ pub(crate) fn resolve_conflicts(candidates: &[ConflictCandidate]) -> ConflictRes
             .filter(|other| other.candidate_index != candidate.candidate_index)
             .filter(|other| outranks(other, candidate))
             .filter_map(|other| {
-                contested_resource(other, candidate).map(|resource| (other, resource))
+                contested_resource_label(other, candidate).map(|resource| (other, resource))
             })
             .min_by(|(left, _), (right, _)| compare_precedence(left, right));
 
@@ -180,7 +213,7 @@ pub(crate) fn resolve_conflicts(candidates: &[ConflictCandidate]) -> ConflictRes
                 loser_reflex_id: candidate.reflex_id.clone(),
                 winner_slot: winner.reflex_slot,
                 winner_reflex_id: winner.reflex_id.clone(),
-                resource: resource.label(),
+                resource,
             });
         } else {
             resolution.winners.push(candidate.candidate_index);
@@ -262,8 +295,44 @@ fn action_resource(action: &Action) -> Vec<ConflictResource> {
             trigger: *trigger,
         }],
         Action::PadReport { pad, .. } => vec![ConflictResource::PadReport { pad: *pad }],
-        Action::Combo { .. } | Action::ReleaseAll => Vec::new(),
+        Action::Combo { steps, .. } => steps
+            .iter()
+            .flat_map(combo_input_resource)
+            .collect::<Vec<_>>(),
+        Action::ReleaseAll => Vec::new(),
     }
+}
+
+fn combo_input_resource(step: &synapse_core::ComboStep) -> Vec<ConflictResource> {
+    match &step.input {
+        ComboInput::KeyDown { key } | ComboInput::KeyUp { key } => {
+            vec![ConflictResource::Key(key.clone())]
+        }
+        ComboInput::KeyPress { key, .. } => vec![ConflictResource::Key(key.clone())],
+        ComboInput::MouseButton { button, .. } => {
+            vec![ConflictResource::MouseButton(*button)]
+        }
+        ComboInput::MouseMoveRel { .. } => vec![ConflictResource::MouseCursor],
+        ComboInput::PadButton { pad, button, .. } => {
+            vec![ConflictResource::PadButton {
+                pad: *pad,
+                button: *button,
+            }]
+        }
+        ComboInput::PadStick { pad, stick, .. } => vec![ConflictResource::PadStick {
+            pad: *pad,
+            stick: *stick,
+        }],
+    }
+}
+
+fn contested_resource_label(
+    stronger: &ConflictCandidate,
+    weaker: &ConflictCandidate,
+) -> Option<String> {
+    contested_resource(stronger, weaker)
+        .map(ConflictResource::label)
+        .or_else(|| contested_exclusive_class(stronger, weaker))
 }
 
 fn contested_resource<'a>(
@@ -276,6 +345,26 @@ fn contested_resource<'a>(
             .iter()
             .any(|weaker_resource| stronger_resource.conflicts_with(weaker_resource))
     })
+}
+
+fn contested_exclusive_class(
+    stronger: &ConflictCandidate,
+    weaker: &ConflictCandidate,
+) -> Option<String> {
+    if !stronger.exclusive || !weaker.exclusive {
+        return None;
+    }
+    let weaker_classes = weaker
+        .resources
+        .iter()
+        .map(ConflictResource::device_class)
+        .collect::<HashSet<_>>();
+    stronger
+        .resources
+        .iter()
+        .map(ConflictResource::device_class)
+        .find(|class| weaker_classes.contains(class))
+        .map(|class| format!("exclusive:{}", class.label()))
 }
 
 const fn outranks(left: &ConflictCandidate, right: &ConflictCandidate) -> bool {

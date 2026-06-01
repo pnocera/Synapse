@@ -139,6 +139,8 @@ impl SynapseService {
                             },
                             detail: Some("reflex runtime initialized".to_owned()),
                             active_count: Some(runtime.active_count()),
+                            sample_count: Some(runtime.sample_count()),
+                            sample_limit: Some(runtime.sample_limit()),
                             last_tick_jitter_us: runtime.last_tick_jitter_us(),
                             recursion_clamps_total: Some(recursion_clamps_total),
                             ..SubsystemHealth::default()
@@ -147,6 +149,8 @@ impl SynapseService {
                             status: "error".to_owned(),
                             detail: Some(error.to_string()),
                             active_count: Some(runtime.active_count()),
+                            sample_count: Some(runtime.sample_count()),
+                            sample_limit: Some(runtime.sample_limit()),
                             last_tick_jitter_us: runtime.last_tick_jitter_us(),
                             ..SubsystemHealth::default()
                         },

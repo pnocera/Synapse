@@ -110,6 +110,22 @@ impl ReflexRuntime {
             .and_then(|scheduler| scheduler.samples().last().map(|sample| sample.jitter_us))
     }
 
+    /// Returns the number of retained scheduler tick samples.
+    #[must_use]
+    #[tracing::instrument(skip_all, fields(component = "reflex_runtime"))]
+    pub fn sample_count(&self) -> usize {
+        self.scheduler
+            .as_ref()
+            .map_or(0, |scheduler| scheduler.samples().len())
+    }
+
+    /// Returns the configured scheduler tick sample ring limit.
+    #[must_use]
+    #[tracing::instrument(skip_all, fields(component = "reflex_runtime"))]
+    pub fn sample_limit(&self) -> usize {
+        self.scheduler_config.sample_limit
+    }
+
     /// Returns true when the latest tick ran in degraded mode or missed its deadline.
     #[must_use]
     #[tracing::instrument(skip_all, fields(component = "reflex_runtime"))]

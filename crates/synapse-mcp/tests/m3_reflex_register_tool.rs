@@ -39,6 +39,11 @@ async fn reflex_register_schema_defaults_and_edges() -> anyhow::Result<()> {
     assert_eq!(first["state"]["priority"], 100);
     assert_eq!(first["state"]["lifetime"]["kind"], "until_cancelled");
 
+    let duplicate = client
+        .tools_call_error("reflex_register", valid_register_args("support-reflex"))
+        .await?;
+    assert_eq!(duplicate["data"]["code"], "REFLEX_PARAMS_INVALID");
+
     let bad_kind = client
         .tools_call_error(
             "reflex_register",

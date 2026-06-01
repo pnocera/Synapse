@@ -3,15 +3,15 @@ use std::{error::Error, io, sync::Arc, time::Duration};
 use serde_json::json;
 use synapse_action::{ACTION_QUEUE_CAPACITY, ActionHandle, ActionMessage};
 use synapse_core::{
-    Action, Backend, Event, EventFilter, EventSource, Key, KeyCode, ReflexLifetime, ReflexState,
-    SCHEMA_VERSION, StoredReflexAudit, error_codes,
+    Action, Backend, ButtonAction, Event, EventFilter, EventSource, Key, KeyCode, MouseButton,
+    Point, ReflexLifetime, ReflexState, SCHEMA_VERSION, StoredReflexAudit, error_codes,
 };
 use synapse_reflex::{
-    DEFAULT_REFLEX_PRIORITY, EventBus, HoldMoveParams, REFLEX_ACTION_DENIED_STEP_STATUS,
-    REFLEX_ACTION_PERMISSION_DENIED_KIND, REFLEX_LIFETIME_EXPIRED_KIND,
-    REFLEX_RECURSION_LIMIT_KIND, REFLEX_STARVED_KIND, REFLEX_TICK_LATE_KIND, ReflexActionGate,
-    ReflexActionPermissionDenied, ReflexScheduler, ScheduledReflex, ScheduledReflexDriver,
-    SchedulerConfig, SchedulerTrigger,
+    AimTrackParams, AimTrackTarget, DEFAULT_REFLEX_PRIORITY, EventBus, HoldMoveParams,
+    REFLEX_ACTION_DENIED_STEP_STATUS, REFLEX_ACTION_PERMISSION_DENIED_KIND,
+    REFLEX_LIFETIME_EXPIRED_KIND, REFLEX_RECURSION_LIMIT_KIND, REFLEX_STARVED_KIND,
+    REFLEX_TICK_LATE_KIND, ReflexActionGate, ReflexActionPermissionDenied, ReflexScheduler,
+    ScheduledReflex, ScheduledReflexDriver, SchedulerConfig, SchedulerTrigger,
 };
 use synapse_storage::{Db, cf, decode_json};
 use tempfile::tempdir;
@@ -593,6 +593,127 @@ fn equal_priority_cursor_conflict_prefers_newer_registration() -> Result<(), Box
 }
 
 #[test]
+fn exclusive_mouse_reflex_blocks_lower_priority_same_device_class() -> Result<(), Box<dyn Error>> {
+    let temp = tempdir()?;
+    let db = std::sync::Arc::new(Db::open(&temp.path().join("db"), SCHEMA_VERSION)?);
+    let bus = EventBus::default();
+    let (action_handle, mut action_rx) = ActionHandle::channel();
+    let mut cursor = mouse_move_reflex("reflex-exclusive-cursor", 7.0).with_exclusive(true);
+    cursor.priority = 10;
+    let mut button = ScheduledReflex::every_tick(
+        "reflex-exclusive-button",
+        vec![Action::MouseButton {
+            button: MouseButton::Left,
+            action: ButtonAction::Down,
+            hold_ms: 0,
+            backend: Backend::Software,
+        }],
+    )
+    .with_exclusive(true);
+    button.priority = 100;
+
+    let mut scheduler = ReflexScheduler::spawn_with_audit_db(
+        bus,
+        action_handle,
+        vec![cursor, button],
+        slow_ticks_config(45),
+        std::sync::Arc::clone(&db),
+    )?;
+    let samples = scheduler.wait_for_samples(45, WAIT_TIMEOUT);
+    scheduler.stop()?;
+    db.flush()?;
+
+    let actions = drain_actions(&mut action_rx);
+    let statuses = scheduler.statuses();
+    let audits = read_audits(&db)?;
+    let starved = audits
+        .iter()
+        .find(|audit| {
+            audit.reflex_id == "reflex-exclusive-button"
+                && audit.error_code.as_deref() == Some(error_codes::REFLEX_STARVED)
+        })
+        .ok_or_else(|| io::Error::other("missing exclusive starvation audit row"))?;
+
+    assert_eq!(samples.len(), 45);
+    assert_eq!(actions.len(), 45);
+    assert!(actions.iter().all(|action| matches!(
+        action,
+        Action::MouseMoveRelative { dx, .. } if dx_is(*dx, 7.0)
+    )));
+    assert_eq!(
+        status(&statuses, "reflex-exclusive-button")?.state,
+        ReflexState::Starved
+    );
+    assert_eq!(starved.details["resource"], "exclusive:mouse");
+    Ok(())
+}
+
+#[test]
+fn stateful_aim_track_conflicts_by_priority_and_starves_loser() -> Result<(), Box<dyn Error>> {
+    let temp = tempdir()?;
+    let db = std::sync::Arc::new(Db::open(&temp.path().join("db"), SCHEMA_VERSION)?);
+    let bus = EventBus::default();
+    let starved_events = bus.subscribe(
+        EventFilter::Kind {
+            kind: REFLEX_STARVED_KIND.to_owned(),
+        },
+        Vec::new(),
+        false,
+    )?;
+    let (action_handle, mut action_rx) = ActionHandle::channel();
+    let mut winner = ScheduledReflex::aim_track(
+        "stateful-aim-winner",
+        aim_track_params(point_value(20_000, 20_000)),
+    )
+    .with_exclusive(true);
+    winner.priority = 10;
+    let mut loser = ScheduledReflex::aim_track(
+        "stateful-aim-loser",
+        aim_track_params(point_value(-20_000, -20_000)),
+    )
+    .with_exclusive(true);
+    loser.priority = 100;
+
+    let mut scheduler = ReflexScheduler::spawn_with_audit_db(
+        bus,
+        action_handle,
+        vec![winner, loser],
+        slow_ticks_config(45),
+        std::sync::Arc::clone(&db),
+    )?;
+    let samples = scheduler.wait_for_samples(45, WAIT_TIMEOUT);
+    scheduler.stop()?;
+    db.flush()?;
+
+    let actions = drain_actions(&mut action_rx);
+    let statuses = scheduler.statuses();
+    let audits = read_audits(&db)?;
+    let starved = audits
+        .iter()
+        .find(|audit| {
+            audit.reflex_id == "stateful-aim-loser"
+                && audit.error_code.as_deref() == Some(error_codes::REFLEX_STARVED)
+        })
+        .ok_or_else(|| io::Error::other("missing stateful aim starvation audit row"))?;
+
+    assert_eq!(samples.len(), 45);
+    assert_eq!(actions.len(), 45);
+    assert!(actions.iter().all(|action| matches!(
+        action,
+        Action::MouseMoveRelative { dx, dy, .. } if *dx > 0.0 && *dy > 0.0
+    )));
+    assert_eq!(starved_events.drain().len(), 1);
+    assert_eq!(
+        status(&statuses, "stateful-aim-loser")?.state,
+        ReflexState::Starved
+    );
+    assert_eq!(status(&statuses, "stateful-aim-loser")?.fire_count, 0);
+    assert_eq!(status(&statuses, "stateful-aim-winner")?.fire_count, 45);
+    assert_eq!(starved.details["resource"], "mouse_cursor");
+    Ok(())
+}
+
+#[test]
 fn priority_change_is_used_on_later_ticks() -> Result<(), Box<dyn Error>> {
     let bus = EventBus::default();
     let (action_handle, mut action_rx) = ActionHandle::channel();
@@ -701,6 +822,25 @@ fn scheduler_rejects_invalid_trigger_filter() {
     assert_eq!(action_rx.len(), 0);
 }
 
+#[test]
+fn scheduler_rejects_duplicate_reflex_ids() {
+    let bus = EventBus::default();
+    let (action_handle, action_rx) = ActionHandle::channel();
+    let reflexes = vec![
+        ScheduledReflex::every_tick("reflex-duplicate-id", vec![Action::ReleaseAll]),
+        ScheduledReflex::every_tick("reflex-duplicate-id", vec![Action::ReleaseAll]),
+    ];
+
+    let error =
+        match ReflexScheduler::spawn(bus, action_handle, reflexes, SchedulerConfig::default()) {
+            Ok(_scheduler) => panic!("duplicate reflex id must prevent scheduler spawn"),
+            Err(error) => error,
+        };
+
+    assert_eq!(error.code(), error_codes::REFLEX_PARAMS_INVALID);
+    assert_eq!(action_rx.len(), 0);
+}
+
 fn event(seq: u64, kind: &str) -> Event {
     Event {
         seq,
@@ -770,6 +910,18 @@ fn named_key(value: &str) -> Key {
         },
         use_scancode: false,
     }
+}
+
+fn aim_track_params(target: Point) -> AimTrackParams {
+    let mut params = AimTrackParams::new(AimTrackTarget::Point(target));
+    params.deadzone_px = 0.0;
+    params.max_speed_px_per_tick = 1.0;
+    params.ema_alpha = 1.0;
+    params
+}
+
+const fn point_value(x: i32, y: i32) -> Point {
+    Point { x, y }
 }
 
 fn drain_actions(action_rx: &mut tokio::sync::mpsc::Receiver<ActionMessage>) -> Vec<Action> {

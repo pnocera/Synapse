@@ -32,6 +32,17 @@ impl ReflexRuntime {
             .filter(|reflex| !terminal_ids.contains(&reflex.reflex_id))
             .cloned()
             .collect::<Vec<_>>();
+        if let Some(existing) = next
+            .iter()
+            .find(|existing| same_reflex_definition(existing, reflex))
+        {
+            return Err(ReflexError::ParamsInvalid {
+                detail: format!(
+                    "duplicate active reflex registration matches existing reflex {}",
+                    existing.reflex_id
+                ),
+            });
+        }
         next.push(reflex.clone());
         scheduler::validate_reflexes(&next)?;
 
@@ -170,4 +181,14 @@ impl ReflexRuntime {
         self.write_disabled_audits_with_reason(&disabled, reason)?;
         Ok(disabled)
     }
+}
+
+fn same_reflex_definition(left: &ScheduledReflex, right: &ScheduledReflex) -> bool {
+    left.trigger == right.trigger
+        && left.then == right.then
+        && left.driver == right.driver
+        && left.priority == right.priority
+        && left.lifetime == right.lifetime
+        && left.exclusive == right.exclusive
+        && left.debounce == right.debounce
 }
