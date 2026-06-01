@@ -83,3 +83,6 @@
 - 2026-06-01T11:18:00-05:00 iteration #618-manual-fsv: patched storage pressure diagnostic gating, completed manual MCP FSV for pressure ladder/write-gating/edges, stopped daemon PID 56980, and recorded evidence before final checks.
 - 2026-06-01T11:28:00-05:00 iteration #618-final-checks: final fmt/check/storage pressure tests/m3 storage tool/schema sanitize/release build/diff review passed; release synapse-mcp SHA256 8BCD4B02A37D85C40D15087C8A3B66A8963804CB8A5877CC5A349CE676EFB12B.
 - 2026-06-01T11:29:00-05:00 iteration #618-close-619-start: pushed #618 commit c0b24e3, posted RESOLVED evidence, closed #618, refreshed queue, and posted #619 START.
+- 2026-06-01T11:45:17-05:00 iteration #619-manual-fsv: completed manual MCP evidence for concurrent writers, heavy in-flight write+GC, audit retention max-age/dedupe reports, boundary, empty CF, invalid params, and oscillation; release_all and daemon cleanup passed.
+- 2026-06-01T11:52:51-05:00 iteration #619-final-checks: final fmt/diff/checks/storage GC tests/MCP storage tool/schema sanitize/release build passed; release synapse-mcp SHA256 AF801288800BB64E3DA92B95573F2E9787FE7899AA497E264E7023242D03AB60.
+- 2026-06-01T11:54:30-05:00 iteration #619-close-620-start: posted #619 RESOLVED evidence, closed #619, refreshed queue, claimed #620, and posted #620 START.

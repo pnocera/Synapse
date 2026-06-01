@@ -1,5 +1,42 @@
 # CURRENT STATE - Synapse
 
+## 2026-06-01T11:54:30-05:00
+- #619 `scenario(stress): storage_gc_once under concurrent writes` is closed.
+  - No product-code patch was required.
+  - RESOLVED evidence: https://github.com/ChrisRoyse/Synapse/issues/619#issuecomment-4594692386
+  - Closure readback: issue state `CLOSED`, closed at `2026-06-01T16:53:51Z`.
+  - Manual FSV run directory: `.runs\619\gc-concurrent-fsv-20260601T1135`.
+  - Final release binary SHA256: `AF801288800BB64E3DA92B95573F2E9787FE7899AA497E264E7023242D03AB60`.
+- Active issue is now #620 `scenario(stress): activate all 30 profiles — keymap/HUD/capture/mode apply`.
+  - START comment: https://github.com/ChrisRoyse/Synapse/issues/620#issuecomment-4594697356
+  - #620 is assigned to `ChrisRoyse` and labeled `status:in-progress`, `agent:codex`.
+  - Live queue after #619 closure: #594 plus #595-#604 and #620-#634.
+  - #620 requires real MCP `profile_list`, `profile_activate`, `observe`, `act_keymap`, and storage/action-log readbacks where applicable. Required edges: unknown `profile_id`, same-profile reactivation (`changed=false`), activation while app not running, profile with empty keymap if present, and empty/boundary/structurally invalid inputs.
+  - Next: inspect profile runtime/registry code and bundled profile definitions, then launch a repo-built isolated daemon for manual MCP FSV.
+
+## 2026-06-01T11:45:17-05:00
+- Active issue #619 `scenario(stress): storage_gc_once under concurrent writes` has manual MCP FSV behavior evidence captured; final supporting checks, RESOLVED comment, close, and queue continuation are next.
+- No product-code patch has been required so far; current worktree should contain only `STATE/*` updates and #619 run artifacts under `.runs\619\gc-concurrent-fsv-20260601T1135`.
+- Manual FSV run directory: `.runs\619\gc-concurrent-fsv-20260601T1135`.
+  - Repo-built daemon PID `69600`, binary `C:\code\Synapse\target\release\synapse-mcp.exe`, bind `127.0.0.1:7847`, isolated DB `.runs\619\gc-concurrent-fsv-20260601T1135\db`, token `synapse-619-token`.
+  - Process/socket/auth/client-parity readbacks passed after compaction: process path matched the repo release binary; socket listened on `127.0.0.1:7847` owned by PID `69600`; auth `/health ok=true`; official MCP Inspector `0.21.2` strict `tools/list` returned 80 tools with `storage_inspect`, `storage_put_probe_rows`, `storage_gc_once`, and `release_all`.
+  - Initial SoT read: isolated storage pressure `Normal`; all 11 CF row counts were 0.
+  - Setup correction: the first writer launch attempt failed before MCP because the Inspector header argument was split incorrectly (`Invalid header format: Authorization:`); separate `storage_inspect` confirmed `CF_EVENTS=0`. This is not counted as behavior evidence.
+  - Concurrent writers: four real Inspector `storage_put_probe_rows` clients wrote 80 rows each into `CF_EVENTS` with prefixes `issue619-100-a`, `issue619-200-b`, `issue619-300-c`, and `issue619-400-d`. Separate `storage_inspect` read `CF_EVENTS=320` with tail samples `issue619-400-d:77..79`.
+  - GC after concurrent writers: real `storage_gc_once cf_name=CF_EVENTS soft_cap_rows=75 hard_cap_rows=120` read `before_rows=320`, `after_rows=75`, `total_evicted_rows=245`, `cache_evictions_total_delta=245`, and `STORAGE_CF_HARD_CAP_REACHED`; separate `storage_inspect` read `CF_EVENTS=75` retaining newest tail samples `issue619-400-d:77..79`.
+  - In-flight/heavy writer: real Inspector writer wrote `10000` rows x `2048` bytes with prefix `issue619-900-z`, and a real GC call during that activity read `before_rows=10075`, `after_rows=75`, `total_evicted_rows=10000`, hard cap reached. Separate `storage_inspect` read `CF_EVENTS=75` with newest tail samples `issue619-900-z:9997..9999`.
+  - Audit-retention max-age edge: wrote three valid `CF_ACTION_LOG` JSON audit rows at `ts_ns=1000,1010,1020`; `AUDIT_RETENTION` run `issue619-age` with `now_ns=5000 max_age_ns=100` deleted all three as expired, wrote report key `audit_retention/v1/report/issue619-age`, and separate `storage_inspect` read `CF_ACTION_LOG=0`, `CF_KV=1` with the report row.
+  - Audit-retention dedupe/run_id edge: wrote three valid duplicate action audit rows at `ts_ns=10000,10010,10020`; `AUDIT_RETENTION` run `issue619-dedupe` with `dedupe_window_ns=100` deleted two duplicates, retained the first row, and wrote report key `audit_retention/v1/report/issue619-dedupe`. Separate `storage_inspect` read `CF_ACTION_LOG=1`, `CF_KV=2`, with the dedupe report including duplicate deletion keys and the expected dedupe key.
+  - Boundary edge at soft cap: before `CF_EVENTS=75`; real `storage_gc_once soft_cap_rows=75 hard_cap_rows=120` returned `before_rows=75`, `after_rows=75`, `total_evicted_rows=0`; separate inspect kept `CF_EVENTS=75`.
+  - Empty CF edge: before `CF_MODEL_CACHE=0`; real `storage_gc_once cf_name=CF_MODEL_CACHE soft_cap_rows=1 hard_cap_rows=10` returned `before_rows=0`, `after_rows=0`, `total_evicted_rows=0`; separate inspect kept `CF_MODEL_CACHE=0`.
+  - Structurally invalid edge: real Inspector `storage_gc_once cf_name=CF_EVENTS soft_cap_rows=0 hard_cap_rows=10` failed closed with MCP error `-32099`, `TOOL_PARAMS_INVALID`, message `storage_gc_once soft_cap_rows must be between 1 and 1000000`; separate inspect showed `CF_EVENTS=75`, `CF_ACTION_LOG=1`, `CF_KV=2`, `CF_MODEL_CACHE=0` unchanged from before.
+  - Oscillation below hard cap: wrote 25 rows with prefix `issue619-950-y`, separate inspect read `CF_EVENTS=100` and tail `issue619-950-y:22..24`; real GC `soft=75 hard=120` returned `before_rows=100`, `after_rows=75`, `evicted=25`, no hard-cap code; separate inspect read `CF_EVENTS=75` and retained `issue619-950-y:22..24`.
+  - Daemon log readback contains `MCP_TOOL_INVOCATION` lines for each storage trigger, `STORAGE_CF_HARD_CAP_REACHED` for the 320-row and 10075-row cases, `STORAGE_CACHE_EVICTIONS_TOTAL_INCREMENTED` for evictions of 245/10000/25, and the intentional invalid-param `TOOL_PARAMS_INVALID`; no other `ERROR`, panic, corruption, or failed lines were present.
+  - Cleanup readback: real Inspector `release_all` returned `released_keys=0`, `released_buttons=0`, `neutralized_pads=0`; stopped daemon PID `69600`; port `127.0.0.1:7847` no longer listens.
+- Final supporting checks passed after FSV: `cargo fmt --check`; `git diff --check` (line-ending warnings only); `cargo check -p synapse-storage -j 2`; `cargo check -p synapse-reflex -j 2`; `cargo check -p synapse-mcp -j 2`; `cargo test -p synapse-storage gc_soft_cap_hard_cap_edges_and_metrics -- --nocapture`; `cargo test -p synapse-storage gc_soft_cap_edges_and_restart --test gc_soft_cap -- --nocapture`; `cargo test -p synapse-mcp --test m3_storage_tool -- --nocapture`; `cargo test -p synapse-mcp --bin synapse-mcp schema_sanitize -- --nocapture`; `cargo build --release -p synapse-mcp -j 2`.
+- Final release binary readback: `target\release\synapse-mcp.exe`, length `46320128`, SHA256 `AF801288800BB64E3DA92B95573F2E9787FE7899AA497E264E7023242D03AB60`, `LastWriteTimeUtc=2026-06-01T16:52:28Z`.
+- Next: post #619 RESOLVED evidence, close #619, refresh live queue, and take the next open child.
+
 ## 2026-06-01T11:29:00-05:00
 - #618 `scenario(stress): storage pressure ladder - 5 levels + write-gating` is closed.
   - Commit: `c0b24e3 fix(mcp): expose storage pressure gating (#618) [skip ci]`.

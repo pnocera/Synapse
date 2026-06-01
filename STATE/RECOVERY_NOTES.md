@@ -1,5 +1,34 @@
 # RECOVERY NOTES - Synapse
 
+## Current Resume Point - 2026-06-01T11:54:30-05:00
+- #619 is closed.
+  - RESOLVED evidence: https://github.com/ChrisRoyse/Synapse/issues/619#issuecomment-4594692386
+  - Closure readback: state `CLOSED`, closed at `2026-06-01T16:53:51Z`.
+  - No product-code patch was required; final supporting checks/release build passed.
+  - Final release binary SHA256: `AF801288800BB64E3DA92B95573F2E9787FE7899AA497E264E7023242D03AB60`.
+- Active issue is #620 `scenario(stress): activate all 30 profiles — keymap/HUD/capture/mode apply`.
+  - START comment: https://github.com/ChrisRoyse/Synapse/issues/620#issuecomment-4594697356
+  - Claimed with `status:in-progress` and `agent:codex`.
+  - Current next action: inspect profile runtime/registry code and bundled profile definitions, then launch a repo-built isolated daemon for #620 manual MCP FSV.
+
+## Current Resume Point - 2026-06-01T11:45:17-05:00
+- Active issue #619 has manual MCP FSV behavior evidence captured and the isolated daemon has been cleaned up.
+- Run directory: `.runs\619\gc-concurrent-fsv-20260601T1135`.
+  - Repo-built daemon was PID `69600`, bind `127.0.0.1:7847`, isolated DB `.runs\619\gc-concurrent-fsv-20260601T1135\db`, strict Inspector tools-list count 80.
+  - Covered behavior:
+    - concurrent four-writer fan-in to `CF_EVENTS` (0 -> 320) followed by GC to soft cap 75 while retaining newest tail rows;
+    - in-flight/heavy writer of 10000 rows x 2048 bytes followed by GC to 75 while retaining newest `issue619-900-z:9997..9999`;
+    - audit-retention max-age report `audit_retention/v1/report/issue619-age`;
+    - audit-retention dedupe/run_id report `audit_retention/v1/report/issue619-dedupe`;
+    - soft-cap boundary no-op at 75 rows;
+    - empty `CF_MODEL_CACHE` GC no-op;
+    - invalid `soft_cap_rows=0` failed closed with `TOOL_PARAMS_INVALID` and unchanged storage;
+    - 75 -> 100 -> 75 oscillation below hard cap with newest `issue619-950-y:22..24` retained.
+  - Cleanup completed: real `release_all` returned zero held state; PID `69600` stopped; port `7847` closed.
+- Final supporting checks passed: fmt, diff check, `cargo check` for storage/reflex/MCP, focused storage GC tests, MCP storage tool test, schema sanitize test, and release build.
+- Final release binary readback: length `46320128`, SHA256 `AF801288800BB64E3DA92B95573F2E9787FE7899AA497E264E7023242D03AB60`, timestamp `2026-06-01T16:52:28Z`.
+- Current next action: post #619 RESOLVED evidence, close #619, refresh the open queue, and take the next open child.
+
 ## Current Resume Point - 2026-06-01T11:29:00-05:00
 - #618 is closed.
   - Commit: `c0b24e3 fix(mcp): expose storage pressure gating (#618) [skip ci]`.

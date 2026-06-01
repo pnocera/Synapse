@@ -329,3 +329,29 @@ Evidence:
 
 Outcome:
 - Next action is code/test inspection for `storage_gc_once`, probe rows, audit retention, and row cap behavior before launching a repo-built isolated daemon for manual MCP FSV.
+
+# 2026-06-01T11:45:17-05:00 - #619 storage GC needs no code patch so far
+
+Decision: Treat #619 as a runtime-proof issue unless final checks expose a code defect.
+
+Evidence:
+- Code inspection found existing row-cap GC, probe-row writes, and audit-retention report persistence paths for the required behavior.
+- Manual MCP FSV against repo-built daemon PID `69600` on `127.0.0.1:7847` proved concurrent writes, heavy in-flight write + GC, max-age retention, dedupe/run_id report persistence, at-soft boundary, empty CF, invalid params, and below-hard-cap oscillation with separate `storage_inspect` readbacks.
+- The daemon log contains expected `MCP_TOOL_INVOCATION`, `STORAGE_CF_HARD_CAP_REACHED`, `STORAGE_CACHE_EVICTIONS_TOTAL_INCREMENTED`, and intentional invalid-param lines, with no unexpected error/panic/corruption lines.
+
+Outcome:
+- No product-code change is currently needed for #619.
+- Next action is final supporting checks/release build, then #619 RESOLVED comment and closure if checks stay green.
+
+# 2026-06-01T11:54:30-05:00 - #620 follows #619 in the profile campaign
+
+Decision: Take #620 next after closing #619 because it is the next open H-profile child under #594.
+
+Evidence:
+- `gh issue view 619` read back `state=CLOSED`, `closedAt=2026-06-01T16:53:51Z`.
+- Live queue after #619 closure lists #594 plus #595-#604 and #620-#634 open.
+- #620 is open and requires profile activation/keymap/HUD/capture/mode evidence.
+- Posted #620 START comment at https://github.com/ChrisRoyse/Synapse/issues/620#issuecomment-4594697356 and labeled it `status:in-progress`, `agent:codex`.
+
+Outcome:
+- Next action is code/profile-definition inspection before launching a repo-built isolated daemon for manual MCP FSV.
