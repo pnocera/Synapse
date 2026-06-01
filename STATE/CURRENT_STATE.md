@@ -1,5 +1,56 @@
 # CURRENT STATE - Synapse
 
+## 2026-06-01T16:56:00-05:00
+- User's `Issue615FanoutTarget` window/button concern was rechecked after compaction:
+  - OS process/window readback found no live `Issue615` or fanout process/window.
+  - Wired Synapse MCP `find` returned no `Issue615FanoutTarget`, `Show80`, `Rename8`, `Mixed8`, `Clear`, or `Exit` elements.
+  - Foreground is VS Code; no fixture is visible.
+  - `.runs\615\target\issue615_target.ps1` shows the buttons are temporary #615 WinForms UIA stress-fixture handlers: `Clear` clears `ItemPanel`, `Show4/7/8/80` populate item buttons, `Rename8` renames existing buttons only, `Mixed8` renames/adds buttons, and `Exit` closes the fixture.
+- Active issue #625 has all reversible/safe manual MCP evidence completed; product code did not require a patch.
+  - Wired `synapse-mcp` runtime is live through the configured MCP client:
+    - `mcp__synapse.health` read `ok=true`, active profile `vscode`, storage path `C:\Users\hotra\AppData\Local\synapse\db`, operator hotkey registered, 29 profiles, and active storage.
+    - Process SoT readback found `synapse-mcp.exe` PID `66040` at `C:\Users\hotra\.cargo\bin\synapse-mcp.exe` plus stdio child PID `70072`; the wired client loaded and successfully called the #625 tools.
+    - `observe`, `storage_inspect`, `reflex_list`, and `find` all returned through the real wired MCP client after compaction.
+  - Physical EQ log SoT stayed unchanged throughout #625:
+    - `C:\Users\Public\Daybreak Game Company\Installed Games\EverQuest\Logs\eqlog_Thenumberone_frostreaver.txt`
+    - length `2464677`, SHA256 `E563074084A7F5A291AC6FBF77746B993AB086F747C6C111C39503B6BF475368`, `LastWriteTimeUtc=2026-05-30T23:26:54Z`.
+  - Safe readiness/autocombat gate evidence:
+    - `everquest_survival_readiness` persisted `everquest/survival_readiness/v1/everquest.live/latest` with blockers `foreground_not_everquest`, `gameplay_ui_not_proven`, `chat_input_not_safe`, `hud_hp_mana_unavailable`, and `food_drink_absent`.
+    - `everquest_current_state` persisted `everquest/current_state/v1/everquest.live`; foreground was VS Code and zone was last-known `nektulos` from the EQ log.
+    - `everquest_autocombat issue625-autocombat-deny-vscode` failed closed with `ACTION_TARGET_INVALID active_profile_mismatch`; separate `CF_ACTION_LOG` readback advanced `180 -> 181` and the latest action row records `status=denied`, `tool=everquest_autocombat`, `run_id=issue625-autocombat-deny-vscode`.
+  - Synthetic storage/model chain evidence:
+    - `everquest_domain_normalize issue625-synth-combat-spell` persisted DynamicJEPA domain/state/action/outcome/transition rows.
+    - `everquest_trajectory_record issue625-synth-trajectory` persisted `everquest/trajectory/v1/everquest.live/issue625-synth-trajectory` and exported JSONL SHA256 `FD359802391CF76E9126EEDAEF49CFF29B18CA3669F90AC641CF3A48382A591B`.
+    - `everquest_predictive_model_fit issue625-model` persisted model row `everquest/predictive_model/v1/everquest.live/issue625-model`, status `trained`, model hash `286c033af9422dc870e43302c96cf5380c60122fcf7b29122bbcd29ea9b0427c`.
+    - `everquest_predictive_model_predict issue625-predict-combat-spell` persisted prediction row `everquest/prediction/v1/everquest.live/issue625-predict-combat-spell`, decision `predict`, selected `combat_spell`, confidence `1.0`, outcome `combat_death`.
+  - Surprise evidence:
+    - Structurally invalid source ref field `note` failed closed with `TOOL_PARAMS_INVALID`, leaving `CF_KV=41` and no row.
+    - Confirmed expected outcome row `everquest/surprise/v1/everquest.live/issue625-surprise-confirmed`: decision `expected_outcome_confirmed`, `surprise_detected=false`, payload SHA256 `4649b69c5f3e64087b0406d6858dd21ddf410cc1b22cd4196f81e22ad84c768b`.
+    - Mismatch row `everquest/surprise/v1/everquest.live/issue625-surprise-mismatch`: decision `surprise_detected`, mismatch reasons `zone_short_name_mismatch` and `outcome_kind_mismatch`, payload SHA256 `5d10ba461900ef53689def48d69e5b22d148a722232b5192f14481218a948235`.
+    - Missing-prediction row `everquest/surprise/v1/everquest.live/issue625-surprise-missing-prediction`: decision `abstain_missing_prediction`, reason `prediction_missing`, payload SHA256 `e6f09372e381bbb08c44b491efd7dacb40892e60a644d343413182b69c9205d8`.
+  - Action-prior and scorecard evidence:
+    - `issue625-actionprior-correct` row class `correct_top1`, top1/top3/zone/coord/hazard correctness true, confidence bucket `0.80-1.00`.
+    - `issue625-actionprior-low-confidence` row class `correct_top1`, confidence bucket `0.40-0.60`.
+    - `issue625-actionprior-abstain` row class `abstained`, `abstained=true`, confidence bucket `0.20-0.40`.
+    - `everquest_action_prior_scorecard issue625-scorecard-window` advanced `CF_KV 47 -> 48` and persisted `everquest/action_prior_scorecard/v1/everquest.live/issue625-scorecard-window`.
+    - Scorecard metrics readback: `sample_count=3`, `evaluated_count=2`, `abstention_count=1`, `low_confidence_action_count=1`, top1/top3/useful accuracy `1.0`, competence status `low_confidence_action_forced`, `meets_minimum_floor=false`.
+    - Duplicate sample IDs edge for `issue625-scorecard-duplicate-invalid` failed closed with `TOOL_PARAMS_INVALID`; separate storage readback stayed `CF_KV=48` and no invalid row bytes were found.
+  - Final supporting checks passed:
+    - `cargo fmt --check`
+    - `cargo test -p synapse-mcp scorecard --bin synapse-mcp -- --nocapture` (4 passed)
+    - `cargo test -p synapse-mcp predictive_model --bin synapse-mcp -- --nocapture` (6 passed)
+    - `cargo test -p synapse-mcp surprise --bin synapse-mcp -- --nocapture` (4 passed)
+    - `cargo test -p synapse-mcp --bin synapse-mcp schema_sanitize -- --nocapture` (3 passed)
+    - `cargo test -p synapse-mcp --test m4_tools_list -- --nocapture` (1 passed)
+    - `cargo check -p synapse-mcp -j 2`
+    - `cargo build --release -p synapse-mcp -j 2`
+    - `git diff --check`
+  - Release binary readback: `target\release\synapse-mcp.exe`, length `46392320`, SHA256 `4AF3EB0E332F6A7AFD5DBBFAD1169EB051371040D5C24CF033662AC3615F78AD`, `LastWriteTimeUtc=2026-06-01T21:55:14Z`.
+- #625 should now be marked `status:blocked`, not resolved:
+  - Completed all reversible safe work and storage/model evidence.
+  - Remaining required live sustained autocombat soak, HUD HP/mana readback, live combat/xp log deltas, death/respawn, out-of-mana, con-classifier, and readiness-blocker-mid-loop cases require the operator to personally review/respond to the Daybreak EULA/account agreement, log in/select character if appropriate, and put `Thenumberone` in a visible in-world state with safe target availability.
+  - The agent must not click legal/account/login/character-select/chat controls.
+
 ## 2026-06-01T16:31:30-05:00
 - #624 is open with `status:blocked` on a specific operator-only action.
   - BLOCKED evidence comment: https://github.com/ChrisRoyse/Synapse/issues/624#issuecomment-4596661903

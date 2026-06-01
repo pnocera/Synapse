@@ -552,3 +552,22 @@ Evidence:
 
 Outcome:
 - Inspect #625 implementations and complete all safe/reversible evidence before deciding whether live autocombat is blocked by the same operator-only EULA/account action.
+
+# 2026-06-01T16:56:00-05:00 - #625 reversible evidence complete; live soak is operator-gated
+
+Decision: Mark #625 blocked after completing all reversible safe readiness/model/surprise/action-prior evidence, because the remaining sustained live EverQuest autocombat soak depends on an operator-only Daybreak EULA/account/login/in-world action.
+
+Evidence:
+- Wired Synapse MCP remained usable after compaction: `health ok=true`, active profile `vscode`, storage initialized, process readback found `synapse-mcp.exe` PID `66040` plus stdio child PID `70072`, and the real tools were called through the configured MCP client.
+- `everquest_survival_readiness` persisted blockers for non-EverQuest foreground, gameplay UI not proven, unsafe chat input, missing HUD HP/mana, and missing food/drink.
+- `everquest_autocombat issue625-autocombat-deny-vscode` failed closed with `ACTION_TARGET_INVALID active_profile_mismatch`; `CF_ACTION_LOG` advanced and recorded the denial; the EQ log stayed unchanged.
+- Synthetic DynamicJEPA/trajectory/model chain persisted rows through `everquest_domain_normalize`, `everquest_trajectory_record`, `everquest_predictive_model_fit`, and `everquest_predictive_model_predict`; model hash `286c033af9422dc870e43302c96cf5380c60122fcf7b29122bbcd29ea9b0427c`.
+- Surprise rows covered confirmed outcome, mismatch, missing prediction, and structurally invalid source-ref failure; exact rows and payload hashes were read back from `CF_KV`.
+- Action-prior rows covered correct, low-confidence, and abstain samples; scorecard row `everquest/action_prior_scorecard/v1/everquest.live/issue625-scorecard-window` advanced `CF_KV 47 -> 48` and read back `low_confidence_action_forced`.
+- Duplicate scorecard sample IDs failed closed with `TOOL_PARAMS_INVALID`; `CF_KV` stayed `48` and no invalid row was found.
+- Physical EQ log stayed length `2464677`, SHA256 `E563074084A7F5A291AC6FBF77746B993AB086F747C6C111C39503B6BF475368`.
+- Supporting checks passed: fmt, scorecard/predictive/surprise tests, schema sanitize, M4 tools-list, MCP check, release build, and diff check. Release binary SHA256 `4AF3EB0E332F6A7AFD5DBBFAD1169EB051371040D5C24CF033662AC3615F78AD`.
+
+Outcome:
+- Posted #625 BLOCKED evidence at https://github.com/ChrisRoyse/Synapse/issues/625#issuecomment-4596839011 and label readback shows `status:blocked`.
+- Remaining action is for the operator to personally handle the Daybreak EULA/account/login/character in-world state; the agent must not click legal/account/login/character-select/chat controls.

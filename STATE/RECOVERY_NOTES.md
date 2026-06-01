@@ -1,5 +1,28 @@
 # RECOVERY NOTES - Synapse
 
+## Current Resume Point - 2026-06-01T16:56:00-05:00
+- #625 reversible evidence is complete and GitHub disposition is posted.
+- User's `Issue615FanoutTarget` question:
+  - No live #615 fixture process/window or wired MCP element is present now.
+  - The fixture buttons in `.runs\615\target\issue615_target.ps1` only mutate an in-window `ItemPanel` or close that temporary WinForms target; they are not product UI.
+- #625 evidence summary:
+  - Wired Synapse MCP health/profile/storage/observe/tool calls were live after compaction; process readback found `synapse-mcp.exe` PID `66040` plus stdio child PID `70072`.
+  - EQ log stayed unchanged at length `2464677`, SHA256 `E563074084A7F5A291AC6FBF77746B993AB086F747C6C111C39503B6BF475368`.
+  - Readiness persisted blockers for non-EQ foreground/gameplay UI/chat/HUD/food-drink.
+  - Autocombat failed closed before gameplay because active profile was `vscode`; `CF_ACTION_LOG` advanced and recorded `ACTION_TARGET_INVALID active_profile_mismatch` for `issue625-autocombat-deny-vscode`.
+  - DynamicJEPA, trajectory export, predictive model fit/predict, surprise confirmed/mismatch/missing-prediction, action-prior samples, and scorecard rows were all triggered through real MCP tools and read back from `CF_KV`/file bytes.
+  - Scorecard row `everquest/action_prior_scorecard/v1/everquest.live/issue625-scorecard-window` persisted with `sample_count=3`, `evaluated_count=2`, `abstention_count=1`, `low_confidence_action_count=1`, top1/top3/useful accuracy `1.0`, and competence status `low_confidence_action_forced`.
+  - Invalid duplicate-scorecard edge failed closed with `TOOL_PARAMS_INVALID` and no `issue625-scorecard-duplicate-invalid` row; `CF_KV` stayed `48`.
+  - Supporting checks passed: fmt, focused scorecard/predictive/surprise tests, schema sanitize, M4 tools-list, MCP check, release build, and diff check.
+  - Release binary SHA256: `4AF3EB0E332F6A7AFD5DBBFAD1169EB051371040D5C24CF033662AC3615F78AD`.
+- #625 disposition:
+  - BLOCKED evidence comment: https://github.com/ChrisRoyse/Synapse/issues/625#issuecomment-4596839011
+  - Label readback shows `status:blocked`; `status:in-progress` was removed.
+  - Next: commit state updates with `[skip ci]`, push, refresh queue, and continue to the next open issue because #625 is blocked only on an operator-only external/legal/account action.
+- Exact remaining operator-only action for #625:
+  - Operator must personally review/respond to the Daybreak EULA/account agreement, log in/select character if appropriate, and put `Thenumberone` in visible in-world state with safe target availability.
+  - Agent must not click legal/account/login/character-select/chat controls.
+
 ## Current Resume Point - 2026-06-01T16:31:30-05:00
 - #624 has been committed and pushed:
   - commit `9de5ee3 fix(mcp): guard EverQuest account gates (#624) [skip ci]`
