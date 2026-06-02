@@ -113,7 +113,10 @@ expect_used = "deny"
 [profile.dev]
 opt-level = 0
 debug = "line-tables-only"
-incremental = true
+# incremental disabled 2026-06-02: target/debug/incremental ballooned to 124 GB
+# (never GC'd by cargo). Matches the global ~/.cargo/config.toml incremental=false
+# on Windows and WSL. Correctness-neutral; only marginally slower edit-rebuilds.
+incremental = false
 lto = false
 
 [profile.release]
