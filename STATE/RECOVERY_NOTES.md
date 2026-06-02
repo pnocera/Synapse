@@ -1,5 +1,20 @@
 # RECOVERY NOTES - Synapse
 
+## Current Resume Point - 2026-06-02T07:20:00-05:00
+- #599 is closed with commit `9252e93` and RESOLVED evidence at https://github.com/ChrisRoyse/Synapse/issues/599#issuecomment-4602291835.
+- Worktree was clean after pushing #599: `## main...origin/main`.
+- Active issue is #600 `scenario(stress): SendInput rate-limit + action-queue overflow`.
+  - START comment: https://github.com/ChrisRoyse/Synapse/issues/600#issuecomment-4602297629.
+  - Labels/assignee updated with `status:in-progress`, `agent:codex`, and `ChrisRoyse`.
+- #600 acceptance target:
+  - real MCP `tools/call` triggers for `act_press`/`act_click` flood, `release_all`, and any relevant pad path;
+  - separate SoT reads for `CF_ACTION_LOG`, Notepad text, OS key/button state, process/socket/log bytes, and cleanup state;
+  - happy/boundary/edge coverage for exactly-at-capacity burst, over-limit `ACTION_RATE_LIMITED`, recovery after refill, queue overflow `ACTION_QUEUE_FULL`, release safety exemption, ViGEm bucket if available, and empty/invalid params.
+- Exact next actions:
+  1. Inspect software action backend, token bucket, queue, and audit logging implementation.
+  2. Decide whether code needs a patch before runtime FSV.
+  3. Build/launch isolated repo-built daemon and run manual MCP/SoT FSV.
+
 ## Current Resume Point - 2026-06-02T06:58:40-05:00
 - Active issue #599 has implementation, manual MCP/SoT FSV, final supporting checks, and diff review complete; commit, push, RESOLVED comment, closeout, and queue refresh remain.
 - Accepted run: `.runs\599\audio-fsv-20260602T0647-accepted`.

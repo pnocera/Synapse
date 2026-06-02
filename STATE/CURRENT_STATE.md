@@ -1,5 +1,28 @@
 # CURRENT STATE - Synapse
 
+## 2026-06-02T07:20:00-05:00
+- #599 is closed:
+  - commit `9252e93 fix(mcp): harden audio tail stress path (#599) [skip ci]`;
+  - RESOLVED evidence https://github.com/ChrisRoyse/Synapse/issues/599#issuecomment-4602291835;
+  - closure readback `state=CLOSED`, `closedAt=2026-06-02T12:17:50Z`;
+  - stale `status:in-progress` label removed.
+- Git state after #599 close:
+  - branch `main`;
+  - `git status --short --branch` read `## main...origin/main`.
+- Live queue after #599:
+  - #594 parent remains open;
+  - #624/#625 remain `status:blocked` on the Daybreak/operator boundary;
+  - unblocked children currently open include #600-#604 and #629-#634.
+- Active issue is #600 `scenario(stress): SendInput rate-limit + action-queue overflow`.
+  - START comment: https://github.com/ChrisRoyse/Synapse/issues/600#issuecomment-4602297629.
+  - Issue goal: prove the software backend token bucket (`5000/s`) and `256`-deep action queue fail closed under flood; prove release safety is not starved.
+  - Planned SoTs: repo-built daemon process/socket/auth/health/strict Inspector tools-list; `CF_ACTION_LOG` via `storage_inspect`; OS key/button state; Notepad text for actual dispatched keystrokes; logs/process state; cleanup release state.
+  - Required edges from issue: exact burst at capacity, sustained just-under-limit, ViGEm 1000/s bucket if host exposes pad backend, interleaved `release_all` during flood, empty/structurally invalid params.
+- Current next:
+  1. Inspect `synapse-action` software backend rate limiter, queue, release exemption, and action audit logging.
+  2. Patch only if code/FSV exposes real gaps.
+  3. Build and launch a repo-built isolated daemon for #600 manual MCP/SoT FSV.
+
 ## 2026-06-02T06:58:40-05:00
 - Active issue remains #599 `scenario(stress): audio stress — loopback music+speech, VAD/azimuth, Whisper transcribe`.
 - Implementation patch has manual MCP/SoT FSV accepted; final supporting checks and diff review are complete; commit/closeout are next.

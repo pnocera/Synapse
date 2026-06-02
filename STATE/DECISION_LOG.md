@@ -1026,3 +1026,17 @@ Evidence:
 
 Outcome:
 - Proceed to final supporting checks, diff review, commit, RESOLVED comment, close #599, then continue the live queue.
+
+# 2026-06-02T07:20:00-05:00 - #600 starts after #599 closure
+
+Decision: Claim #600 as the next unblocked #594 child after closing #599.
+
+Evidence:
+- #599 readback showed `state=CLOSED`, `closedAt=2026-06-02T12:17:50Z`, and no `status:in-progress` label.
+- `git status --short --branch` read `## main...origin/main`.
+- Live open queue shows #600 as the next unblocked child before #601-#604 and #629-#634; #624/#625 remain blocked.
+- #600 body requires real MCP action flood FSV for `ACTION_RATE_LIMITED`, `ACTION_QUEUE_FULL`, release safety exemption, and physical/action-log readbacks.
+
+Outcome:
+- Posted #600 START comment and labeled/assigned the issue.
+- Inspect action limiter/queue code next.
