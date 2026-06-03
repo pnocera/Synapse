@@ -1,5 +1,15 @@
 # RECOVERY NOTES - Synapse
 
+## Current Resume Point - 2026-06-03T03:35:00-05:00 — 4h soak + prod gates done, all green
+- chrisroyse/synapse open-issue count = **0** (unchanged; #633 got a 4 h endurance follow-up comment).
+- **4 h endurance soak PASSED**: isolated release daemon, full 4 h continuous mixed load (generator `STIMULUS END iters=6689`, daemon uptime ~14579 s). Bounded: handles 627→633 flat, threads 71 flat, recursion_clamps 0, RSS 426–557 MB, private 864→995 MB (~0.5 MB/min commit creep, RSS bounded), GC kept CFs bounded, pressure Normal, no crash/degradation.
+- **Production-readiness gates ALL GREEN**: `cargo fmt --all --check` clean; `cargo clippy --workspace --all-targets` **0 errors**; `cargo test --workspace` all pass; `cargo build --release --workspace` clean (exit 0, run with soak daemon stopped).
+- **Pre-existing defects fixed during gating** (commits bb6d020→8eb45c1, all pushed):
+  - flaky `compaction_ttl_edges_per_cf` — serialized the process-global test compaction clock (test-only lock) so parallel cargo-test threads don't race.
+  - stale `m3_default_resolution` — audio seconds.default is f64 5.0 (fractional-seconds), fixed assert + insta snapshot.
+  - workspace clippy::all/unwrap_used/expect_used=deny had never been run clean: fixed real prod lints (let-chains, useless_format, is_multiple_of, field_reassign_with_default, print_literal), justified `#[allow(too_many_arguments)]` on multi-arg UIA/scheduler fns, and added `clippy.toml` (allow-unwrap/expect-in-tests; prod stays strict).
+- `/mcp` cargo-bin binary refreshed to the post-fix release build (sha E7F13EF8…); all lingering idle daemons cleared (0 remaining).
+
 ## Current Resume Point - 2026-06-02T21:55:00-05:00 — ALL ISSUES CLOSED
 - chrisroyse/synapse open-issue count = **0**. Goal complete.
 - This session closed: #631 (J6), #632 (J7), #634 (K2), #633 (K1), and the umbrella #594 (all in-scope children done; EverQuest group I + J5 stay descoped/not-planned).
