@@ -1,6 +1,7 @@
 use synapse_core::{PathPoint, PathSpec};
 
 const EPSILON: f64 = 1.0e-9;
+pub const DEFAULT_ARCLEN_LUT_SEGMENTS: usize = 2048;
 
 #[derive(Clone, Debug, PartialEq, thiserror::Error)]
 pub enum PathError {
@@ -36,6 +37,12 @@ pub enum PathError {
     InvalidCatmullRomTension { tension: f64 },
     #[error("sample count must be at least 2, got {samples}")]
     InvalidSampleCount { samples: usize },
+    #[error("arc-length LUT segment count must be at least 1, got {segments}")]
+    InvalidArcLengthSegments { segments: usize },
+    #[error("path length is zero")]
+    ZeroLengthPath,
+    #[error("arc length s must be finite and within [0,{length}], got {s}")]
+    InvalidArcLength { s: f64, length: f64 },
 }
 
 pub type PathResult<T> = Result<T, PathError>;
@@ -43,6 +50,20 @@ pub type PathResult<T> = Result<T, PathError>;
 #[derive(Debug)]
 pub struct SpatialPath<'a> {
     spec: &'a PathSpec,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct ArcLengthEntry {
+    t: f64,
+    length: f64,
+    point: PathPoint,
+}
+
+#[derive(Debug)]
+pub struct ArcLengthPath<'a> {
+    path: SpatialPath<'a>,
+    lut: Vec<ArcLengthEntry>,
+    length: f64,
 }
 
 impl<'a> SpatialPath<'a> {
@@ -94,12 +115,106 @@ impl<'a> SpatialPath<'a> {
     }
 }
 
+impl<'a> ArcLengthPath<'a> {
+    pub fn new(spec: &'a PathSpec) -> PathResult<Self> {
+        Self::with_lut_segments(spec, DEFAULT_ARCLEN_LUT_SEGMENTS)
+    }
+
+    pub fn with_lut_segments(spec: &'a PathSpec, segments: usize) -> PathResult<Self> {
+        if segments == 0 {
+            return Err(PathError::InvalidArcLengthSegments { segments });
+        }
+
+        let path = SpatialPath::new(spec)?;
+        let capacity = segments
+            .checked_add(1)
+            .ok_or(PathError::InvalidArcLengthSegments { segments })?;
+        let mut lut = Vec::with_capacity(capacity);
+        let mut previous = path.point_at(0.0)?;
+        let mut length = 0.0;
+        lut.push(ArcLengthEntry {
+            t: 0.0,
+            length,
+            point: previous,
+        });
+
+        for index in 1..=segments {
+            let t = index as f64 / segments as f64;
+            let point = path.point_at(t)?;
+            length += previous.distance_to(point);
+            lut.push(ArcLengthEntry { t, length, point });
+            previous = point;
+        }
+
+        if length <= EPSILON {
+            return Err(PathError::ZeroLengthPath);
+        }
+
+        Ok(Self { path, lut, length })
+    }
+
+    #[must_use]
+    pub const fn length(&self) -> f64 {
+        self.length
+    }
+
+    pub fn point_at_arclen(&self, s: f64) -> PathResult<PathPoint> {
+        validate_arc_length(s, self.length)?;
+        if close_to(s, 0.0) {
+            return Ok(self.lut[0].point);
+        }
+        if close_to(s, self.length) {
+            return Ok(self.lut[self.lut.len() - 1].point);
+        }
+
+        let right_index = self
+            .lut
+            .partition_point(|entry| entry.length < s)
+            .min(self.lut.len() - 1);
+        let left_index = right_index.saturating_sub(1);
+        let left = self.lut[left_index];
+        let right = self.lut[right_index];
+        let span = right.length - left.length;
+        let t = if span <= EPSILON {
+            right.t
+        } else {
+            (right.t - left.t).mul_add((s - left.length) / span, left.t)
+        };
+        self.path.point_at(t)
+    }
+
+    pub fn sample_arclen(&self, samples: usize) -> PathResult<Vec<PathPoint>> {
+        if samples < 2 {
+            return Err(PathError::InvalidSampleCount { samples });
+        }
+
+        let last = samples - 1;
+        let mut points = Vec::with_capacity(samples);
+        for index in 0..samples {
+            points.push(self.point_at_arclen(self.length * index as f64 / last as f64)?);
+        }
+        Ok(points)
+    }
+}
+
 pub fn path_point_at(spec: &PathSpec, t: f64) -> PathResult<PathPoint> {
     SpatialPath::new(spec)?.point_at(t)
 }
 
 pub fn sample_path(spec: &PathSpec, samples: usize) -> PathResult<Vec<PathPoint>> {
     SpatialPath::new(spec)?.sample(samples)
+}
+
+pub fn path_length(spec: &PathSpec) -> PathResult<f64> {
+    Ok(ArcLengthPath::new(spec)?.length())
+}
+
+pub fn path_point_at_arclen(spec: &PathSpec, s: f64) -> PathResult<PathPoint> {
+    ArcLengthPath::new(spec)?.point_at_arclen(s)
+}
+
+pub fn sample_path_arclen(spec: &PathSpec, samples: usize) -> PathResult<Vec<PathPoint>> {
+    ArcLengthPath::new(spec)?.sample_arclen(samples)
 }
 
 fn validate_spec(spec: &PathSpec) -> PathResult<()> {
@@ -242,6 +357,13 @@ fn ensure_segment(
 fn validate_t(t: f64) -> PathResult<()> {
     if !t.is_finite() || !(0.0..=1.0).contains(&t) {
         return Err(PathError::InvalidT { t });
+    }
+    Ok(())
+}
+
+fn validate_arc_length(s: f64, length: f64) -> PathResult<()> {
+    if !s.is_finite() || s < 0.0 || s > length {
+        return Err(PathError::InvalidArcLength { s, length });
     }
     Ok(())
 }

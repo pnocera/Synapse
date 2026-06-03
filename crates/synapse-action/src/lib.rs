@@ -49,7 +49,10 @@ pub use hotkey::{
 pub use invoke::{
     CoordinateFallbackPlan, ElementClickOutcome, click_element_or_fallback, invoke_element,
 };
-pub use path::{PathError, PathResult, SpatialPath, path_point_at, sample_path};
+pub use path::{
+    ArcLengthPath, DEFAULT_ARCLEN_LUT_SEGMENTS, PathError, PathResult, SpatialPath, path_length,
+    path_point_at, path_point_at_arclen, sample_path, sample_path_arclen,
+};
 pub use rate_limit::{
     SOFTWARE_RATE_LIMIT_PER_S, TokenBucket, TokenBucketSnapshot, VIGEM_RATE_LIMIT_PER_S,
 };
