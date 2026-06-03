@@ -347,13 +347,14 @@ fn send_absolute_mouse_move(point: Point, detail: &'static str) -> Result<(), Ac
     // succeeds, do not also send an absolute mouse-move packet: on mixed-DPI
     // desktops Windows can map MOUSEEVENTF_ABSOLUTE through a logical desktop
     // surface and move the cursor away from the physical UIA point.
+    let compensation = dpi_compensation_for_point(point);
     if set_physical_cursor_pos(point, detail) {
         let first_actual = read_physical_cursor_position(detail)?;
         if cursor_readback_matches(point, first_actual) {
             return Ok(());
         }
 
-        if let Some(compensation) = dpi_compensation_for_point(point) {
+        if let Some(compensation) = compensation {
             tracing::warn!(
                 code = "M2_CURSOR_READBACK_DPI_COMPENSATION",
                 requested_x = point.x,
@@ -372,24 +373,35 @@ fn send_absolute_mouse_move(point: Point, detail: &'static str) -> Result<(), Ac
                 if cursor_readback_matches(point, compensated_actual) {
                     return Ok(());
                 }
-                return Err(cursor_readback_mismatch_error(
+                tracing::warn!(
+                    code = "M2_CURSOR_READBACK_DPI_COMPENSATION_MISMATCH",
+                    requested_x = point.x,
+                    requested_y = point.y,
+                    first_actual_x = first_actual.x,
+                    first_actual_y = first_actual.y,
+                    adjusted_x = compensation.adjusted.x,
+                    adjusted_y = compensation.adjusted.y,
+                    compensated_actual_x = compensated_actual.x,
+                    compensated_actual_y = compensated_actual.y,
+                    dpi_x = compensation.dpi_x,
+                    dpi_y = compensation.dpi_y,
                     detail,
-                    point,
-                    first_actual,
-                    Some((compensation, compensated_actual)),
-                ));
+                    "physical cursor move DPI compensation still mismatched; trying SendInput fallback"
+                );
             }
         }
 
-        return Err(cursor_readback_mismatch_error(
+        tracing::warn!(
+            code = "M2_CURSOR_READBACK_PHYSICAL_FALLBACK",
+            requested_x = point.x,
+            requested_y = point.y,
+            first_actual_x = first_actual.x,
+            first_actual_y = first_actual.y,
             detail,
-            point,
-            first_actual,
-            None,
-        ));
+            "physical cursor move readback mismatched; trying SendInput fallback"
+        );
     }
 
-    let compensation = dpi_compensation_for_point(point);
     if let Some(compensation) = compensation
         && set_physical_cursor_pos(compensation.adjusted, detail)
     {
