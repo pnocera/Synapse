@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Faithful MCP-over-stdio probe for synapse-mcp.
+"""Manual MCP-over-stdio probe for synapse-mcp.
 
 Launches the given synapse-mcp binary exactly as an MCP client (Claude Code)
 would: as a stdio child speaking newline-delimited JSON-RPC 2.0. Performs the
-initialize handshake, then calls the requested tools and prints raw results so
-we can do Full State Verification of REAL desktop access (not return-value
-trust, not health-only).
+initialize handshake, then calls the requested tools and prints raw results for
+agent-directed runtime inspection.
+
+This helper does not perform or replace manual FSV. The agent must still define
+the Source of Truth, read it before the trigger, perform the tool call, and read
+the separate Source of Truth afterward.
 
 Usage:
-    python3 fsv_stdio_probe.py <path-to-binary> <tool1> [tool2 ...]
+    python3 manual_mcp_stdio_probe.py <path-to-binary> <tool1> [tool2 ...]
 Tool spec: name or name:{json-args}
 """
 import json
@@ -20,7 +23,7 @@ import time
 
 def main():
     if len(sys.argv) < 3:
-        print("usage: fsv_stdio_probe.py <binary> <tool[:jsonargs]> ...", file=sys.stderr)
+        print("usage: manual_mcp_stdio_probe.py <binary> <tool[:jsonargs]> ...", file=sys.stderr)
         sys.exit(2)
     binary = sys.argv[1]
     tool_specs = sys.argv[2:]
@@ -87,7 +90,7 @@ def main():
             "params": {
                 "protocolVersion": "2025-06-18",
                 "capabilities": {},
-                "clientInfo": {"name": "fsv-probe", "version": "0.0.1"},
+                "clientInfo": {"name": "manual-stdio-probe", "version": "0.0.1"},
             },
         })
         init = read_response(1)
