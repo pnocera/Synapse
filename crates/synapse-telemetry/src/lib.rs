@@ -255,7 +255,7 @@ fn payload_safe_filter(base_directives: &str) -> EnvFilter {
         directives.push('=');
         directives.push_str(dependency_level);
     }
-    EnvFilter::try_new(&directives).unwrap_or_else(|_| EnvFilter::new(format!("info,rmcp=info")))
+    EnvFilter::try_new(&directives).unwrap_or_else(|_| EnvFilter::new("info,rmcp=info"))
 }
 
 fn default_level_from_directives(directives: &str) -> LevelFilter {
