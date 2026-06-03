@@ -6,10 +6,10 @@ use proptest::{
 };
 use schemars::schema_for;
 use synapse_core::{
-    AccessibleQuery, AccessibleQueryScope, Backend, DataPredicate, Detection, DetectionBatch,
-    ElementId, EventFilter, EventSource, Health, Observation, PerceptionMode, Point, Rect,
-    SCHEMA_VERSION, Size, SubsystemHealth, element_id, entity_id, new_reflex_id, new_session_id,
-    new_subscription_id,
+    AccessibleQuery, AccessibleQueryScope, Backend, CdpStatus, DataPredicate, Detection,
+    DetectionBatch, ElementId, EventFilter, EventSource, Health, Observation, PerceptionMode,
+    Point, Rect, SCHEMA_VERSION, Size, SubsystemHealth, element_id, entity_id, new_reflex_id,
+    new_session_id, new_subscription_id,
 };
 
 #[path = "types/support.rs"]
@@ -55,6 +55,25 @@ fn perception_mode_json_round_trips() -> Result<(), Box<dyn std::error::Error>> 
     assert!(serde_json::from_str::<PerceptionMode>("\"a11yOnly\"").is_err());
     assert!(serde_json::from_str::<PerceptionMode>("\"pixel\"").is_err());
     assert!(serde_json::from_str::<PerceptionMode>("\"\"").is_err());
+    Ok(())
+}
+
+#[test]
+fn cdp_status_json_uses_diagnostic_error_codes() -> Result<(), Box<dyn std::error::Error>> {
+    let cases = [
+        (CdpStatus::Ok, "\"ok\""),
+        (CdpStatus::NotChromium, "\"not_chromium\""),
+        (CdpStatus::Unreachable, "\"A11Y_CDP_UNREACHABLE\""),
+        (CdpStatus::AttachFailed, "\"A11Y_CDP_ATTACH_FAILED\""),
+    ];
+
+    for (variant, json) in cases {
+        assert_eq!(serde_json::to_string(&variant)?, json);
+        assert_eq!(serde_json::from_str::<CdpStatus>(json)?, variant);
+    }
+
+    assert!(serde_json::from_str::<CdpStatus>("\"unreachable\"").is_err());
+    assert!(serde_json::from_str::<CdpStatus>("\"attach_failed\"").is_err());
     Ok(())
 }
 
@@ -361,10 +380,12 @@ fn health_json_shape_and_schema_are_stable() -> Result<(), Box<dyn std::error::E
         ok: true,
         version: "0.1.0".to_owned(),
         build: "dev".to_owned(),
+        pid: 4321,
         uptime_s: 0,
         subsystems: BTreeMap::new(),
     };
-    let expected = r#"{"ok":true,"version":"0.1.0","build":"dev","uptime_s":0,"subsystems":{}}"#;
+    let expected =
+        r#"{"ok":true,"version":"0.1.0","build":"dev","pid":4321,"uptime_s":0,"subsystems":{}}"#;
     assert_eq!(serde_json::to_string(&health)?, expected);
 
     let value = serde_json::to_value(&health)?;

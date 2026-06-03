@@ -42,6 +42,7 @@ fn health_json_shape() {
         ok: true,
         version: "0.1.0".to_owned(),
         build: "dev".to_owned(),
+        pid: 4321,
         uptime_s: 0,
         subsystems: BTreeMap::new(),
     });
@@ -217,6 +218,8 @@ fn sample_observation() -> Observation {
             audio_status: SensorStatus::Disabled,
             capture_config: None,
             capture_runtime: None,
+            cdp: None,
+            web_path: None,
             elements_truncated: false,
             entities_truncated: false,
             size_bytes: 2048,

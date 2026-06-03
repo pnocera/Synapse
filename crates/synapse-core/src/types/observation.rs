@@ -4,7 +4,10 @@ use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
-use super::{ElementId, EntityId, EventSummary, PerceptionMode, ProfileId, Rect};
+use super::{
+    CdpDiagnostics, ElementId, EntityId, EventSummary, PerceptionMode, ProfileId, Rect,
+    WebPerceptionPath,
+};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
@@ -290,6 +293,18 @@ pub struct ObservationDiagnostics {
     pub capture_config: Option<ObservationCaptureConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture_runtime: Option<CaptureRuntimeReadback>,
+    /// CDP probe/attach outcome for the foreground window. `Some` for every
+    /// Chromium-family foreground (wire status `ok` / `A11Y_CDP_UNREACHABLE` /
+    /// `A11Y_CDP_ATTACH_FAILED` / `not_chromium`), `None` for non-browser
+    /// foregrounds. Surfacing this is the contract #683 restored: no silent UIA
+    /// fallthrough for browsers.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cdp: Option<CdpDiagnostics>,
+    /// Which perception path produced web content for a Chromium-family
+    /// foreground (`cdp` / `ocr` / `uia_only`). `None` for non-browser
+    /// foregrounds. See [`WebPerceptionPath`] and epic #682/#687.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub web_path: Option<WebPerceptionPath>,
     pub elements_truncated: bool,
     pub entities_truncated: bool,
     pub size_bytes: u32,

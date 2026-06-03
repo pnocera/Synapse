@@ -7,6 +7,7 @@ mod profile;
 mod reality;
 mod reflex;
 mod stored;
+mod web_perception;
 
 pub use action::*;
 pub use event::*;
@@ -17,3 +18,4 @@ pub use profile::*;
 pub use reality::*;
 pub use reflex::*;
 pub use stored::*;
+pub use web_perception::*;

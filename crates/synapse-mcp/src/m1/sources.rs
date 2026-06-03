@@ -100,6 +100,8 @@ pub fn synthetic_notepad_input() -> ObservationInput {
         mode_override: None,
         capture_config: None,
         capture_runtime: None,
+        cdp: None,
+        web_path: None,
     }
 }
 
@@ -900,6 +902,7 @@ fn input_from_tree_and_foreground(
     input.focused = focused;
     input.elements = tree.nodes;
     input.a11y_status = SensorStatus::Healthy;
+    populate_cdp_diagnostics(&mut input);
     if mode == PerceptionMode::A11yOnly {
         input.capture_status = SensorStatus::Disabled;
     } else {
@@ -909,6 +912,57 @@ fn input_from_tree_and_foreground(
         input.mode_override = Some(mode);
     }
     Ok(input)
+}
+
+/// CDP reachability probe timeout. Loopback connection-refused returns
+/// immediately, so this only bounds the rare firewalled/dropped-port case.
+#[cfg(windows)]
+const CDP_PROBE_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(250);
+
+/// Surfaces the CDP probe outcome for a Chromium-family foreground into the
+/// observation diagnostics. This is the #683 fix: a browser foreground always
+/// carries `diagnostics.cdp.status` and a named `web_path`, so an agent that
+/// gets a collapsed UIA-only tree knows *why* web content is missing and what
+/// to do (open a debug port). Non-browser foregrounds leave both `None`.
+///
+/// The synchronous probe runs on every observe/find so both tools agree. When
+/// the port is reachable the async observe/find handler later attaches CDP and
+/// upgrades `web_path` to `cdp`; until DOM nodes are actually produced the path
+/// stays `uia_only` to avoid claiming fidelity Synapse did not deliver.
+#[cfg(windows)]
+fn populate_cdp_diagnostics(input: &mut ObservationInput) {
+    use synapse_core::{CdpStatus, WebPerceptionPath};
+
+    let process_name = input.foreground.process_name.clone();
+    if !synapse_a11y::is_chromium_family(&process_name) {
+        return;
+    }
+    let started = Instant::now();
+    let pid = input.foreground.pid;
+    let ports = synapse_a11y::candidate_ports_for_pid(pid);
+    let diagnostics =
+        synapse_a11y::probe_chromium_cdp_blocking(&process_name, &ports, CDP_PROBE_TIMEOUT);
+    input
+        .sensor_latency_ms
+        .insert("cdp".to_owned(), started.elapsed().as_secs_f32() * 1000.0);
+
+    // Until CDP is actually attached and yields nodes, the visible tree is the
+    // collapsed UIA one — report that honestly. The async handler upgrades to
+    // `cdp` after a successful `getFullAXTree`.
+    input.web_path = Some(WebPerceptionPath::UiaOnly);
+
+    if diagnostics.status == CdpStatus::Unreachable {
+        tracing::warn!(
+            code = "A11Y_CDP_UNREACHABLE",
+            process_name = %process_name,
+            pid,
+            probed_ports = ?ports,
+            "Chromium foreground has no reachable CDP debug port; web DOM is not \
+             exposed. Launch the browser via act_launch (opens a debug port) or set \
+             SYNAPSE_CDP_PORTS to an existing remote-debugging port."
+        );
+    }
+    input.cdp = Some(diagnostics);
 }
 
 #[cfg(windows)]

@@ -173,7 +173,7 @@ fn find_by_runtime_id_hex(
     let root = automation
         .element_from_handle_build_cache(Handle::from(hwnd), &cache)
         .map_err(map_uia_error)?;
-    if runtime_id_matches(&root, runtime_id_hex_expected, root_hwnd)? {
+    if runtime_id_matches(&root, runtime_id_hex_expected, root_hwnd) {
         return Ok(Some(root));
     }
 
@@ -192,23 +192,19 @@ fn find_by_runtime_id_hex(
             );
             return Ok(None);
         }
-        if runtime_id_matches(&element, runtime_id_hex_expected, root_hwnd)? {
+        if runtime_id_matches(&element, runtime_id_hex_expected, root_hwnd) {
             return Ok(Some(element));
         }
     }
     Ok(None)
 }
 
-fn runtime_id_matches(
-    element: &UIElement,
-    runtime_id_hex_expected: &str,
-    root_hwnd: i64,
-) -> A11yResult<bool> {
+fn runtime_id_matches(element: &UIElement, runtime_id_hex_expected: &str, root_hwnd: i64) -> bool {
     let hwnd = cached_hwnd(element)
         .filter(|value| *value != 0)
         .unwrap_or(root_hwnd);
     match cached_runtime_id_hex_or_fallback(element, hwnd) {
-        Ok(readback) => Ok(readback.hex.eq_ignore_ascii_case(runtime_id_hex_expected)),
+        Ok(readback) => readback.hex.eq_ignore_ascii_case(runtime_id_hex_expected),
         Err(error) => {
             tracing::warn!(
                 code = "A11Y_RE_RESOLVE_RUNTIME_ID_FAILED",
@@ -220,7 +216,7 @@ fn runtime_id_matches(
                 process_id = element.get_cached_process_id().unwrap_or(-1),
                 "cached RuntimeId read failed during re-resolve; current element skipped"
             );
-            Ok(false)
+            false
         }
     }
 }

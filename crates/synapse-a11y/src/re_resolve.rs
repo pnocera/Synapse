@@ -70,7 +70,7 @@ pub fn focus_element(id: &ElementId) -> A11yResult<()> {
 /// # Errors
 ///
 /// Returns `A11Y_ELEMENT_STALE` when the element id cannot be re-resolved, a
-/// structured UIA error when the element does not expose writable ValuePattern
+/// structured UIA error when the element does not expose writable `ValuePattern`
 /// or SetValue/readback fails, and `A11Y_NOT_AVAILABLE` on non-Windows.
 pub fn set_element_value(id: &ElementId, value: &str) -> A11yResult<ElementValueSetReadback> {
     platform::set_element_value(id, value)

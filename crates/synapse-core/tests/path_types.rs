@@ -57,7 +57,7 @@ fn every_path_spec_variant_round_trips_known_json() -> Result<(), Box<dyn std::e
             "center": {"x": 0.0, "y": 0.0},
             "radius": 100.0,
             "start_angle_rad": 0.0,
-            "sweep_angle_rad": 1.5707963267948966
+            "sweep_angle_rad": std::f64::consts::FRAC_PI_2
         }),
         json!({
             "kind": "circle",

@@ -6,9 +6,10 @@ use std::{
 
 use chrono::Utc;
 use synapse_core::{
-    AccessibleNode, AudioContext, CaptureRuntimeReadback, ClipboardSummary, DetectedEntity,
-    EventSummary, FocusedElement, ForegroundContext, FsEvent, HudReadings, Observation,
-    ObservationCaptureConfig, ObservationDiagnostics, PerceptionMode, SensorStatus,
+    AccessibleNode, AudioContext, CaptureRuntimeReadback, CdpDiagnostics, ClipboardSummary,
+    DetectedEntity, EventSummary, FocusedElement, ForegroundContext, FsEvent, HudReadings,
+    Observation, ObservationCaptureConfig, ObservationDiagnostics, PerceptionMode, SensorStatus,
+    WebPerceptionPath,
 };
 
 use crate::{PerceptionError, PerceptionResult};
@@ -121,6 +122,12 @@ pub struct ObservationInput {
     pub mode_override: Option<PerceptionMode>,
     pub capture_config: Option<ObservationCaptureConfig>,
     pub capture_runtime: Option<CaptureRuntimeReadback>,
+    /// CDP probe/attach outcome for the foreground (Chromium-family only).
+    /// Threaded into [`ObservationDiagnostics::cdp`] by [`assemble`].
+    pub cdp: Option<CdpDiagnostics>,
+    /// Which perception path produced web content (Chromium-family only).
+    /// Threaded into [`ObservationDiagnostics::web_path`] by [`assemble`].
+    pub web_path: Option<WebPerceptionPath>,
 }
 
 impl ObservationInput {
@@ -144,6 +151,8 @@ impl ObservationInput {
             mode_override: None,
             capture_config: None,
             capture_runtime: None,
+            cdp: None,
+            web_path: None,
         }
     }
 }
@@ -178,6 +187,8 @@ impl ObservationAssembler {
         let mode = input
             .mode_override
             .unwrap_or_else(|| auto_mode_with_a11y(&input.foreground, &summary));
+        let cdp = input.cdp.clone();
+        let web_path = input.web_path;
         let (elements, elements_truncated) = filter_elements(input.elements, include);
         let (entities, entities_truncated) = filter_entities(input.entities, include);
         let mut observation = Observation {
@@ -224,6 +235,8 @@ impl ObservationAssembler {
                 audio_status: input.audio_status,
                 capture_config: input.capture_config,
                 capture_runtime: input.capture_runtime,
+                cdp,
+                web_path,
                 elements_truncated,
                 entities_truncated,
                 size_bytes: 0,

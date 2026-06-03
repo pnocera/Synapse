@@ -1,44 +1,40 @@
+//! CDP probe + attach for Chromium-family foregrounds.
+//!
+//! The diagnostic *types* ([`CdpDiagnostics`], [`CdpStatus`], [`CdpCapability`])
+//! live in `synapse-core` because they are embedded in every `Observation`.
+//! This module owns the *behaviour*: detecting a Chromium foreground, probing
+//! for a reachable remote-debugging port, and attaching a `chromiumoxide`
+//! client. It also owns the launched-port registry that ties
+//! `act_launch` (#684) to the probe so a Synapse-launched browser is found
+//! without the agent remembering manual flags.
+//!
+//! Background (research, 2026-06): since Chrome 136 the `--remote-debugging-port`
+//! switch is ignored unless paired with a non-default `--user-data-dir`, so a
+//! normally-launched Chrome on the user's primary profile can *never* expose a
+//! debug port. That is why a normal launch probes `Unreachable` and why #684
+//! must launch with a dedicated automation profile.
+
 use std::{
-    net::{IpAddr, Ipv4Addr, SocketAddr},
+    collections::HashMap,
+    net::{IpAddr, Ipv4Addr, SocketAddr, TcpStream},
+    sync::{Mutex, OnceLock},
     time::Duration,
 };
 
-use serde::{Deserialize, Serialize};
 use synapse_core::error_codes;
-use tokio::{net::TcpStream, time::timeout};
+use tokio::{net::TcpStream as TokioTcpStream, time::timeout};
+
+pub use synapse_core::{CdpCapability, CdpDiagnostics, CdpStatus};
 
 #[cfg(windows)]
 use crate::{A11yError, A11yResult};
 
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct CdpDiagnostics {
-    pub process_name: String,
-    pub status: CdpStatus,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub endpoint: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub reason_code: Option<String>,
-    #[serde(default)]
-    pub capabilities: Vec<CdpCapability>,
-}
+/// Default remote-debugging port probed when no launched port is registered for
+/// the foreground process. 9222 is Chrome's conventional debug port.
+pub const DEFAULT_CDP_PORT: u16 = 9222;
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CdpStatus {
-    Ok,
-    NotChromium,
-    Unreachable,
-}
-
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum CdpCapability {
-    DomSnapshot,
-    AccessibilityFullAxTree,
-    DomQuerySelector,
-    PageCaptureScreenshot,
-}
+/// Environment override for the probed port list, e.g. `9222,9333`.
+const CDP_PORTS_ENV: &str = "SYNAPSE_CDP_PORTS";
 
 #[must_use]
 pub fn cdp_capabilities() -> Vec<CdpCapability> {
@@ -71,44 +67,156 @@ pub fn is_chromium_family(process_name: &str) -> bool {
     .any(|candidate| lower.ends_with(candidate))
 }
 
+// === Launched-port registry =================================================
+//
+// `act_launch` (#684) registers the ephemeral debug port it opened for a
+// browser it launched, keyed by the browser's process id. The observe/find
+// probe consults this registry first so a Synapse-launched browser is attached
+// without any default-port collision or manual flag.
+
+fn registry() -> &'static Mutex<HashMap<u32, u16>> {
+    static REGISTRY: OnceLock<Mutex<HashMap<u32, u16>>> = OnceLock::new();
+    REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+/// Records the CDP debug `port` that `act_launch` opened for browser process
+/// `pid`, so a later `observe`/`find` can find it.
+pub fn register_launched_port(pid: u32, port: u16) {
+    if let Ok(mut map) = registry().lock() {
+        map.insert(pid, port);
+        tracing::info!(
+            code = "A11Y_CDP_PORT_REGISTERED",
+            pid,
+            port,
+            "registered Synapse-launched CDP debug port"
+        );
+    }
+}
+
+/// Removes a registered port (e.g. when the browser process exits).
+pub fn forget_launched_port(pid: u32) {
+    if let Ok(mut map) = registry().lock() {
+        map.remove(&pid);
+    }
+}
+
+/// The CDP debug port registered for `pid` by `act_launch`, if any.
+#[must_use]
+pub fn launched_port_for_pid(pid: u32) -> Option<u16> {
+    registry()
+        .lock()
+        .ok()
+        .and_then(|map| map.get(&pid).copied())
+}
+
+/// The ordered list of ports to probe for `pid`: the registered launched port
+/// (if any) first, then the env-configured / default port list. De-duplicated,
+/// order-preserving.
+#[must_use]
+pub fn candidate_ports_for_pid(pid: u32) -> Vec<u16> {
+    let mut ports = Vec::new();
+    if let Some(port) = launched_port_for_pid(pid) {
+        ports.push(port);
+    }
+    for port in configured_ports() {
+        if !ports.contains(&port) {
+            ports.push(port);
+        }
+    }
+    ports
+}
+
+fn configured_ports() -> Vec<u16> {
+    std::env::var(CDP_PORTS_ENV).map_or_else(
+        |_| vec![DEFAULT_CDP_PORT],
+        |raw| {
+            let parsed: Vec<u16> = raw
+                .split(',')
+                .filter_map(|token| token.trim().parse::<u16>().ok())
+                .filter(|port| *port != 0)
+                .collect();
+            if parsed.is_empty() {
+                vec![DEFAULT_CDP_PORT]
+            } else {
+                parsed
+            }
+        },
+    )
+}
+
+// === Probing ================================================================
+
+fn ok_diagnostics(process_name: &str, port: u16) -> CdpDiagnostics {
+    CdpDiagnostics {
+        process_name: process_name.to_owned(),
+        status: CdpStatus::Ok,
+        endpoint: Some(format!("http://127.0.0.1:{port}")),
+        reason_code: None,
+        detail: None,
+        capabilities: cdp_capabilities(),
+        attached_node_count: None,
+    }
+}
+
+/// Synchronous CDP reachability probe.
+///
+/// Used from the perception `platform_input` path so both `observe` and `find`
+/// surface `cdp.status` without an async runtime. Connection-refused on loopback
+/// returns immediately, so the common "no debug port" case costs microseconds,
+/// not the full `connect_timeout`.
+#[must_use]
+pub fn probe_chromium_cdp_blocking(
+    process_name: &str,
+    ports: &[u16],
+    connect_timeout: Duration,
+) -> CdpDiagnostics {
+    if !is_chromium_family(process_name) {
+        return CdpDiagnostics::not_chromium(process_name);
+    }
+    for port in ports {
+        let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), *port);
+        if TcpStream::connect_timeout(&addr, connect_timeout).is_ok() {
+            return ok_diagnostics(process_name, *port);
+        }
+    }
+    CdpDiagnostics::unreachable(process_name, error_codes::A11Y_CDP_UNREACHABLE)
+}
+
+/// Async CDP reachability probe (used by tests and the async attach path).
 pub async fn probe_chromium_cdp(
     process_name: &str,
     ports: &[u16],
     connect_timeout: Duration,
 ) -> CdpDiagnostics {
     if !is_chromium_family(process_name) {
-        return CdpDiagnostics {
-            process_name: process_name.to_owned(),
-            status: CdpStatus::NotChromium,
-            endpoint: None,
-            reason_code: None,
-            capabilities: Vec::new(),
-        };
+        return CdpDiagnostics::not_chromium(process_name);
     }
 
     for port in ports {
         let addr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), *port);
-        if timeout(connect_timeout, TcpStream::connect(addr))
+        if timeout(connect_timeout, TokioTcpStream::connect(addr))
             .await
             .is_ok_and(|result| result.is_ok())
         {
-            return CdpDiagnostics {
-                process_name: process_name.to_owned(),
-                status: CdpStatus::Ok,
-                endpoint: Some(format!("http://127.0.0.1:{port}")),
-                reason_code: None,
-                capabilities: cdp_capabilities(),
-            };
+            return ok_diagnostics(process_name, *port);
         }
     }
 
-    CdpDiagnostics {
-        process_name: process_name.to_owned(),
-        status: CdpStatus::Unreachable,
-        endpoint: None,
-        reason_code: Some(error_codes::A11Y_CDP_UNREACHABLE.to_owned()),
-        capabilities: Vec::new(),
-    }
+    CdpDiagnostics::unreachable(process_name, error_codes::A11Y_CDP_UNREACHABLE)
+}
+
+/// Resolves a reachable CDP endpoint for the browser window `hwnd`.
+///
+/// Used by action routing (#686). Looks up the window's pid, gathers its
+/// candidate debug ports (launched-port registry first, then defaults), and
+/// returns the first reachable `http://127.0.0.1:<port>`. `None` if the window
+/// is gone, not a Chromium browser, or has no reachable debug port.
+#[cfg(windows)]
+#[must_use]
+pub fn endpoint_for_window(hwnd: i64) -> Option<String> {
+    let context = crate::foreground_context(hwnd).ok()?;
+    let ports = candidate_ports_for_pid(context.pid);
+    probe_chromium_cdp_blocking(&context.process_name, &ports, Duration::from_millis(250)).endpoint
 }
 
 #[cfg(windows)]

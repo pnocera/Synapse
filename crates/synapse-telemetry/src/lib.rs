@@ -271,7 +271,7 @@ fn default_level_from_directives(directives: &str) -> LevelFilter {
         .unwrap_or(LevelFilter::INFO)
 }
 
-fn payload_dependency_level(default: LevelFilter) -> &'static str {
+const fn payload_dependency_level(default: LevelFilter) -> &'static str {
     match default {
         LevelFilter::OFF => "off",
         LevelFilter::ERROR => "error",
@@ -280,7 +280,7 @@ fn payload_dependency_level(default: LevelFilter) -> &'static str {
     }
 }
 
-fn level_directive(level: LevelFilter) -> &'static str {
+const fn level_directive(level: LevelFilter) -> &'static str {
     match level {
         LevelFilter::OFF => "off",
         LevelFilter::ERROR => "error",

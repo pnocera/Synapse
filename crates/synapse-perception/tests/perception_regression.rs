@@ -115,6 +115,8 @@ fn notepad_input() -> ObservationInput {
         mode_override: None,
         capture_config: None,
         capture_runtime: None,
+        cdp: None,
+        web_path: None,
     }
 }
 

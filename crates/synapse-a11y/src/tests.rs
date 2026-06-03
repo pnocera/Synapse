@@ -179,6 +179,75 @@ async fn cdp_probe_reachable_debug_port_surfaces_capabilities()
     Ok(())
 }
 
+// === Blocking probe (the path used by the synchronous perception pipeline) ===
+//
+// These exercise the *real* `probe_chromium_cdp_blocking` used by observe/find
+// against real loopback sockets — no mocks — so the #683 diagnostics contract is
+// locked at its source (issue #691, supporting evidence; not an FSV harness).
+
+#[test]
+fn blocking_cdp_probe_non_chromium_is_explicitly_not_chromium() {
+    let before = ("notepad.exe", Vec::<u16>::new());
+    println!("readback=cdp_blocking edge=non_chromium before={before:?}");
+    let after = probe_chromium_cdp_blocking("notepad.exe", &[], Duration::from_millis(50));
+    println!("readback=cdp_blocking edge=non_chromium after={after:?}");
+    assert_eq!(after.status, CdpStatus::NotChromium);
+    assert!(after.reason_code.is_none());
+    assert!(after.capabilities.is_empty());
+}
+
+#[test]
+fn blocking_cdp_probe_chromium_without_port_surfaces_unreachable_code() {
+    // A free, unbound port: connecting must be refused, yielding Unreachable.
+    let before = ("chrome.exe", vec![1u16]);
+    println!("readback=cdp_blocking edge=no_debug_port before={before:?}");
+    let after = probe_chromium_cdp_blocking("chrome.exe", &[1], Duration::from_millis(50));
+    println!("readback=cdp_blocking edge=no_debug_port after={after:?}");
+    assert_eq!(after.status, CdpStatus::Unreachable);
+    assert_eq!(
+        after.reason_code.as_deref(),
+        Some(error_codes::A11Y_CDP_UNREACHABLE)
+    );
+}
+
+#[test]
+fn blocking_cdp_probe_reachable_debug_port_surfaces_capabilities()
+-> Result<(), Box<dyn std::error::Error>> {
+    let listener = std::net::TcpListener::bind(("127.0.0.1", 0))?;
+    let port = listener.local_addr()?.port();
+    println!("readback=cdp_blocking edge=reachable_port before=port:{port}");
+    let after = probe_chromium_cdp_blocking("chrome.exe", &[port], Duration::from_secs(1));
+    println!("readback=cdp_blocking edge=reachable_port after={after:?}");
+    assert_eq!(after.status, CdpStatus::Ok);
+    assert_eq!(
+        after.endpoint.as_deref(),
+        Some(format!("http://127.0.0.1:{port}").as_str())
+    );
+    assert_eq!(after.capabilities, cdp_capabilities());
+    Ok(())
+}
+
+#[test]
+fn launched_port_registry_is_consulted_first_then_defaults() {
+    // Use a high, unlikely-collision pid for test isolation.
+    let pid = 4_294_967_000_u32;
+    forget_launched_port(pid);
+    let before = candidate_ports_for_pid(pid);
+    println!("readback=cdp_port_registry edge=unregistered before={before:?}");
+    assert_eq!(before, vec![DEFAULT_CDP_PORT]);
+
+    register_launched_port(pid, 51_999);
+    let after = candidate_ports_for_pid(pid);
+    println!("readback=cdp_port_registry edge=registered after={after:?}");
+    assert_eq!(after.first().copied(), Some(51_999));
+    assert!(after.contains(&DEFAULT_CDP_PORT));
+
+    forget_launched_port(pid);
+    let cleared = candidate_ports_for_pid(pid);
+    println!("readback=cdp_port_registry edge=forgotten after={cleared:?}");
+    assert_eq!(cleared, vec![DEFAULT_CDP_PORT]);
+}
+
 proptest! {
     #[test]
     fn coalescing_never_outputs_same_key_inside_window(times in proptest::collection::vec(0_u64..500, 1..80)) {

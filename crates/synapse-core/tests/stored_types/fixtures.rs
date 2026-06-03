@@ -435,6 +435,8 @@ pub fn diagnostics() -> ObservationDiagnostics {
         audio_status: SensorStatus::Disabled,
         capture_config: None,
         capture_runtime: None,
+        cdp: None,
+        web_path: None,
         elements_truncated: false,
         entities_truncated: false,
         size_bytes: 256,

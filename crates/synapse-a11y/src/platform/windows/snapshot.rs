@@ -673,7 +673,7 @@ mod tests {
     #[test]
     fn collection_limit_reason_reports_deadline() {
         let now = Instant::now();
-        let elapsed = now - Duration::from_millis(1);
+        let elapsed = now.checked_sub(Duration::from_millis(1)).unwrap_or(now);
 
         assert_eq!(
             collection_limit_reason(10, 4_000, now, elapsed),
