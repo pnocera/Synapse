@@ -16,6 +16,7 @@ axum.workspace = true
 chrono.workspace = true
 clap.workspace = true
 ed25519-dalek.workspace = true
+fs2.workspace = true
 futures-util.workspace = true
 hyper.workspace = true
 image.workspace = true

@@ -432,7 +432,8 @@ fn audio_event_sink(event_bus: EventBus) -> synapse_audio::AudioEventSink {
     })
 }
 
-fn default_db_path() -> PathBuf {
+#[must_use]
+pub fn default_db_path() -> PathBuf {
     std::env::var_os("LOCALAPPDATA")
         .map_or_else(std::env::temp_dir, PathBuf::from)
         .join("synapse")

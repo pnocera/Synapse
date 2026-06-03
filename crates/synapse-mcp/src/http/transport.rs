@@ -43,6 +43,44 @@ pub(super) async fn serve(
     m4_config: M4ServiceConfig,
 ) -> anyhow::Result<ExitCode> {
     synapse_action::install_panic_hook();
+
+    // Single-instance guard: at most one daemon may own a given RocksDB path.
+    // Acquired before binding the port or opening storage so a duplicate launch
+    // fails fast with a clear, holder-naming error instead of a cryptic RocksDB
+    // LOCK failure surfacing later inside a tool call.
+    let db_path = m3_config
+        .db_path
+        .clone()
+        .unwrap_or_else(crate::m3::default_db_path);
+    let _single_instance = match crate::single_instance::SingleInstanceGuard::acquire(&db_path) {
+        Ok(guard) => {
+            tracing::info!(
+                code = "MCP_DAEMON_SINGLE_INSTANCE_ACQUIRED",
+                lock_path = %guard.lock_path().display(),
+                db_path = %db_path.display(),
+                pid = std::process::id(),
+                "daemon single-instance lock acquired"
+            );
+            guard
+        }
+        Err(crate::single_instance::SingleInstanceError::AlreadyRunning {
+            lock_path,
+            holder_pid,
+        }) => {
+            tracing::error!(
+                code = "MCP_DAEMON_ALREADY_RUNNING",
+                lock_path = %lock_path.display(),
+                holder_pid = holder_pid.map_or_else(|| "unknown".to_owned(), |pid| pid.to_string()),
+                db_path = %db_path.display(),
+                "refusing to start: another synapse-mcp daemon already owns this DB path"
+            );
+            return Ok(ExitCode::from(3));
+        }
+        Err(err @ crate::single_instance::SingleInstanceError::Io { .. }) => {
+            return Err(anyhow::Error::new(err)).context("acquire daemon single-instance lock");
+        }
+    };
+
     let addr = bind
         .parse::<SocketAddr>()
         .with_context(|| format!("parse HTTP bind address {bind}"))?;

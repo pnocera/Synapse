@@ -3518,6 +3518,7 @@ dependencies = [
  "chrono",
  "clap",
  "ed25519-dalek",
+ "fs2",
  "futures-util",
  "hyper",
  "image",

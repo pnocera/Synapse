@@ -22,6 +22,7 @@ mod m3;
 mod m4;
 mod safety;
 mod server;
+mod single_instance;
 
 use std::{
     io,
