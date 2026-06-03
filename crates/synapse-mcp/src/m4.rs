@@ -1,4 +1,5 @@
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, HashSet},
     io,
     path::Path,
@@ -8,8 +9,12 @@ use std::{
 };
 
 use anyhow::Context;
-use rmcp::{ErrorData, model::ErrorCode, schemars::JsonSchema};
-use serde::{Deserialize, Serialize};
+use rmcp::{
+    ErrorData,
+    model::ErrorCode,
+    schemars::{JsonSchema, Schema, SchemaGenerator, json_schema},
+};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
 use synapse_core::{
@@ -235,18 +240,37 @@ pub struct ActComboStep {
     pub backend: Option<Backend>,
 }
 
-#[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum ActComboAction {
-    ActClick,
-    ActType,
     ActPress,
-    ActAim,
-    ActDrag,
-    ActScroll,
-    ActPad,
-    ActClipboard,
-    ReleaseAll,
+    Retired(String),
+}
+
+impl<'de> Deserialize<'de> for ActComboAction {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        match value.as_str() {
+            "act_press" => Ok(Self::ActPress),
+            _ => Ok(Self::Retired(value)),
+        }
+    }
+}
+
+impl JsonSchema for ActComboAction {
+    fn schema_name() -> Cow<'static, str> {
+        "ActComboAction".into()
+    }
+
+    fn json_schema(_generator: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "string",
+            "enum": ["act_press"],
+            "description": "Only timed act_press key steps are supported. Use act_stroke for continuous mouse motion/path execution."
+        })
+    }
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
@@ -828,17 +852,26 @@ fn combo_steps_from_params(params: &ActComboParams) -> Result<Vec<ComboStep>, Er
                     })?;
                 push_press_combo_steps(&mut out, index, step.at_ms, &press, params.backend)?;
             }
-            other => {
+            ActComboAction::Retired(ref action) => {
                 return Err(mcp_error(
                     error_codes::TOOL_PARAMS_INVALID,
-                    format!(
-                        "act_combo steps[{index}].action {other:?} is not yet combo-lowerable; supported action: act_press"
-                    ),
+                    retired_combo_action_message(index, action),
                 ));
             }
         }
     }
     Ok(out)
+}
+
+fn retired_combo_action_message(index: usize, action: &str) -> String {
+    match action {
+        "act_aim" | "act_drag" | "act_stroke" | "mouse_move" | "MouseMove" => format!(
+            "act_combo steps[{index}].action {action:?} is not combo-lowerable; act_combo is intentionally limited to timed act_press key steps. Use act_stroke for continuous mouse motion/path execution."
+        ),
+        _ => format!(
+            "act_combo steps[{index}].action {action:?} is not combo-lowerable; supported action: act_press"
+        ),
+    }
 }
 
 fn push_press_combo_steps(
@@ -2114,20 +2147,22 @@ mod tests {
     }
 
     #[test]
-    fn combo_rejects_non_press_action() {
+    fn combo_rejects_motion_action_with_act_stroke_pointer() {
         let params = combo_params(vec![ActComboStep {
             at_ms: 0,
-            action: ActComboAction::ActClick,
-            params: json!({"target": {"x": 0, "y": 0}}),
+            action: ActComboAction::Retired("act_drag".to_owned()),
+            params: json!({"path": [{"x": 0, "y": 0}, {"x": 10, "y": 0}]}),
             backend: None,
         }]);
         let error = match combo_steps_from_params(&params) {
-            Ok(steps) => panic!("non-press combo action should reject, got {steps:?}"),
+            Ok(steps) => panic!("motion combo action should reject, got {steps:?}"),
             Err(error) => error,
         };
 
         assert_tool_params_invalid(&error);
-        assert!(error.message.contains("supported action: act_press"));
+        assert!(error.message.contains("act_drag"));
+        assert!(error.message.contains("not combo-lowerable"));
+        assert!(error.message.contains("Use act_stroke"));
     }
 
     #[test]

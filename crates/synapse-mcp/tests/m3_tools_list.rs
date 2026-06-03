@@ -63,7 +63,10 @@ async fn m3_tools_list_snapshot_defaults_and_closed_schemas() -> anyhow::Result<
     // SYNAPSE_DEBUG_TOOLS-gated storage probes.
     let mut client = StdioMcpClient::launch_and_init_with_env(
         None,
-        &[("SYNAPSE_DEBUG_TOOLS", "1"), ("SYNAPSE_ENABLE_EVERQUEST", "1")],
+        &[
+            ("SYNAPSE_DEBUG_TOOLS", "1"),
+            ("SYNAPSE_ENABLE_EVERQUEST", "1"),
+        ],
     )
     .await?;
     let response = client.tools_list().await?;

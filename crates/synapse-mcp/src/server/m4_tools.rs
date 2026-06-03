@@ -10,7 +10,9 @@ use super::{
 
 #[tool_router(router = m4_tool_router, vis = "pub(super)")]
 impl SynapseService {
-    #[tool(description = "Execute a timed one-shot sequence of already-supported action tools")]
+    #[tool(
+        description = "Execute a timed one-shot sequence of act_press key steps only; use act_stroke for continuous mouse motion/path execution"
+    )]
     pub async fn act_combo(
         &self,
         params: Parameters<ActComboParams>,
