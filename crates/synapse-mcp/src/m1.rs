@@ -895,8 +895,10 @@ mod tests {
 
     #[test]
     fn read_text_resolves_focused_region_when_target_is_omitted() {
-        let mut state = M1State::default();
-        state.synthetic = Some(synthetic_notepad_input());
+        let state = M1State {
+            synthetic: Some(synthetic_notepad_input()),
+            ..Default::default()
+        };
         let focused = state
             .synthetic
             .as_ref()
@@ -923,8 +925,10 @@ mod tests {
 
     #[test]
     fn read_text_crnn_backend_fails_closed_until_provider_is_wired() {
-        let mut state = M1State::default();
-        state.synthetic = Some(synthetic_notepad_input());
+        let state = M1State {
+            synthetic: Some(synthetic_notepad_input()),
+            ..Default::default()
+        };
 
         let error = resolve_read_text_request(
             &state,
@@ -950,8 +954,10 @@ mod tests {
 
     #[test]
     fn read_text_rejects_zero_sized_regions_before_ocr() {
-        let mut state = M1State::default();
-        state.synthetic = Some(synthetic_notepad_input());
+        let state = M1State {
+            synthetic: Some(synthetic_notepad_input()),
+            ..Default::default()
+        };
 
         for region in [
             Rect {

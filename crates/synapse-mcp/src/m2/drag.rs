@@ -330,10 +330,9 @@ async fn release_pressed_modifiers(
                 backend,
             })
             .await
+            && release_error.is_none()
         {
-            if release_error.is_none() {
-                release_error = Some(error);
-            }
+            release_error = Some(error);
         }
     }
     release_error.map_or(Ok(()), Err)
