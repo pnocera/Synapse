@@ -59,7 +59,10 @@ const EXPECTED_TOOLS: [&str; 50] = [
 
 #[tokio::test]
 async fn m3_tools_list_snapshot_defaults_and_closed_schemas() -> anyhow::Result<()> {
-    let mut client = StdioMcpClient::launch_and_init().await?;
+    // Debug tools enabled so the snapshot covers the full surface, including the
+    // SYNAPSE_DEBUG_TOOLS-gated storage probes.
+    let mut client =
+        StdioMcpClient::launch_and_init_with_env(None, &[("SYNAPSE_DEBUG_TOOLS", "1")]).await?;
     let response = client.tools_list().await?;
     let tools = response
         .get("tools")

@@ -248,7 +248,7 @@ impl SynapseService {
     }
 
     fn tool_router() -> ToolRouter<Self> {
-        Self::m1_tool_router()
+        let mut router = Self::m1_tool_router()
             + Self::m2_tool_router()
             + Self::everquest_tool_router()
             + Self::everquest_autocombat_tool_router()
@@ -269,8 +269,21 @@ impl SynapseService {
             + Self::everquest_world_summary_tool_router()
             + Self::reality_tool_router()
             + Self::m3_tool_router()
-            + Self::m4_tool_router()
+            + Self::m4_tool_router();
+        // Gate test-only storage probes off the default agent surface; they
+        // remain available (and callable) only when SYNAPSE_DEBUG_TOOLS is set.
+        if !debug_tools_enabled() {
+            router.remove_route("storage_put_probe_rows");
+            router.remove_route("storage_pressure_sample");
+        }
+        router
     }
+}
+
+/// Whether test-only/debug MCP tools should be exposed on the surface.
+fn debug_tools_enabled() -> bool {
+    std::env::var("SYNAPSE_DEBUG_TOOLS")
+        .is_ok_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
 impl Default for SynapseService {
