@@ -1,9 +1,14 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    borrow::Cow,
+    sync::{Arc, Mutex},
+};
 
 use rmcp::ErrorData;
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::{Deserialize, Serialize};
-use synapse_core::{StoredReflexAudit, error_codes};
+use synapse_core::{
+    ReflexState, StoredAuditContext, StoredRedaction, StoredReflexAudit, error_codes,
+};
 use synapse_reflex::ReflexRuntime;
 
 use crate::m1::mcp_error;
@@ -29,7 +34,87 @@ pub struct ReflexHistoryParams {
 #[derive(Clone, Debug, PartialEq, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ReflexHistoryResponse {
-    pub events: Vec<StoredReflexAudit>,
+    pub events: Vec<ReflexHistoryEvent>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(transparent)]
+pub struct ReflexHistoryEvent(StoredReflexAudit);
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(
+    dead_code,
+    reason = "schema-only wrapper; runtime serializes StoredReflexAudit transparently"
+)]
+struct ReflexHistoryEventSchema {
+    schema_version: u32,
+    audit_id: String,
+    reflex_id: String,
+    ts_ns: u64,
+    status: ReflexState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    event_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    audit_context: Option<StoredAuditContext>,
+    #[serde(default)]
+    steps: Vec<ReflexHistoryStepSchema>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error_code: Option<String>,
+    #[serde(default)]
+    details: serde_json::Value,
+    redacted: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    redactions: Vec<StoredRedaction>,
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(
+    dead_code,
+    reason = "schema-only wrapper; runtime serializes StoredReflexStep transparently"
+)]
+struct ReflexHistoryStepSchema {
+    index: u32,
+    action: ReflexHistoryActionSchema,
+    status: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    error_code: Option<String>,
+}
+
+struct ReflexHistoryActionSchema;
+
+impl From<StoredReflexAudit> for ReflexHistoryEvent {
+    fn from(value: StoredReflexAudit) -> Self {
+        Self(value)
+    }
+}
+
+impl JsonSchema for ReflexHistoryEvent {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ReflexHistoryEvent")
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        ReflexHistoryEventSchema::json_schema(generator)
+    }
+}
+
+impl JsonSchema for ReflexHistoryActionSchema {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ReflexHistoryAction")
+    }
+
+    fn json_schema(_: &mut SchemaGenerator) -> Schema {
+        json_schema!({
+            "type": "object",
+            "properties": {
+                "kind": { "type": "string" }
+            },
+            "required": ["kind"],
+            "additionalProperties": true
+        })
+    }
 }
 
 #[must_use]
@@ -65,5 +150,6 @@ pub fn history_reflexes(
         .history(reflex_id, params.limit as usize)
         .map_err(|error| mcp_error(error.code(), error.to_string()))?;
     drop(runtime);
+    let events = events.into_iter().map(ReflexHistoryEvent::from).collect();
     Ok(ReflexHistoryResponse { events })
 }

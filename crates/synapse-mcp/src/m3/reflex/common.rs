@@ -1,3 +1,5 @@
+use std::borrow::Cow;
+
 use schemars::{JsonSchema, Schema, SchemaGenerator, json_schema};
 use serde::Deserialize;
 use synapse_core::{
@@ -52,11 +54,21 @@ pub struct WindowEventMatch {
     pub window_title_regex: Option<String>,
 }
 
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
 pub enum ReflexThenParam {
     Core(ReflexThen),
     Steps { steps: Vec<ReflexThenStep> },
+}
+
+#[derive(JsonSchema)]
+#[serde(deny_unknown_fields)]
+#[allow(
+    dead_code,
+    reason = "schema-only wrapper; runtime uses ReflexThenParam"
+)]
+struct ReflexThenPublicSchema {
+    steps: Vec<ReflexThenStep>,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -67,7 +79,7 @@ pub struct ReflexThenStep {
     pub params: serde_json::Value,
 }
 
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, Deserialize)]
 #[serde(untagged)]
 pub enum ReflexComboStepParam {
     Core(ComboStep),
@@ -82,6 +94,26 @@ pub struct ReflexTimedThenStep {
     pub action: String,
     #[serde(default = "empty_params")]
     pub params: serde_json::Value,
+}
+
+impl JsonSchema for ReflexThenParam {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ReflexThenParam")
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        ReflexThenPublicSchema::json_schema(generator)
+    }
+}
+
+impl JsonSchema for ReflexComboStepParam {
+    fn schema_name() -> Cow<'static, str> {
+        Cow::Borrowed("ReflexComboStepParam")
+    }
+
+    fn json_schema(generator: &mut SchemaGenerator) -> Schema {
+        ReflexTimedThenStep::json_schema(generator)
+    }
 }
 
 pub(super) fn required_then(
