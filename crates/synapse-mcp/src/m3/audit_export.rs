@@ -32,8 +32,7 @@ const BUNDLE_KIND: &str = "audit_export_bundle";
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
-pub struct AuditExportConsentSetParams {
-    pub profile_id: ProfileId,
+pub struct AuditExportConsentParams {
     pub enabled: bool,
     #[serde(default = "default_redaction_policy")]
     #[schemars(default = "default_redaction_policy")]
@@ -49,23 +48,14 @@ pub struct AuditExportBundleParams {
     pub output_path: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub redaction_policy: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub consent: Option<AuditExportConsentParams>,
     #[serde(default = "default_max_export_rows")]
     #[schemars(default = "default_max_export_rows", range(min = 1, max = 1000))]
     pub max_rows: u32,
     #[serde(default = "default_max_row_bytes")]
     #[schemars(default = "default_max_row_bytes", range(min = 1, max = 524_288))]
     pub max_row_bytes: u64,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
-#[serde(deny_unknown_fields)]
-pub struct AuditExportConsentSetResponse {
-    pub profile_id: ProfileId,
-    pub consent_key: String,
-    pub enabled: bool,
-    pub redaction_policy: String,
-    pub wrote_row: bool,
-    pub consent_row: AuditExportStoredRow,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, JsonSchema)]
@@ -177,87 +167,17 @@ struct RedactionStats {
 }
 
 #[must_use]
-pub const fn audit_export_consent_set() -> M3ToolStub {
-    M3ToolStub::new("audit_export_consent_set")
-}
-
-#[must_use]
 pub const fn audit_export_bundle() -> M3ToolStub {
     M3ToolStub::new("audit_export_bundle")
 }
 
 #[must_use]
-pub fn required_permissions_consent_set(
-    _params: &AuditExportConsentSetParams,
-) -> RequiredPermissions {
-    required([Permission::ReadStorage, Permission::WriteStorage])
-}
-
-#[must_use]
 pub fn required_permissions_bundle(_params: &AuditExportBundleParams) -> RequiredPermissions {
-    required([Permission::ReadProfile, Permission::ReadStorage])
-}
-
-pub fn set_audit_export_consent(
-    reflex_runtime: &Arc<Mutex<ReflexRuntime>>,
-    params: &AuditExportConsentSetParams,
-) -> Result<AuditExportConsentSetResponse, ErrorData> {
-    validate_redaction_policy(&params.redaction_policy)?;
-    let key = consent_key(&params.profile_id);
-    let now = Utc::now().to_rfc3339();
-    let runtime = lock_runtime(reflex_runtime, "setting audit export consent")?;
-    let created_at = runtime
-        .storage_kv_row(key.as_bytes())
-        .map_err(storage_error)?
-        .and_then(|value| decode_json::<Value>(&value).ok())
-        .and_then(|value| string_field(&value, "created_at"))
-        .unwrap_or_else(|| now.clone());
-    let row = ConsentRow {
-        schema_version: SCHEMA_VERSION,
-        row_kind: "audit_export_consent",
-        row_id: params.profile_id.clone(),
-        created_at,
-        updated_at: now,
-        profile_id: params.profile_id.clone(),
-        state: if params.enabled {
-            "enabled"
-        } else {
-            "disabled"
-        },
-        enabled: params.enabled,
-        redaction_policy: params.redaction_policy.clone(),
-        allowed_redaction_policies: vec![params.redaction_policy.clone()],
-        external_sharing_allowed: false,
-        operator_note: params.operator_note.clone(),
-    };
-    let encoded = encode_json(&row).map_err(|error| {
-        mcp_error(
-            error_codes::TOOL_INTERNAL_ERROR,
-            format!("audit export consent row encode failed: {error}"),
-        )
-    })?;
-    runtime
-        .storage_put_kv_rows(vec![(key.clone().into_bytes(), encoded)])
-        .map_err(storage_error)?;
-    let stored = runtime
-        .storage_kv_row(key.as_bytes())
-        .map_err(storage_error)?
-        .ok_or_else(|| {
-            mcp_error(
-                error_codes::TOOL_INTERNAL_ERROR,
-                "audit export consent row did not persist after write",
-            )
-        })?;
-    drop(runtime);
-    let stored_row = stored_row(cf::CF_KV, &key, &stored)?;
-    Ok(AuditExportConsentSetResponse {
-        profile_id: params.profile_id.clone(),
-        consent_key: key,
-        enabled: params.enabled,
-        redaction_policy: params.redaction_policy.clone(),
-        wrote_row: true,
-        consent_row: stored_row,
-    })
+    required([
+        Permission::ReadProfile,
+        Permission::ReadStorage,
+        Permission::WriteStorage,
+    ])
 }
 
 #[expect(
@@ -269,23 +189,20 @@ pub fn export_audit_bundle(
     params: &AuditExportBundleParams,
 ) -> Result<AuditExportBundleResponse, ErrorData> {
     validate_export_params(params)?;
-    let redaction_policy = params
-        .redaction_policy
-        .as_deref()
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| redaction_required_error("missing_redaction_policy"))?;
-    validate_redaction_policy(redaction_policy)?;
+    let (explicit_consent, redaction_policy) = explicit_export_consent(params)?;
 
     let output_dir = required_output_dir(&params.output_path)?;
     let consent_key = consent_key(&params.profile_id);
     let runtime = lock_runtime(reflex_runtime, "exporting redacted audit bundle")?;
-    let consent_bytes = runtime
-        .storage_kv_row(consent_key.as_bytes())
-        .map_err(storage_error)?
-        .ok_or_else(|| consent_required_error("consent_missing"))?;
+    let consent_bytes = write_audit_export_consent_row(
+        &runtime,
+        &params.profile_id,
+        explicit_consent,
+        &redaction_policy,
+        &consent_key,
+    )?;
     let consent = decode_json::<Value>(&consent_bytes).map_err(decode_error)?;
-    validate_consent(&consent, redaction_policy)?;
+    validate_consent(&consent, &redaction_policy)?;
     let rows = runtime
         .storage_cf_tail_rows(cf::CF_ACTION_LOG, params.max_rows as usize)
         .map_err(storage_error)?;
@@ -366,7 +283,7 @@ pub fn export_audit_bundle(
         source_cf_name: cf::CF_ACTION_LOG,
         consent_key: consent_key.clone(),
         consent_sha256: sha256_hex(&consent_bytes),
-        redaction_policy: redaction_policy.to_owned(),
+        redaction_policy: redaction_policy.clone(),
         rows_scanned,
         rows_exported: exported_rows.len() as u64,
         external_sharing_allowed: false,
@@ -397,7 +314,7 @@ pub fn export_audit_bundle(
             .display()
             .to_string(),
         consent_key: consent_key.clone(),
-        redaction_policy: redaction_policy.to_owned(),
+        redaction_policy,
         rows_scanned,
         rows_exported: exported_rows.len() as u64,
         redacted_fields: report.fields_redacted,
@@ -422,6 +339,79 @@ fn validate_export_params(params: &AuditExportBundleParams) -> Result<(), ErrorD
         ));
     }
     Ok(())
+}
+
+fn explicit_export_consent(
+    params: &AuditExportBundleParams,
+) -> Result<(&AuditExportConsentParams, String), ErrorData> {
+    let consent = params
+        .consent
+        .as_ref()
+        .ok_or_else(|| consent_required_error("consent_arg_missing"))?;
+    if !consent.enabled {
+        return Err(consent_required_error("consent_disabled"));
+    }
+    let consent_policy = consent.redaction_policy.trim();
+    validate_redaction_policy(consent_policy)?;
+    let redaction_policy = params
+        .redaction_policy
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .unwrap_or(consent_policy);
+    validate_redaction_policy(redaction_policy)?;
+    if redaction_policy != consent_policy {
+        return Err(redaction_required_error("redaction_policy_not_consented"));
+    }
+    Ok((consent, redaction_policy.to_owned()))
+}
+
+fn write_audit_export_consent_row(
+    runtime: &ReflexRuntime,
+    profile_id: &str,
+    consent: &AuditExportConsentParams,
+    redaction_policy: &str,
+    key: &str,
+) -> Result<Vec<u8>, ErrorData> {
+    let now = Utc::now().to_rfc3339();
+    let created_at = runtime
+        .storage_kv_row(key.as_bytes())
+        .map_err(storage_error)?
+        .and_then(|value| decode_json::<Value>(&value).ok())
+        .and_then(|value| string_field(&value, "created_at"))
+        .unwrap_or_else(|| now.clone());
+    let row = ConsentRow {
+        schema_version: SCHEMA_VERSION,
+        row_kind: "audit_export_consent",
+        row_id: profile_id.to_owned(),
+        created_at,
+        updated_at: now,
+        profile_id: profile_id.to_owned(),
+        state: "enabled",
+        enabled: true,
+        redaction_policy: redaction_policy.to_owned(),
+        allowed_redaction_policies: vec![redaction_policy.to_owned()],
+        external_sharing_allowed: false,
+        operator_note: consent.operator_note.clone(),
+    };
+    let encoded = encode_json(&row).map_err(|error| {
+        mcp_error(
+            error_codes::TOOL_INTERNAL_ERROR,
+            format!("audit export consent row encode failed: {error}"),
+        )
+    })?;
+    runtime
+        .storage_put_kv_rows(vec![(key.as_bytes().to_vec(), encoded)])
+        .map_err(storage_error)?;
+    runtime
+        .storage_kv_row(key.as_bytes())
+        .map_err(storage_error)?
+        .ok_or_else(|| {
+            mcp_error(
+                error_codes::TOOL_INTERNAL_ERROR,
+                "audit export consent row did not persist after write",
+            )
+        })
 }
 
 fn validate_redaction_policy(policy: &str) -> Result<(), ErrorData> {
@@ -690,8 +680,9 @@ fn retained_fields() -> Vec<String> {
 
 fn fail_closed_rules() -> Vec<String> {
     [
-        "consent row must exist and be enabled",
-        "redaction policy must be selected and consented",
+        "explicit consent argument must be present and enabled",
+        "consent row is written only from the consented export call",
+        "redaction policy must be selected and match explicit consent",
         "external sharing remains false in local bundles",
         "matching rows larger than max_row_bytes abort the export before files are written",
     ]
@@ -770,7 +761,7 @@ fn decode_error(error: synapse_storage::StorageError) -> ErrorData {
 fn consent_required_error(reason: &'static str) -> ErrorData {
     ErrorData::new(
         ErrorCode(-32099),
-        "audit export requires an enabled local consent row",
+        "audit export requires explicit enabled local consent",
         Some(json!({
             "code": error_codes::AUDIT_EXPORT_CONSENT_REQUIRED,
             "reason": reason,
@@ -809,6 +800,89 @@ fn payload_too_large_error(actual: u64, limit: u64) -> ErrorData {
 )]
 mod tests {
     use super::*;
+
+    fn bundle_params(
+        consent: Option<AuditExportConsentParams>,
+        redaction_policy: Option<&str>,
+    ) -> AuditExportBundleParams {
+        AuditExportBundleParams {
+            profile_id: "luanti.minetest".to_owned(),
+            output_path: "target/audit-export-test".to_owned(),
+            redaction_policy: redaction_policy.map(str::to_owned),
+            consent,
+            max_rows: default_max_export_rows(),
+            max_row_bytes: default_max_row_bytes(),
+        }
+    }
+
+    fn enabled_consent(redaction_policy: &str) -> AuditExportConsentParams {
+        AuditExportConsentParams {
+            enabled: true,
+            redaction_policy: redaction_policy.to_owned(),
+            operator_note: Some("operator consented local redacted export".to_owned()),
+        }
+    }
+
+    fn error_code(error: &ErrorData) -> Option<&str> {
+        error.data.as_ref()?.get("code")?.as_str()
+    }
+
+    fn error_reason(error: &ErrorData) -> Option<&str> {
+        error.data.as_ref()?.get("reason")?.as_str()
+    }
+
+    #[test]
+    fn export_consent_requires_explicit_consent_argument() {
+        let error = explicit_export_consent(&bundle_params(None, Some("strict")))
+            .expect_err("missing consent must fail closed");
+
+        assert_eq!(
+            error_code(&error),
+            Some(error_codes::AUDIT_EXPORT_CONSENT_REQUIRED)
+        );
+        assert_eq!(error_reason(&error), Some("consent_arg_missing"));
+    }
+
+    #[test]
+    fn export_consent_rejects_disabled_argument() {
+        let mut consent = enabled_consent("strict");
+        consent.enabled = false;
+
+        let error = explicit_export_consent(&bundle_params(Some(consent), Some("strict")))
+            .expect_err("disabled consent must fail closed");
+
+        assert_eq!(
+            error_code(&error),
+            Some(error_codes::AUDIT_EXPORT_CONSENT_REQUIRED)
+        );
+        assert_eq!(error_reason(&error), Some("consent_disabled"));
+    }
+
+    #[test]
+    fn export_consent_rejects_unsupported_policy_override() {
+        let error = explicit_export_consent(&bundle_params(
+            Some(enabled_consent("strict")),
+            Some("operator_override"),
+        ))
+        .expect_err("top-level redaction policy must be supported and consented");
+
+        assert_eq!(
+            error_code(&error),
+            Some(error_codes::AUDIT_EXPORT_REDACTION_REQUIRED)
+        );
+        assert_eq!(error_reason(&error), Some("redaction_policy_unsupported"));
+    }
+
+    #[test]
+    fn export_consent_accepts_nested_consent_policy_as_effective_policy() {
+        let params = bundle_params(Some(enabled_consent("strict")), None);
+
+        let (consent, policy) =
+            explicit_export_consent(&params).expect("strict enabled consent should be accepted");
+
+        assert!(consent.enabled);
+        assert_eq!(policy, "strict");
+    }
 
     #[test]
     fn strict_redaction_keeps_audit_context_profile_signal() {

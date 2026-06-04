@@ -3365,15 +3365,9 @@ fn registry_report_controls() -> Vec<ProfileRegistryReportControl> {
             requires_explicit_operator_trigger: true,
         },
         ProfileRegistryReportControl {
-            tool: "audit_export_consent_set".to_owned(),
-            purpose: "enable or disable local audit export consent".to_owned(),
-            writes: "CF_KV audit_export/v1/consent/<profile_id>".to_owned(),
-            requires_explicit_operator_trigger: true,
-        },
-        ProfileRegistryReportControl {
             tool: "audit_export_bundle".to_owned(),
-            purpose: "write a local redacted audit bundle after consent verification".to_owned(),
-            writes: "operator-selected local output directory".to_owned(),
+            purpose: "write a local redacted audit bundle after explicit consent".to_owned(),
+            writes: "CF_KV audit_export/v1/consent/<profile_id> and operator-selected local output directory".to_owned(),
             requires_explicit_operator_trigger: true,
         },
     ]

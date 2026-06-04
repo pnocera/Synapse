@@ -1,10 +1,9 @@
 use super::{
     AudioTailParams, AudioTailResponse, AudioTranscribeParams, AudioTranscribeResponse,
-    AuditExportBundleParams, AuditExportBundleResponse, AuditExportConsentSetParams,
-    AuditExportConsentSetResponse, AuditIntelligenceQueryParams, AuditIntelligenceQueryResponse,
-    ErrorData, Json, Parameters, ProfileActivateParams, ProfileActivateResponse,
-    ProfileAuthoringAcceptParams, ProfileAuthoringAcceptResponse, ProfileAuthoringExportParams,
-    ProfileAuthoringExportResponse, ProfileAuthoringGenerateParams,
+    AuditExportBundleParams, AuditExportBundleResponse, AuditIntelligenceQueryParams,
+    AuditIntelligenceQueryResponse, ErrorData, Json, Parameters, ProfileActivateParams,
+    ProfileActivateResponse, ProfileAuthoringAcceptParams, ProfileAuthoringAcceptResponse,
+    ProfileAuthoringExportParams, ProfileAuthoringExportResponse, ProfileAuthoringGenerateParams,
     ProfileAuthoringGenerateResponse, ProfileAuthoringInspectParams,
     ProfileAuthoringInspectResponse, ProfileAuthoringListParams, ProfileAuthoringListResponse,
     ProfileAuthoringRejectParams, ProfileAuthoringRejectResponse, ProfileListParams,
@@ -28,8 +27,8 @@ use super::{
     install_registry_package, list_profile_authoring_candidates, list_profiles, list_reflexes,
     put_probe_rows, query_audit_intelligence, record_replay, refresh_profile_quality,
     register_reflex, reject_profile_authoring_candidate, report_profile_registry,
-    rollback_registry_profile, run_storage_gc_once, search_registry, set_audit_export_consent,
-    subscribe_to_events, tail_audio, tool, tool_router, transcribe_audio,
+    rollback_registry_profile, run_storage_gc_once, search_registry, subscribe_to_events,
+    tail_audio, tool, tool_router, transcribe_audio,
 };
 
 #[tool_router(router = m3_tool_router, vis = "pub(super)")]
@@ -538,28 +537,7 @@ impl SynapseService {
         query_audit_intelligence(&reflex_runtime, &params.0).map(Json)
     }
 
-    #[tool(description = "Set local consent state for redacted audit export bundles")]
-    pub async fn audit_export_consent_set(
-        &self,
-        params: Parameters<AuditExportConsentSetParams>,
-    ) -> Result<Json<AuditExportConsentSetResponse>, ErrorData> {
-        tracing::info!(
-            code = "MCP_TOOL_INVOCATION",
-            kind = "audit_export_consent_set",
-            profile_id = %params.0.profile_id,
-            enabled = params.0.enabled,
-            redaction_policy = %params.0.redaction_policy,
-            "tool.invocation kind=audit_export_consent_set"
-        );
-        self.require_m3_permissions(
-            "audit_export_consent_set",
-            &crate::m3::audit_export::required_permissions_consent_set(&params.0),
-        )?;
-        let reflex_runtime = self.reflex_runtime()?;
-        set_audit_export_consent(&reflex_runtime, &params.0).map(Json)
-    }
-
-    #[tool(description = "Export a local redacted audit bundle after consent verification")]
+    #[tool(description = "Export a local redacted audit bundle after explicit consent")]
     pub async fn audit_export_bundle(
         &self,
         params: Parameters<AuditExportBundleParams>,
@@ -570,6 +548,7 @@ impl SynapseService {
             profile_id = %params.0.profile_id,
             output_path = %params.0.output_path,
             redaction_policy = ?params.0.redaction_policy,
+            consent_present = params.0.consent.is_some(),
             max_rows = params.0.max_rows,
             "tool.invocation kind=audit_export_bundle"
         );

@@ -112,15 +112,23 @@ async fn refresh_luanti_quality_from_stale_row(client: &mut StdioMcpClient) -> a
 }
 
 async fn enable_luanti_export_consent(client: &mut StdioMcpClient) -> anyhow::Result<()> {
-    let consent = structured(
+    let output = TempDir::new()?;
+    let export = structured(
         &client
             .tools_call(
-                "audit_export_consent_set",
-                json!({"profile_id": "luanti.minetest", "enabled": true}),
+                "audit_export_bundle",
+                json!({
+                    "profile_id": "luanti.minetest",
+                    "output_path": output.path().display().to_string(),
+                    "consent": {
+                        "enabled": true,
+                        "redaction_policy": "strict"
+                    }
+                }),
             )
             .await?,
     )?;
-    assert_eq!(consent["enabled"], true);
+    assert_eq!(export["consent_row"]["value"]["enabled"], true);
     Ok(())
 }
 

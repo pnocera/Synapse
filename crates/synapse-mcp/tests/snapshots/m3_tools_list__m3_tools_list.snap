@@ -3,7 +3,7 @@ source: crates/synapse-mcp/tests/m3_tools_list.rs
 expression: snapshot
 ---
 {
-  "count": 50,
+  "count": 49,
   "m3_defaults": [
     {
       "actual": 33,
@@ -154,8 +154,8 @@ expression: snapshot
     },
     {
       "actual": "strict",
-      "path": "inputSchema.properties.redaction_policy.default",
-      "tool": "audit_export_consent_set"
+      "path": "inputSchema.$defs.AuditExportConsentParams.properties.redaction_policy.default",
+      "tool": "audit_export_bundle"
     },
     {
       "actual": 100,
@@ -290,16 +290,6 @@ expression: snapshot
     {
       "actual_contains": "profile_id",
       "path": "inputSchema.required",
-      "tool": "audit_export_consent_set"
-    },
-    {
-      "actual_contains": "enabled",
-      "path": "inputSchema.required",
-      "tool": "audit_export_consent_set"
-    },
-    {
-      "actual_contains": "profile_id",
-      "path": "inputSchema.required",
       "tool": "audit_export_bundle"
     },
     {
@@ -362,7 +352,6 @@ expression: snapshot
     "audio_tail",
     "audio_transcribe",
     "audit_export_bundle",
-    "audit_export_consent_set",
     "audit_intelligence_query",
     "find",
     "health",
