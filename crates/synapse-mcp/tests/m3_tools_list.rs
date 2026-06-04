@@ -155,6 +155,24 @@ fn assert_motion_semantics_are_advertised(tools: &[Value]) -> anyhow::Result<()>
         "act_aim and act_drag must be removed from tools/list after act_stroke unification"
     );
 
+    let click = tool_by_name(tools, "act_click")?;
+    let click_description = click
+        .get("description")
+        .and_then(Value::as_str)
+        .context("act_click description missing")?;
+    ensure!(
+        click_description.contains("velocity_profile")
+            && click_description.contains("coordinate-move timing")
+            && click_description.contains("act_stroke"),
+        "act_click description must separate timing from spatial paths: {click_description}"
+    );
+    value_at(click, "inputSchema.properties.velocity_profile")
+        .context("act_click schema must advertise velocity_profile")?;
+    ensure!(
+        value_at(click, "inputSchema.properties.curve").is_err(),
+        "act_click schema must not advertise deprecated curve"
+    );
+
     let stroke_description = tool_by_name(tools, "act_stroke")?
         .get("description")
         .and_then(Value::as_str)
@@ -204,6 +222,13 @@ fn read_schema_defaults(readbacks: &mut Vec<Value>, tools: &[Value]) -> anyhow::
         "act_keymap",
         "inputSchema.properties.backend.default",
         &json!("auto"),
+    )?;
+    read_default(
+        readbacks,
+        tools,
+        "act_click",
+        "inputSchema.properties.velocity_profile.default",
+        &json!("natural"),
     )?;
     read_default(
         readbacks,

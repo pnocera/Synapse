@@ -118,7 +118,7 @@ fn coordinate_click_actions(params: &ActClickParams, screen_point: Point) -> Vec
         to: MouseTarget::Screen {
             point: screen_point,
         },
-        curve: params.curve.to_aim_curve(),
+        curve: params.velocity_profile.to_aim_curve(),
         duration_ms: params.duration_ms,
         backend: params.backend,
     });
@@ -508,7 +508,7 @@ mod tests {
 
     use super::*;
     use crate::m2::click::schema::{
-        ActClickTarget, ClickCurve, default_click_button, default_click_duration_ms,
+        ActClickTarget, ClickVelocityProfile, default_click_button, default_click_duration_ms,
         default_click_hold_ms,
     };
 
@@ -522,11 +522,12 @@ mod tests {
             button: default_click_button(),
             clicks: 2,
             modifiers: Vec::new(),
-            curve: ClickCurve::Natural,
+            velocity_profile: ClickVelocityProfile::Natural,
             duration_ms: default_click_duration_ms(),
             hold_ms: default_click_hold_ms(),
             backend: Backend::Software,
             use_invoke_pattern: false,
+            deprecated_curve_alias_used: false,
         };
         let screen_point = Point { x: 320, y: 240 };
         let before = "screen_point=(320,240), clicks=2";

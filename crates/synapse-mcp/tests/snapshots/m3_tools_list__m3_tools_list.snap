@@ -16,6 +16,11 @@ expression: snapshot
       "tool": "act_keymap"
     },
     {
+      "actual": "natural",
+      "path": "inputSchema.properties.velocity_profile.default",
+      "tool": "act_click"
+    },
+    {
       "actual": 120,
       "path": "inputSchema.properties.hold_ms.default",
       "tool": "act_click"

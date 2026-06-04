@@ -80,7 +80,7 @@ expression: snapshot
   "motion_defaults": [
     {
       "actual": "natural",
-      "path": "act_click.inputSchema.properties.curve.default",
+      "path": "act_click.inputSchema.properties.velocity_profile.default",
       "tool": "act_click"
     },
     {

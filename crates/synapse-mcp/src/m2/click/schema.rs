@@ -1,10 +1,10 @@
 use rmcp::schemars::JsonSchema;
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, de};
 use synapse_core::{AimCurve, AimNaturalParams, Backend, ElementId, MouseButton};
 
 const DEFAULT_CLICK_HOLD_MS: u32 = 120;
 
-#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[derive(Clone, Debug, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ActClickParams {
     pub target: ActClickTarget,
@@ -16,9 +16,9 @@ pub struct ActClickParams {
     pub clicks: u8,
     #[serde(default)]
     pub modifiers: Vec<ClickModifier>,
-    #[serde(default = "default_click_curve")]
-    #[schemars(default = "default_click_curve")]
-    pub curve: ClickCurve,
+    #[serde(default = "default_click_velocity_profile")]
+    #[schemars(default = "default_click_velocity_profile")]
+    pub velocity_profile: ClickVelocityProfile,
     #[serde(default = "default_click_duration_ms")]
     #[schemars(default = "default_click_duration_ms")]
     pub duration_ms: u32,
@@ -31,6 +31,9 @@ pub struct ActClickParams {
     #[serde(default = "default_use_invoke_pattern")]
     #[schemars(default = "default_use_invoke_pattern")]
     pub use_invoke_pattern: bool,
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub deprecated_curve_alias_used: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, JsonSchema)]
@@ -65,7 +68,7 @@ pub enum ClickModifier {
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, Deserialize, Serialize, JsonSchema)]
 #[serde(rename_all = "snake_case")]
-pub enum ClickCurve {
+pub enum ClickVelocityProfile {
     Natural,
     Instant,
     Linear,
@@ -84,7 +87,64 @@ pub struct ActClickResponse {
     pub elapsed_ms: u32,
 }
 
-impl ClickCurve {
+impl<'de> Deserialize<'de> for ActClickParams {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RawActClickParams {
+            target: ActClickTarget,
+            #[serde(default = "default_click_button")]
+            button: MouseButton,
+            #[serde(default = "default_click_count")]
+            clicks: u8,
+            #[serde(default)]
+            modifiers: Vec<ClickModifier>,
+            #[serde(default)]
+            velocity_profile: Option<ClickVelocityProfile>,
+            #[serde(default)]
+            curve: Option<ClickVelocityProfile>,
+            #[serde(default = "default_click_duration_ms")]
+            duration_ms: u32,
+            #[serde(default = "default_click_hold_ms")]
+            hold_ms: u32,
+            #[serde(default = "default_click_backend")]
+            backend: Backend,
+            #[serde(default = "default_use_invoke_pattern")]
+            use_invoke_pattern: bool,
+        }
+
+        let raw = RawActClickParams::deserialize(deserializer)?;
+        let (velocity_profile, deprecated_curve_alias_used) =
+            match (raw.velocity_profile, raw.curve) {
+                (Some(_), Some(_)) => {
+                    return Err(de::Error::custom(
+                        "act_click accepts velocity_profile or deprecated curve, not both",
+                    ));
+                }
+                (Some(profile), None) => (profile, false),
+                (None, Some(profile)) => (profile, true),
+                (None, None) => (default_click_velocity_profile(), false),
+            };
+
+        Ok(Self {
+            target: raw.target,
+            button: raw.button,
+            clicks: raw.clicks,
+            modifiers: raw.modifiers,
+            velocity_profile,
+            duration_ms: raw.duration_ms,
+            hold_ms: raw.hold_ms,
+            backend: raw.backend,
+            use_invoke_pattern: raw.use_invoke_pattern,
+            deprecated_curve_alias_used,
+        })
+    }
+}
+
+impl ClickVelocityProfile {
     pub(in crate::m2::click) const fn to_aim_curve(self) -> AimCurve {
         match self {
             Self::Natural => AimCurve::Natural {
@@ -105,8 +165,8 @@ pub(in crate::m2::click) const fn default_click_count() -> u8 {
     1
 }
 
-pub(in crate::m2::click) const fn default_click_curve() -> ClickCurve {
-    ClickCurve::Natural
+pub(in crate::m2::click) const fn default_click_velocity_profile() -> ClickVelocityProfile {
+    ClickVelocityProfile::Natural
 }
 
 pub(in crate::m2::click) const fn default_click_duration_ms() -> u32 {

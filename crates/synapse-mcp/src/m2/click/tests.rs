@@ -1,14 +1,15 @@
 use std::sync::Arc;
 
+use serde_json::json;
 use synapse_action::{ActionBackend, ActionEmitter, RecordingBackend};
 use tokio_util::sync::CancellationToken;
 
 use super::{
     act_click_with_handle,
     schema::{
-        ActClickParams, ActClickPointTarget, ActClickTarget, default_click_backend,
-        default_click_button, default_click_count, default_click_curve, default_click_duration_ms,
-        default_use_invoke_pattern,
+        ActClickParams, ActClickPointTarget, ActClickTarget, ClickVelocityProfile,
+        default_click_backend, default_click_button, default_click_count,
+        default_click_duration_ms, default_click_velocity_profile, default_use_invoke_pattern,
     },
 };
 
@@ -34,11 +35,12 @@ async fn coordinate_click_leaves_actor_held_state_empty() {
             button: default_click_button(),
             clicks: default_click_count(),
             modifiers: Vec::new(),
-            curve: default_click_curve(),
+            velocity_profile: default_click_velocity_profile(),
             duration_ms: default_click_duration_ms(),
             hold_ms: super::schema::default_click_hold_ms(),
             backend: default_click_backend(),
             use_invoke_pattern: default_use_invoke_pattern(),
+            deprecated_curve_alias_used: false,
         },
     )
     .await
@@ -65,4 +67,36 @@ async fn coordinate_click_leaves_actor_held_state_empty() {
         Ok(snapshot) => snapshot,
         Err(err) => panic!("join failed: {err}"),
     };
+}
+
+#[test]
+fn click_velocity_profile_accepts_hidden_legacy_curve_alias() {
+    let new_name: ActClickParams = serde_json::from_value(json!({
+        "target": {"x": 10, "y": 20},
+        "velocity_profile": "linear"
+    }))
+    .expect("velocity_profile should parse");
+    assert_eq!(new_name.velocity_profile, ClickVelocityProfile::Linear);
+    assert!(!new_name.deprecated_curve_alias_used);
+
+    let old_alias: ActClickParams = serde_json::from_value(json!({
+        "target": {"x": 10, "y": 20},
+        "curve": "ease_in_out"
+    }))
+    .expect("legacy curve alias should parse");
+    assert_eq!(old_alias.velocity_profile, ClickVelocityProfile::EaseInOut);
+    assert!(old_alias.deprecated_curve_alias_used);
+
+    let conflict = serde_json::from_value::<ActClickParams>(json!({
+        "target": {"x": 10, "y": 20},
+        "velocity_profile": "linear",
+        "curve": "natural"
+    }))
+    .expect_err("velocity_profile and curve together must fail closed");
+    assert!(
+        conflict
+            .to_string()
+            .contains("velocity_profile or deprecated curve"),
+        "{conflict}"
+    );
 }

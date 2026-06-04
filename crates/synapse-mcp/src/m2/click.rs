@@ -23,6 +23,14 @@ pub async fn act_click_with_handle(
     params: ActClickParams,
 ) -> Result<ActClickResponse, ErrorData> {
     validate_click_params(&params)?;
+    if params.deprecated_curve_alias_used {
+        tracing::warn!(
+            code = "M2_ACT_CLICK_DEPRECATED_CURVE_ALIAS",
+            kind = "act_click",
+            replacement = "velocity_profile",
+            "act_click deprecated curve alias accepted; use velocity_profile for coordinate-move timing"
+        );
+    }
     let started = Instant::now();
     let double_click_timing = cached_double_click_timing();
     // #686: a web element id (cdcd sentinel) routes through CDP instead of UIA.
@@ -48,7 +56,7 @@ pub async fn act_click_with_handle(
     let mut actions = Vec::with_capacity(usize::from(params.clicks) + 1);
     actions.push(Action::MouseMove {
         to: target,
-        curve: params.curve.to_aim_curve(),
+        curve: params.velocity_profile.to_aim_curve(),
         duration_ms: params.duration_ms,
         backend: params.backend,
     });

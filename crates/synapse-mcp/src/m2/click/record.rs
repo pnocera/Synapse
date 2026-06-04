@@ -103,7 +103,7 @@ fn event_label(event: &RecordedInput) -> String {
         } => format!(
             "mouse_move:{}:{}:{}",
             mouse_target_label(to),
-            curve_label(curve),
+            movement_profile_label(curve),
             duration_ms
         ),
         RecordedInput::MouseButtonDown { button } => format!("down:{}", button_label(*button)),
@@ -120,7 +120,7 @@ fn mouse_target_label(target: &MouseTarget) -> String {
     }
 }
 
-const fn curve_label(curve: &AimCurve) -> &'static str {
+const fn movement_profile_label(curve: &AimCurve) -> &'static str {
     match curve {
         AimCurve::Natural { .. } => "natural_fast",
         AimCurve::Instant => "instant",

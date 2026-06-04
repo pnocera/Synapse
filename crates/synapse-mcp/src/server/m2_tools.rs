@@ -20,7 +20,9 @@ const ACT_STROKE_FOREGROUND_MONITOR_INTERVAL_MS: u64 = 10;
 
 #[tool_router(router = m2_tool_router, vis = "pub(super)")]
 impl SynapseService {
-    #[tool(description = "Click a screen coordinate or UI Automation element")]
+    #[tool(
+        description = "Click a screen coordinate or UI Automation element; velocity_profile controls coordinate-move timing only, while explicit spatial paths belong to act_stroke"
+    )]
     pub async fn act_click(
         &self,
         params: Parameters<ActClickParams>,
