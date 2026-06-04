@@ -12,10 +12,15 @@
 use std::{path::Path, process::ExitCode, time::Duration};
 
 use anyhow::Context;
-use rmcp::transport::{
-    Transport,
-    async_rw::AsyncRwTransport,
-    streamable_http_client::{StreamableHttpClientTransport, StreamableHttpClientTransportConfig},
+use rmcp::{
+    model::ClientJsonRpcMessage,
+    transport::{
+        Transport,
+        async_rw::AsyncRwTransport,
+        streamable_http_client::{
+            StreamableHttpClientTransport, StreamableHttpClientTransportConfig,
+        },
+    },
 };
 
 /// How long to wait for a freshly spawned daemon to become healthy.
@@ -220,9 +225,67 @@ async fn ensure_daemon_running(bind: &str, db: Option<&Path>, token: &str) -> an
     );
 }
 
+fn new_daemon_transport(uri: &str, token: &str) -> StreamableHttpClientTransport<reqwest::Client> {
+    let config =
+        StreamableHttpClientTransportConfig::with_uri(uri.to_owned()).auth_header(token.to_owned());
+    StreamableHttpClientTransport::from_config(config)
+}
+
+async fn open_daemon_transport(
+    bind: &str,
+    uri: &str,
+    db: Option<&Path>,
+    token: &str,
+) -> anyhow::Result<StreamableHttpClientTransport<reqwest::Client>> {
+    ensure_daemon_running(bind, db, token)
+        .await
+        .context("ensure shared daemon is running")?;
+    Ok(new_daemon_transport(uri, token))
+}
+
+async fn reconnect_daemon_transport(
+    bind: &str,
+    uri: &str,
+    db: Option<&Path>,
+    token: &str,
+    saved_initialize: Option<&ClientJsonRpcMessage>,
+    saved_initialized: Option<&ClientJsonRpcMessage>,
+) -> anyhow::Result<StreamableHttpClientTransport<reqwest::Client>> {
+    let Some(initialize_message) = saved_initialize.cloned() else {
+        anyhow::bail!("MCP_CONNECT_RECONNECT_NO_INITIALIZE: cannot replay bridge handshake");
+    };
+    let Some(initialized_message) = saved_initialized.cloned() else {
+        anyhow::bail!("MCP_CONNECT_RECONNECT_NO_INITIALIZED: cannot replay bridge handshake");
+    };
+
+    let mut daemon = open_daemon_transport(bind, uri, db, token).await?;
+    daemon
+        .send(initialize_message)
+        .await
+        .context("replay initialize to daemon after reconnect")?;
+    let Some(_initialize_response) = tokio::time::timeout(DAEMON_READY_TIMEOUT, daemon.receive())
+        .await
+        .context("wait for replayed initialize response after daemon reconnect")?
+    else {
+        anyhow::bail!(
+            "MCP_CONNECT_RECONNECT_INIT_EOF: daemon closed before replayed initialize response"
+        );
+    };
+    daemon
+        .send(initialized_message)
+        .await
+        .context("replay initialized notification to daemon after reconnect")?;
+    tracing::info!(
+        code = "MCP_CONNECT_DAEMON_RECONNECTED",
+        bind = %bind,
+        "reconnected daemon transport and replayed MCP handshake"
+    );
+    Ok(daemon)
+}
+
 /// Run the stdio<->HTTP bridge against the daemon listening at `bind`
-/// (`host:port`). Exits 0 when the client closes stdin or the daemon stream
-/// ends.
+/// (`host:port`). Exits 0 when the client closes stdin; daemon stream loss is
+/// repaired by reopening the HTTP transport and replaying the MCP handshake.
 pub async fn run_connect(bind: &str, db: Option<&Path>) -> anyhow::Result<ExitCode> {
     let uri = format!("http://{bind}/mcp");
     let token = crate::http::load_token_value().context("load daemon bearer token for bridge")?;
@@ -237,24 +300,59 @@ pub async fn run_connect(bind: &str, db: Option<&Path>) -> anyhow::Result<ExitCo
     install_parent_watchdog();
 
     // Ensure exactly one shared daemon is up (spawn it if needed) before bridging.
-    ensure_daemon_running(bind, db, &token)
-        .await
-        .context("ensure shared daemon is running")?;
-
-    let config = StreamableHttpClientTransportConfig::with_uri(uri).auth_header(token);
-    let mut daemon = StreamableHttpClientTransport::from_config(config);
+    let mut daemon = open_daemon_transport(bind, &uri, db, &token).await?;
 
     let (stdin, stdout) = rmcp::transport::stdio();
     let mut client = AsyncRwTransport::new_server(stdin, stdout);
+    let mut client_message_count = 0usize;
+    let mut saved_initialize: Option<ClientJsonRpcMessage> = None;
+    let mut saved_initialized: Option<ClientJsonRpcMessage> = None;
 
     loop {
         tokio::select! {
             from_client = client.receive() => {
                 match from_client {
-                    Some(message) => daemon
-                        .send(message)
-                        .await
-                        .context("forward client->daemon message")?,
+                    Some(message) => {
+                        let message_index = client_message_count;
+                        client_message_count = client_message_count.saturating_add(1);
+                        match message_index {
+                            0 => saved_initialize = Some(message.clone()),
+                            1 => saved_initialized = Some(message.clone()),
+                            _ => {}
+                        }
+
+                        if let Err(error) = daemon.send(message.clone()).await {
+                            tracing::warn!(
+                                code = "MCP_CONNECT_CLIENT_SEND_FAILED",
+                                error = %error,
+                                "client->daemon send failed; attempting daemon reconnect"
+                            );
+                            if message_index == 0 {
+                                daemon = open_daemon_transport(bind, &uri, db, &token).await?;
+                                daemon
+                                    .send(message)
+                                    .await
+                                    .context("forward initial client->daemon message after reconnect")?;
+                            } else {
+                                daemon = reconnect_daemon_transport(
+                                    bind,
+                                    &uri,
+                                    db,
+                                    &token,
+                                    saved_initialize.as_ref(),
+                                    saved_initialized.as_ref(),
+                                )
+                                .await
+                                .context("reconnect daemon after client->daemon send failure")?;
+                                if message_index != 1 {
+                                    daemon
+                                        .send(message)
+                                        .await
+                                        .context("forward client->daemon message after reconnect")?;
+                                }
+                            }
+                        }
+                    }
                     None => {
                         tracing::info!(
                             code = "MCP_CONNECT_STDIN_EOF",
@@ -271,11 +369,20 @@ pub async fn run_connect(bind: &str, db: Option<&Path>) -> anyhow::Result<ExitCo
                         .await
                         .context("forward daemon->client message")?,
                     None => {
-                        tracing::info!(
+                        tracing::warn!(
                             code = "MCP_CONNECT_DAEMON_CLOSED",
-                            "daemon stream closed; shutting down bridge"
+                            "daemon stream closed; attempting reconnect"
                         );
-                        break;
+                        daemon = reconnect_daemon_transport(
+                            bind,
+                            &uri,
+                            db,
+                            &token,
+                            saved_initialize.as_ref(),
+                            saved_initialized.as_ref(),
+                        )
+                        .await
+                        .context("reconnect daemon after stream close")?;
                     }
                 }
             }
