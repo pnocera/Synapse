@@ -101,6 +101,24 @@ If `observe` reports `A11Y_CDP_UNREACHABLE`, relaunch through `act_launch` or
 provide a real debug port through `SYNAPSE_CDP_PORTS`. Do not keep retrying
 `find` against the collapsed UIA tree and treat missing page buttons as absent.
 
+## Recovering Truncated Observations
+
+Large browser, Electron, and IDE trees can exceed the default element budget.
+When `diagnostics.elements_truncated = true`, read
+`diagnostics.elements_page`:
+
+- `total`: element count available after the requested depth filter.
+- `offset`: first element index returned in this response.
+- `limit`: maximum elements requested for this response.
+- `next_offset`: pass this as `element_offset` on the next `observe` call to
+  fetch the next page. If it is absent, this page is the end of the current
+  result set.
+
+To expand one UIA subtree instead of paging the whole foreground tree, call
+`observe` with `subtree_root = "<element_id>"` and a larger `depth`. This
+re-snapshots that element as the root. Use this for native/UIA trees; CDP-backed
+web nodes should generally be recovered by paging or by a targeted `find`.
+
 Example sequence:
 
 ```text

@@ -944,6 +944,8 @@ impl SynapseService {
             include: include.to_vec(),
             depth: Some(depth),
             max_elements: Some(max_elements),
+            element_offset: None,
+            subtree_root: None,
             since_event_seq: None,
         };
         let include = observe_include(&params);

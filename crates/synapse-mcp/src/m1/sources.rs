@@ -631,6 +631,18 @@ pub fn window_input_from_hwnd(
     ))
 }
 
+#[cfg(not(windows))]
+pub fn element_input_from_id(
+    _element_id: &synapse_core::ElementId,
+    _depth: u32,
+    _mode: PerceptionMode,
+) -> Result<ObservationInput, ErrorData> {
+    Err(crate::m1::mcp_error(
+        synapse_core::error_codes::OBSERVE_NO_PERCEPTION_AVAILABLE,
+        "observe subtree_root targeting requires Windows UI Automation",
+    ))
+}
+
 #[cfg(all(unix, not(target_os = "macos")))]
 mod linux_x11 {
     use std::{collections::BTreeMap, fs, path::PathBuf, time::Instant};
@@ -881,6 +893,23 @@ pub fn window_input_from_hwnd(
 ) -> Result<ObservationInput, ErrorData> {
     let tree =
         synapse_a11y::snapshot_window_from_hwnd(hwnd, depth).map_err(|err| a11y_error(&err))?;
+    let foreground = windows_foreground_context(hwnd)?;
+    input_from_tree_and_foreground(tree, foreground, mode)
+}
+
+#[cfg(windows)]
+pub fn element_input_from_id(
+    element_id: &synapse_core::ElementId,
+    depth: u32,
+    mode: PerceptionMode,
+) -> Result<ObservationInput, ErrorData> {
+    let tree = synapse_a11y::snapshot_element(element_id, depth).map_err(|err| a11y_error(&err))?;
+    let hwnd = element_id
+        .parts()
+        .map_err(|err| {
+            crate::m1::mcp_error(synapse_core::error_codes::OBSERVE_INTERNAL, err.to_string())
+        })?
+        .hwnd;
     let foreground = windows_foreground_context(hwnd)?;
     input_from_tree_and_foreground(tree, foreground, mode)
 }

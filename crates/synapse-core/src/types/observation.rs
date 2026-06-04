@@ -306,9 +306,21 @@ pub struct ObservationDiagnostics {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub web_path: Option<WebPerceptionPath>,
     pub elements_truncated: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub elements_page: Option<ObservationElementsPage>,
     pub entities_truncated: bool,
     pub size_bytes: u32,
     pub size_estimate_tokens: u32,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ObservationElementsPage {
+    pub total: usize,
+    pub offset: usize,
+    pub limit: usize,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub next_offset: Option<usize>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize, JsonSchema)]

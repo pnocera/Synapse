@@ -221,6 +221,7 @@ fn sample_observation() -> Observation {
             cdp: None,
             web_path: None,
             elements_truncated: false,
+            elements_page: None,
             entities_truncated: false,
             size_bytes: 2048,
             size_estimate_tokens: 512,

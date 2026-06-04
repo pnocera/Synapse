@@ -29,7 +29,9 @@ pub use ocr::read_text_request_from_bgra;
 pub use ocr::{ResolvedReadTextRequest, read_text_request_uncached, resolve_read_text_request};
 use search::{element_match, entity_match};
 pub use sources::{FsRecentTracker, populate_clipboard_summary, populate_fs_recent};
-use sources::{platform_input, synthetic_notepad_input, window_input_from_hwnd};
+use sources::{
+    element_input_from_id, platform_input, synthetic_notepad_input, window_input_from_hwnd,
+};
 
 pub type SharedM1State = Arc<Mutex<M1State>>;
 const MIN_CAPTURE_UPDATE_INTERVAL_MS: u64 = 16;
@@ -168,6 +170,10 @@ pub struct ObserveParams {
     pub depth: Option<u32>,
     #[serde(default)]
     pub max_elements: Option<usize>,
+    #[serde(default)]
+    pub element_offset: Option<usize>,
+    #[serde(default)]
+    pub subtree_root: Option<ElementId>,
     #[serde(default)]
     pub since_event_seq: Option<u64>,
 }
@@ -340,6 +346,7 @@ pub fn observe_include(params: &ObserveParams) -> ObserveInclude {
             diagnostics: false,
             max_subtree_depth: 2,
             max_subtree_nodes: 60,
+            element_offset: 0,
             max_entities: 60,
         }
     };
@@ -358,6 +365,7 @@ pub fn observe_include(params: &ObserveParams) -> ObserveInclude {
     }
     include.max_subtree_depth = params.depth.unwrap_or(2).min(6);
     include.max_subtree_nodes = params.max_elements.unwrap_or(60).clamp(1, 500);
+    include.element_offset = params.element_offset.unwrap_or(0).min(100_000);
     include
 }
 
@@ -387,6 +395,17 @@ pub fn current_input(state: &M1State, depth: u32) -> Result<ObservationInput, Er
     input.capture_config = Some(state.active_capture_config.clone());
     input.capture_runtime = Some(state.capture_runtime_readback());
     Ok(input)
+}
+
+pub fn observe_input(
+    state: &M1State,
+    params: &ObserveParams,
+) -> Result<ObservationInput, ErrorData> {
+    let depth = params.depth.unwrap_or(2).min(6);
+    if let Some(element_id) = &params.subtree_root {
+        return element_input_from_id(element_id, depth, state.perception_mode);
+    }
+    current_input(state, depth)
 }
 
 /// Attaches CDP (when reachable) and folds the page's DOM/accessibility tree

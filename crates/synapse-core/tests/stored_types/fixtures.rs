@@ -438,6 +438,7 @@ pub fn diagnostics() -> ObservationDiagnostics {
         cdp: None,
         web_path: None,
         elements_truncated: false,
+        elements_page: None,
         entities_truncated: false,
         size_bytes: 256,
         size_estimate_tokens: 64,

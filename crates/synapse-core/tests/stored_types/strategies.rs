@@ -279,6 +279,7 @@ pub fn diagnostics_strategy() -> impl Strategy<Value = ObservationDiagnostics> {
                 cdp: None,
                 web_path: None,
                 elements_truncated: false,
+                elements_page: None,
                 entities_truncated: false,
                 size_bytes,
                 size_estimate_tokens,

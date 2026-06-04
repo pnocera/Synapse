@@ -238,6 +238,89 @@ fn include_flags_are_independently_testable() -> TestResult {
 }
 
 #[test]
+fn element_pagination_exposes_next_offset_until_last_page() -> TestResult {
+    let mut input = notepad_input();
+    input.elements = (0..7)
+        .map(|index| AccessibleNode {
+            element_id: element_id(0x1234, &format!("0000002a{index:08x}")),
+            parent: None,
+            name: format!("Node {index}"),
+            role: "Text".to_owned(),
+            automation_id: None,
+            value: None,
+            bbox: Rect {
+                x: index,
+                y: 20,
+                w: 100,
+                h: 30,
+            },
+            enabled: true,
+            focused: false,
+            patterns: Vec::new(),
+            children_count: 0,
+            depth: 1,
+        })
+        .collect();
+
+    let first = ObservationAssembler::new().assemble(
+        ObserveInclude {
+            max_subtree_nodes: 3,
+            ..ObserveInclude::default()
+        },
+        input.clone(),
+    )?;
+    regression_log(format_args!(
+        "regression_check=observe_pagination edge=first after=names:{:?} page:{:?}",
+        first
+            .elements
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        first.diagnostics.elements_page
+    ))?;
+    assert!(first.diagnostics.elements_truncated);
+    assert_eq!(first.elements.len(), 3);
+    assert_eq!(
+        first
+            .diagnostics
+            .elements_page
+            .as_ref()
+            .and_then(|page| page.next_offset),
+        Some(3)
+    );
+
+    let last = ObservationAssembler::new().assemble(
+        ObserveInclude {
+            max_subtree_nodes: 3,
+            element_offset: 6,
+            ..ObserveInclude::default()
+        },
+        input,
+    )?;
+    regression_log(format_args!(
+        "regression_check=observe_pagination edge=last after=names:{:?} page:{:?}",
+        last.elements
+            .iter()
+            .map(|node| node.name.as_str())
+            .collect::<Vec<_>>(),
+        last.diagnostics.elements_page
+    ))?;
+    assert!(!last.diagnostics.elements_truncated);
+    assert_eq!(last.elements.len(), 1);
+    assert_eq!(last.elements[0].name, "Node 6");
+    let page = last
+        .diagnostics
+        .elements_page
+        .as_ref()
+        .expect("element page metadata should be present");
+    assert_eq!(page.total, 7);
+    assert_eq!(page.offset, 6);
+    assert_eq!(page.limit, 3);
+    assert_eq!(page.next_offset, None);
+    Ok(())
+}
+
+#[test]
 fn assembler_all_sensors_unavailable_fails_closed() -> TestResult {
     let input = ObservationInput::new(notepad_input().foreground);
     regression_log(format_args!(

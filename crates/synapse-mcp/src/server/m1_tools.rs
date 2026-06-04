@@ -1,8 +1,8 @@
 use super::{
     ErrorData, FindParams, FindResponse, Health, Json, ObserveParams, Parameters, ReadTextParams,
     SetCaptureTargetParams, SetCaptureTargetResponse, SetPerceptionModeParams,
-    SetPerceptionModeResponse, SynapseService, current_input, empty_input_schema, mcp_error,
-    observe_include, populate_audio_summary, populate_clipboard_summary,
+    SetPerceptionModeResponse, SynapseService, empty_input_schema, mcp_error, observe_include,
+    observe_input, populate_audio_summary, populate_clipboard_summary,
     populate_detection_from_state, populate_fs_recent, read_text_request_uncached,
     resolve_read_text_request, set_capture_target_in_state, set_perception_mode_in_state, tool,
     tool_router,
@@ -65,7 +65,7 @@ impl SynapseService {
         // Scope the (non-Send) state guard so it is released before any await.
         let mut input = {
             let state = self.m1_state()?;
-            let mut input = current_input(&state, params.0.depth.unwrap_or(2).min(6))?;
+            let mut input = observe_input(&state, &params.0)?;
             if include.fs && input.fs_recent.is_empty() {
                 populate_fs_recent(&mut input, &state.fs_recent_tracker);
             }

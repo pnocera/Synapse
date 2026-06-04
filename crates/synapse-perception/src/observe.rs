@@ -8,8 +8,8 @@ use chrono::Utc;
 use synapse_core::{
     AccessibleNode, AudioContext, CaptureRuntimeReadback, CdpDiagnostics, ClipboardSummary,
     DetectedEntity, EventSummary, FocusedElement, ForegroundContext, FsEvent, HudReadings,
-    Observation, ObservationCaptureConfig, ObservationDiagnostics, PerceptionMode, SensorStatus,
-    WebPerceptionPath,
+    Observation, ObservationCaptureConfig, ObservationDiagnostics, ObservationElementsPage,
+    PerceptionMode, SensorStatus, WebPerceptionPath,
 };
 
 use crate::{PerceptionError, PerceptionResult};
@@ -35,6 +35,7 @@ pub struct ObserveInclude {
     pub diagnostics: bool,
     pub max_subtree_depth: u32,
     pub max_subtree_nodes: usize,
+    pub element_offset: usize,
     pub max_entities: usize,
 }
 
@@ -52,6 +53,7 @@ impl Default for ObserveInclude {
             diagnostics: true,
             max_subtree_depth: DEFAULT_MAX_DEPTH,
             max_subtree_nodes: DEFAULT_MAX_ELEMENTS,
+            element_offset: 0,
             max_entities: DEFAULT_MAX_ENTITIES,
         }
     }
@@ -72,6 +74,7 @@ impl ObserveInclude {
             diagnostics: true,
             max_subtree_depth: DEFAULT_MAX_DEPTH,
             max_subtree_nodes: DEFAULT_MAX_ELEMENTS,
+            element_offset: 0,
             max_entities: DEFAULT_MAX_ENTITIES,
         }
     }
@@ -189,7 +192,8 @@ impl ObservationAssembler {
             .unwrap_or_else(|| auto_mode_with_a11y(&input.foreground, &summary));
         let cdp = input.cdp.clone();
         let web_path = input.web_path;
-        let (elements, elements_truncated) = filter_elements(input.elements, include);
+        let (elements, elements_truncated, elements_page) =
+            filter_elements(input.elements, include);
         let (entities, entities_truncated) = filter_entities(input.entities, include);
         let mut observation = Observation {
             seq: self.next_seq.fetch_add(1, Ordering::Relaxed),
@@ -238,6 +242,7 @@ impl ObservationAssembler {
                 cdp,
                 web_path,
                 elements_truncated,
+                elements_page,
                 entities_truncated,
                 size_bytes: 0,
                 size_estimate_tokens: 0,
@@ -330,18 +335,34 @@ pub fn is_known_game_process(process_name: &str) -> bool {
 fn filter_elements(
     mut elements: Vec<AccessibleNode>,
     include: ObserveInclude,
-) -> (Vec<AccessibleNode>, bool) {
+) -> (Vec<AccessibleNode>, bool, Option<ObservationElementsPage>) {
+    let original_total = elements.len();
     if !include.elements {
-        return (Vec::new(), !elements.is_empty());
+        let truncated = !elements.is_empty();
+        let page = truncated.then(|| ObservationElementsPage {
+            total: original_total,
+            offset: 0,
+            limit: 0,
+            next_offset: Some(0),
+        });
+        return (Vec::new(), truncated, page);
     }
     let before = elements.len();
     elements.retain(|node| node.depth <= include.max_subtree_depth);
     let depth_truncated = elements.len() != before;
-    let count_truncated = elements.len() > include.max_subtree_nodes;
-    if count_truncated {
-        elements.truncate(include.max_subtree_nodes);
-    }
-    (elements, depth_truncated || count_truncated)
+    let total = elements.len();
+    let offset = include.element_offset.min(total);
+    let limit = include.max_subtree_nodes;
+    let next_offset = offset.checked_add(limit).filter(|next| *next < total);
+    let paged = next_offset.is_some();
+    let page = Some(ObservationElementsPage {
+        total,
+        offset,
+        limit,
+        next_offset,
+    });
+    let elements = elements.into_iter().skip(offset).take(limit).collect();
+    (elements, depth_truncated || paged, page)
 }
 
 fn filter_entities(
