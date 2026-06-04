@@ -19,7 +19,10 @@ async fn profile_registry_query_report_summarizes_registry_quality_consent_and_q
     let db_path_string = db_path.to_string_lossy().to_string();
     let mut client = StdioMcpClient::launch_and_init_with_env(
         Some(logs.path()),
-        &[("SYNAPSE_DB", db_path_string.as_str())],
+        &[
+            ("SYNAPSE_DEBUG_TOOLS", "1"),
+            ("SYNAPSE_DB", db_path_string.as_str()),
+        ],
     )
     .await?;
 

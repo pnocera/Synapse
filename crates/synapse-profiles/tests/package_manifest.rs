@@ -232,9 +232,18 @@ fn package_manifest_rejects_manifest_digest_mismatch() -> TestResult {
 fn package_manifest_rejects_remote_execution_permission() -> TestResult {
     let path = fixture("happy_package_manifest.toml");
     let bytes = fs::read_to_string(&path)?;
-    let unsafe_bytes = bytes.replace(
-        "local_only = true\nremote_server_allowed = false",
-        "local_only = false\nremote_server_allowed = true",
+    let unsafe_bytes = bytes
+        .replace(
+            "local_only = true\r\nremote_server_allowed = false",
+            "local_only = false\r\nremote_server_allowed = true",
+        )
+        .replace(
+            "local_only = true\nremote_server_allowed = false",
+            "local_only = false\nremote_server_allowed = true",
+        );
+    assert_ne!(
+        unsafe_bytes, bytes,
+        "fixture did not contain the expected execution permission block"
     );
     let result = synapse_profiles::parse_package_manifest_bytes(&path, unsafe_bytes.as_bytes());
     let Err(error) = result else {
