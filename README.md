@@ -137,7 +137,7 @@ Excel, Paint, Explorer, Terminal, and more — and it gets *better with use*:
 - **`profile_quality_refresh`** turns those real outcomes into a quality score
   (Wilson-bounded success rate) per profile.
 - **`audit_intelligence_query`** summarizes what worked, by app and by tool.
-- The **`profile_registry_*`** and **`profile_authoring_*`** families let you
+- **`profile_registry_query`** and **`profile_authoring_decide`** let you
   author, sign, install, roll back, and share profile packages — with consent and
   provenance built in.
 
@@ -358,7 +358,7 @@ At a glance:
 | **Delta-first reality** | `reality_baseline` · `observe_delta` · `reality_audit` |
 | **Action** | `act_click` · `act_type` · `act_press` · `act_keymap` · `act_stroke` · `act_scroll` · `act_pad` · `act_clipboard` · `act_combo` · `act_run_shell` · `act_launch` · `release_all` |
 | **Reflexes** | `reflex_register` · `reflex_cancel` · `reflex_list` · `reflex_history` |
-| **Profiles, registry & audit** | `profile_list` · `profile_activate` · `profile_quality_refresh` · `profile_authoring_*` · `profile_registry_*` · `audit_intelligence_query` · `audit_export_bundle` |
+| **Profiles, registry & audit** | `profile_list` · `profile_activate` · `profile_quality_refresh` · `profile_authoring_decide` · `profile_registry_query` · `audit_intelligence_query` · `audit_export_bundle` |
 | **Storage & health** | `health` · `storage_inspect` · `storage_gc_once` · `storage_pressure_sample` · `replay_record` |
 | **EverQuest domain pack** | `everquest_*` — state, memory, planner guard, route plan, map sensor, trajectory/episode export, ContextGraph bridge, predictive model, surprise detection, scorecard |
 
