@@ -63,6 +63,22 @@ By default the automation profile is temporary and per launch. Set
 example to keep a login session across runs. Do not point it at the user's
 primary browser profile.
 
+## Optional UIA Renderer Accessibility
+
+CDP is the preferred browser DOM path. When you specifically need the Chromium
+renderer accessibility tree through UIA, opt in to
+`--force-renderer-accessibility` for a Synapse-launched browser:
+
+- Per launch: set `force_renderer_accessibility = true` on `act_launch`.
+- Per host/session: set `SYNAPSE_FORCE_RENDERER_ACCESSIBILITY` to `1`, `true`,
+  `yes`, or `on`.
+- Per launch override: set `force_renderer_accessibility = false` to ignore the
+  environment opt-in for that call.
+
+This has a cost: Chromium builds and maintains a fuller renderer accessibility
+tree. Keep it off by default and enable it only for browser sessions where the
+UIA fallback matters.
+
 ## Agent Workflow
 
 For browser work, prefer this loop:

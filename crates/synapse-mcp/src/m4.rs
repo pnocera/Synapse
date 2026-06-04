@@ -356,6 +356,13 @@ pub struct ActLaunchParams {
     #[serde(default)]
     #[schemars(default)]
     pub cdp_debug: Option<bool>,
+    /// Opt-in Chromium UIA renderer accessibility fallback (#689).
+    /// `Some(true)` adds `--force-renderer-accessibility` for Chromium-family
+    /// launches unless the caller already supplied that flag. `Some(false)`
+    /// disables the env opt-in. `None` follows `SYNAPSE_FORCE_RENDERER_ACCESSIBILITY`.
+    #[serde(default)]
+    #[schemars(default)]
+    pub force_renderer_accessibility: Option<bool>,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
@@ -390,6 +397,7 @@ pub fn launch_request_details(params: &ActLaunchParams) -> serde_json::Value {
         "timeout_ms": params.timeout_ms,
         "idempotency_key_present": params.idempotency_key.is_some(),
         "cdp_debug": params.cdp_debug,
+        "force_renderer_accessibility": params.force_renderer_accessibility,
         "windows_new_console": launch_target_needs_new_console(&params.target),
         "request_sha256": launch_request_sha256(params).ok(),
     })
@@ -429,6 +437,7 @@ pub fn launch_process_history_row(
         "launched_at": response.launched_at,
         "reason": response.reason,
         "cdp_debug": params.cdp_debug,
+        "force_renderer_accessibility": params.force_renderer_accessibility,
         "cdp_debug_port": response.cdp_debug_port,
         "cdp_endpoint": response.cdp_endpoint,
         "cdp_user_data_dir": response.cdp_user_data_dir,
@@ -737,6 +746,8 @@ fn launch_request_sha256(params: &ActLaunchParams) -> Result<String, ErrorData> 
         "env": params.env,
         "wait_for_window_title_regex": params.wait_for_window_title_regex,
         "timeout_ms": params.timeout_ms,
+        "cdp_debug": params.cdp_debug,
+        "force_renderer_accessibility": params.force_renderer_accessibility,
     });
     let bytes = serde_json::to_vec(&payload).map_err(|error| {
         mcp_error(
@@ -798,10 +809,12 @@ pub async fn launch(
     // observe/find can read the page DOM without manual flags. Augment the spawn
     // command only (policy already matched the original command above).
     let cdp_launch = chromium_cdp_launch(&params);
-    let spawn_params = match &cdp_launch {
-        Some(launch) => params_with_cdp_args(&params, launch),
-        None => params.clone(),
-    };
+    let force_renderer_accessibility = chromium_renderer_accessibility_arg(&params);
+    let spawn_params = params_with_chromium_launch_args(
+        &params,
+        cdp_launch.as_ref(),
+        force_renderer_accessibility,
+    );
     let pid = spawn_launch_child(&spawn_params)?;
     let cdp = if let Some(launch) = &cdp_launch {
         resolve_launched_cdp_port(pid, launch).await
@@ -858,6 +871,54 @@ struct ChromiumCdpLaunch {
     injected_args: Vec<String>,
 }
 
+/// Optional Chromium renderer accessibility launch flag (#689).
+///
+/// Kept independent from CDP injection: callers may opt into the UIA renderer
+/// tree even when they opt out of CDP, and CDP users may opt in to improve the
+/// non-CDP fallback path.
+fn chromium_renderer_accessibility_arg(params: &ActLaunchParams) -> Option<String> {
+    if !force_renderer_accessibility_enabled(params) {
+        return None;
+    }
+    if !synapse_a11y::is_chromium_family(&launch_target_file_name(&params.target)) {
+        return None;
+    }
+    let already_configured = params
+        .args
+        .iter()
+        .any(|arg| arg.eq_ignore_ascii_case("--force-renderer-accessibility"));
+    if already_configured {
+        tracing::info!(
+            code = "M4_ACT_LAUNCH_RENDERER_A11Y_SKIPPED",
+            reason = "caller_supplied_force_renderer_accessibility",
+            "act_launch leaving caller-specified renderer accessibility flag untouched"
+        );
+        return None;
+    }
+    Some("--force-renderer-accessibility".to_owned())
+}
+
+fn force_renderer_accessibility_enabled(params: &ActLaunchParams) -> bool {
+    match params.force_renderer_accessibility {
+        Some(value) => value,
+        None => truthy_env("SYNAPSE_FORCE_RENDERER_ACCESSIBILITY"),
+    }
+}
+
+fn truthy_env(name: &str) -> bool {
+    std::env::var(name)
+        .ok()
+        .map(|value| truthy_value(&value))
+        .unwrap_or(false)
+}
+
+fn truthy_value(value: &str) -> bool {
+    matches!(
+        value.trim().to_ascii_lowercase().as_str(),
+        "1" | "true" | "yes" | "on"
+    )
+}
+
 /// Outcome of opening + discovering a launched browser's CDP port.
 #[derive(Clone, Debug, Default)]
 struct LaunchedCdp {
@@ -903,11 +964,20 @@ fn chromium_cdp_launch(params: &ActLaunchParams) -> Option<ChromiumCdpLaunch> {
     })
 }
 
-/// A fresh ActLaunchParams whose args are `injected_args` followed by the
-/// caller's args (so a positional URL still parses).
-fn params_with_cdp_args(params: &ActLaunchParams, launch: &ChromiumCdpLaunch) -> ActLaunchParams {
+/// A fresh ActLaunchParams whose injected browser args precede the caller's
+/// args (so a positional URL still parses).
+fn params_with_chromium_launch_args(
+    params: &ActLaunchParams,
+    cdp_launch: Option<&ChromiumCdpLaunch>,
+    force_renderer_accessibility: Option<String>,
+) -> ActLaunchParams {
     let mut spawn_params = params.clone();
-    let mut args = launch.injected_args.clone();
+    let mut args = cdp_launch
+        .map(|launch| launch.injected_args.clone())
+        .unwrap_or_default();
+    if let Some(arg) = force_renderer_accessibility {
+        args.push(arg);
+    }
     args.extend(params.args.iter().cloned());
     spawn_params.args = args;
     spawn_params
@@ -2263,6 +2333,7 @@ mod tests {
             timeout_ms,
             idempotency_key: None,
             cdp_debug: None,
+            force_renderer_accessibility: None,
         }
     }
 
@@ -2294,7 +2365,7 @@ mod tests {
                 .contains("synapse-cdp-profiles")
         );
 
-        let spawn_params = params_with_cdp_args(&params, &launch);
+        let spawn_params = params_with_chromium_launch_args(&params, Some(&launch), None);
         // Injected flags precede the caller's URL so the positional arg parses.
         assert_eq!(
             spawn_params.args.first().map(String::as_str),
@@ -2329,6 +2400,65 @@ mod tests {
 
         let with_profile = launch_params("chrome.exe", vec!["--user-data-dir=C:\\my"], 10_000);
         assert!(chromium_cdp_launch(&with_profile).is_none());
+    }
+
+    #[test]
+    fn chromium_renderer_accessibility_is_opt_in_and_chromium_only() {
+        let mut params = launch_params("chrome.exe", vec!["https://example.com"], 10_000);
+        println!(
+            "readback=renderer_a11y edge=default before=force_renderer_accessibility:{:?}",
+            params.force_renderer_accessibility
+        );
+        assert!(chromium_renderer_accessibility_arg(&params).is_none());
+
+        params.force_renderer_accessibility = Some(true);
+        let arg = chromium_renderer_accessibility_arg(&params);
+        println!(
+            "readback=renderer_a11y edge=opt_in before=args:{:?} after=arg:{arg:?}",
+            params.args
+        );
+        assert_eq!(arg.as_deref(), Some("--force-renderer-accessibility"));
+
+        let launch = chromium_cdp_launch(&params).expect("chrome should still get CDP launch");
+        let spawn_params = params_with_chromium_launch_args(&params, Some(&launch), arg);
+        assert!(
+            spawn_params
+                .args
+                .iter()
+                .any(|arg| arg == "--force-renderer-accessibility")
+        );
+        assert_eq!(
+            spawn_params.args.last().map(String::as_str),
+            Some("https://example.com")
+        );
+
+        let mut notepad = launch_params("notepad.exe", vec![], 10_000);
+        notepad.force_renderer_accessibility = Some(true);
+        assert!(chromium_renderer_accessibility_arg(&notepad).is_none());
+    }
+
+    #[test]
+    fn chromium_renderer_accessibility_respects_caller_flag_and_truthy_env_values() {
+        let mut caller = launch_params(
+            "msedge.exe",
+            vec!["--force-renderer-accessibility", "https://example.com"],
+            10_000,
+        );
+        caller.force_renderer_accessibility = Some(true);
+        assert!(
+            chromium_renderer_accessibility_arg(&caller).is_none(),
+            "caller-supplied flag must not be duplicated"
+        );
+
+        for value in ["1", "true", "yes", "on", " TRUE "] {
+            assert!(truthy_value(value), "{value:?} should enable env opt-in");
+        }
+        for value in ["", "0", "false", "off", "no", "maybe"] {
+            assert!(
+                !truthy_value(value),
+                "{value:?} should not enable env opt-in"
+            );
+        }
     }
 
     #[test]
