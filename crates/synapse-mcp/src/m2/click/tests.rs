@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use serde_json::json;
 use synapse_action::{ActionBackend, ActionEmitter, RecordingBackend};
+use synapse_core::{Backend, error_codes};
 use tokio_util::sync::CancellationToken;
 
 use super::{
@@ -69,6 +70,54 @@ async fn coordinate_click_leaves_actor_held_state_empty() {
         Ok(snapshot) => snapshot,
         Err(err) => panic!("join failed: {err}"),
     };
+}
+
+#[tokio::test]
+async fn element_click_rejects_non_mouse_element_transports_before_delivery() {
+    for backend in [Backend::Hardware, Backend::Vigem] {
+        let cancel = CancellationToken::new();
+        let action_backend: Arc<dyn ActionBackend> = Arc::new(RecordingBackend::new());
+        let (handle, _snapshot_handle, join) =
+            ActionEmitter::spawn_with_backend(cancel.clone(), action_backend);
+        let error = match act_click_with_handle(
+            handle,
+            None,
+            ActClickParams {
+                target: ActClickTarget::Element(super::schema::ActClickElementTarget {
+                    element_id: synapse_core::ElementId::parse("0x1000:0000002a00000001")
+                        .expect("synthetic element id must be valid"),
+                }),
+                button: default_click_button(),
+                clicks: default_click_count(),
+                modifiers: Vec::new(),
+                velocity_profile: default_click_velocity_profile(),
+                duration_ms: default_click_duration_ms(),
+                hold_ms: super::schema::default_click_hold_ms(),
+                backend,
+                use_invoke_pattern: default_use_invoke_pattern(),
+                verify_delta: false,
+                verify_timeout_ms: super::schema::default_verify_timeout_ms(),
+                deprecated_curve_alias_used: false,
+            },
+        )
+        .await
+        {
+            Ok(response) => panic!("element click should reject backend {backend:?}: {response:?}"),
+            Err(error) => error,
+        };
+        let code = error
+            .data
+            .as_ref()
+            .and_then(|data| data.get("code"))
+            .and_then(serde_json::Value::as_str);
+        println!(
+            "readback=act_click_element_backend edge=reject_explicit_backend backend={backend:?} code={code:?} message={}",
+            error.message
+        );
+        assert_eq!(code, Some(error_codes::ACTION_BACKEND_UNAVAILABLE));
+        cancel.cancel();
+        let _ = join.await;
+    }
 }
 
 #[test]

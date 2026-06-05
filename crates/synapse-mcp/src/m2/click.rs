@@ -38,9 +38,11 @@ pub async fn act_click_with_handle(
     if let ActClickTarget::Element(element) = &params.target
         && let Some(backend) = synapse_a11y::cdp_backend_from_element_id(&element.element_id)
     {
+        ensure_element_transport_backend_allowed(&params, "CDP")?;
         return execute_cdp_click(&params, element, backend, double_click_timing, started).await;
     }
     if let ActClickTarget::Element(element) = &params.target {
+        ensure_element_transport_backend_allowed(&params, "UIA")?;
         return element::execute_element_click(
             handle,
             &params,
@@ -200,6 +202,21 @@ fn validate_click_params(params: &ActClickParams) -> Result<(), ErrorData> {
     if !params.modifiers.is_empty() {
         return Err(action_error_to_mcp(&ActionError::BackendUnavailable {
             detail: "act_click modifiers are not wired in the M2 click schema slice".to_owned(),
+        }));
+    }
+    Ok(())
+}
+
+fn ensure_element_transport_backend_allowed(
+    params: &ActClickParams,
+    transport: &str,
+) -> Result<(), ErrorData> {
+    if matches!(params.backend, Backend::Vigem | Backend::Hardware) {
+        return Err(action_error_to_mcp(&ActionError::BackendUnavailable {
+            detail: format!(
+                "act_click element target requested backend={} but {transport} element delivery is only valid for backend=auto or backend=software; no fallback delivery was attempted",
+                backend_used_name(params.backend)
+            ),
         }));
     }
     Ok(())
