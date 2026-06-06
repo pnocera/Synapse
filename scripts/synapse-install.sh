@@ -57,6 +57,7 @@ install_synapse_token_loader() {
 # Synapse MCP bearer token bridge for WSL agent clients.
 # Source this from shell startup before launching Codex/Claude HTTP MCP clients.
 _synapse_mcp_token_path="$TOKEN_WSL"
+_synapse_mcp_surface_path="$SURFACE_WSL"
 
 if [ ! -r "\$_synapse_mcp_token_path" ]; then
     printf '%s\n' "SYNAPSE_MCP_TOKEN_UNREADABLE path=\$_synapse_mcp_token_path remediation=start the Windows synapse-mcp daemon or repair token generation" >&2
@@ -70,7 +71,22 @@ else
     unset _synapse_mcp_token
 fi
 
-unset _synapse_mcp_token_path
+if [ ! -r "\$_synapse_mcp_surface_path" ]; then
+    printf '%s\n' "SYNAPSE_CODEX_TOOL_SURFACE_SNAPSHOT_MISSING path=\$_synapse_mcp_surface_path remediation=run scripts/synapse-setup.ps1 to write the current daemon tools/list fingerprint before starting Codex" >&2
+else
+    _synapse_mcp_surface_hash="\$(sed -n 's/.*"tool_surface_sha256"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F][0-9a-fA-F]*\)".*/\1/p' "\$_synapse_mcp_surface_path" | head -n 1)"
+    _synapse_mcp_surface_count="\$(sed -n 's/.*"tool_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "\$_synapse_mcp_surface_path" | head -n 1)"
+    if [ -z "\$_synapse_mcp_surface_hash" ]; then
+        printf '%s\n' "SYNAPSE_CODEX_TOOL_SURFACE_SNAPSHOT_INVALID path=\$_synapse_mcp_surface_path remediation=delete the invalid snapshot and rerun scripts/synapse-setup.ps1" >&2
+    else
+        export SYNAPSE_TOOL_SURFACE_HASH_AT_CODEX_START="\$_synapse_mcp_surface_hash"
+        export SYNAPSE_TOOL_SURFACE_TOOL_COUNT_AT_CODEX_START="\$_synapse_mcp_surface_count"
+        export SYNAPSE_TOOL_SURFACE_SNAPSHOT_AT_CODEX_START="\$_synapse_mcp_surface_path"
+    fi
+    unset _synapse_mcp_surface_hash _synapse_mcp_surface_count
+fi
+
+unset _synapse_mcp_token_path _synapse_mcp_surface_path
 EOF
   chmod 600 "$loader"
 
@@ -117,6 +133,8 @@ TOKEN_WSL="$(wslpath "$("$CMD" /c 'echo %APPDATA%' 2>/dev/null | tr -d '\r')")/s
 [ -f "$TOKEN_WSL" ] || die "Token not found at $TOKEN_WSL — the Windows setup did not complete."
 TOK="$(tr -d '\r\n' < "$TOKEN_WSL")"
 [ -n "$TOK" ] || die "Token at $TOKEN_WSL is empty."
+SURFACE_WSL="$(wslpath "$("$CMD" /c 'echo %APPDATA%' 2>/dev/null | tr -d '\r')")/synapse/codex-tool-surface.json"
+[ -f "$SURFACE_WSL" ] || die "Codex tool-surface snapshot not found at $SURFACE_WSL — the Windows setup did not complete."
 install_synapse_token_loader
 
 # --- 4. Wire WSL-side clients to Streamable HTTP ----------------------------

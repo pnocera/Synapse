@@ -82,6 +82,7 @@ param(
     [string]$ProfilesDir = "$env:USERPROFILE\.cargo\bin\profiles",
     [string]$LogDir      = "$env:LOCALAPPDATA\synapse\logs",
     [string]$TokenPath   = "$env:APPDATA\synapse\token.txt",
+    [string]$CodexToolSurfaceSnapshotPath = "$env:APPDATA\synapse\codex-tool-surface.json",
     [string]$TaskName    = 'SynapseMcpDaemon',
     [string]$MaintenanceLockPath = "$env:LOCALAPPDATA\synapse\setup-maintenance.lock.json",
     [ValidateRange(1, 1440)][int]$BuildTimeoutMinutes = 90,
@@ -97,6 +98,7 @@ function Step($m)  { Write-Host "`n=== $m ===" -ForegroundColor Cyan }
 function Die($m)   { throw "[synapse-setup] FATAL: $m" }
 
 $processTokenAtStart = $env:SYNAPSE_BEARER_TOKEN
+$processToolSurfaceHashAtStart = $env:SYNAPSE_TOOL_SURFACE_HASH_AT_CODEX_START
 $script:SynapseSetupMaintenanceLockStream = $null
 
 function Get-ProcessLineage {
@@ -640,9 +642,29 @@ if ($synapseHasConfig) {
   if ($env:SYNAPSE_BEARER_TOKEN -ne $synapseToken) {
     $env:SYNAPSE_BEARER_TOKEN = $synapseToken
   }
+  $synapseToolSurfacePath = Join-Path $env:APPDATA 'synapse\codex-tool-surface.json'
+  if (-not (Test-Path $synapseToolSurfacePath)) {
+    Write-Error "SYNAPSE_CODEX_TOOL_SURFACE_SNAPSHOT_MISSING path=$synapseToolSurfacePath remediation=run scripts\synapse-setup.ps1 to write the current daemon tools/list fingerprint before starting Codex"
+    exit 1
+  }
+  try {
+    $synapseToolSurface = Get-Content -Raw $synapseToolSurfacePath | ConvertFrom-Json
+  } catch {
+    Write-Error "SYNAPSE_CODEX_TOOL_SURFACE_SNAPSHOT_UNREADABLE path=$synapseToolSurfacePath error=$($_.Exception.Message) remediation=repair the snapshot file or rerun scripts\synapse-setup.ps1"
+    exit 1
+  }
+  $synapseToolSurfaceHash = [string]$synapseToolSurface.tool_surface_sha256
+  if ([string]::IsNullOrWhiteSpace($synapseToolSurfaceHash)) {
+    Write-Error "SYNAPSE_CODEX_TOOL_SURFACE_SNAPSHOT_INVALID path=$synapseToolSurfacePath remediation=delete the invalid snapshot and rerun scripts\synapse-setup.ps1"
+    exit 1
+  }
+  $env:SYNAPSE_TOOL_SURFACE_HASH_AT_CODEX_START = $synapseToolSurfaceHash
+  $env:SYNAPSE_TOOL_SURFACE_TOOL_COUNT_AT_CODEX_START = [string]$synapseToolSurface.tool_count
+  $env:SYNAPSE_TOOL_SURFACE_SNAPSHOT_AT_CODEX_START = $synapseToolSurfacePath
 }
 Remove-Variable synapseConfigPath,synapseTokenPath,synapseHasConfig -ErrorAction SilentlyContinue
 Remove-Variable synapseTokenRaw,synapseToken -ErrorAction SilentlyContinue
+Remove-Variable synapseToolSurfacePath,synapseToolSurface,synapseToolSurfaceHash -ErrorAction SilentlyContinue
 # Synapse MCP token loader: end
 
 $exe=""
@@ -686,12 +708,13 @@ GOTO start
 SET dp0=%~dp0
 EXIT /b
 :start
-SETLOCAL
+SETLOCAL EnableExtensions EnableDelayedExpansion
 CALL :find_dp0
 
 REM Synapse MCP token loader: begin
 SET "_synapse_cfg=%USERPROFILE%\.codex\config.toml"
 SET "_synapse_tok=%APPDATA%\synapse\token.txt"
+SET "_synapse_surface=%APPDATA%\synapse\codex-tool-surface.json"
 SET "_synapse_has_cfg="
 IF EXIST "%_synapse_cfg%" (
   %SystemRoot%\System32\findstr.exe /R /C:"^\[mcp_servers\.synapse\]" "%_synapse_cfg%" >NUL 2>NUL
@@ -707,12 +730,36 @@ IF DEFINED _synapse_has_cfg (
     ECHO SYNAPSE_CODEX_TOKEN_EMPTY path=%_synapse_tok% remediation=delete the empty token and rerun scripts\synapse-setup.ps1 1>&2
     EXIT /B 1
   )
-  IF NOT "%SYNAPSE_BEARER_TOKEN%"=="%_synapse_file_token%" SET "SYNAPSE_BEARER_TOKEN=%_synapse_file_token%"
+  IF NOT "%SYNAPSE_BEARER_TOKEN%"=="!_synapse_file_token!" SET "SYNAPSE_BEARER_TOKEN=!_synapse_file_token!"
+  IF NOT EXIST "%_synapse_surface%" (
+    ECHO SYNAPSE_CODEX_TOOL_SURFACE_SNAPSHOT_MISSING path=%_synapse_surface% remediation=run scripts\synapse-setup.ps1 to write the current daemon tools/list fingerprint before starting Codex 1>&2
+    EXIT /B 1
+  )
+  SET "_synapse_surface_hash="
+  SET "_synapse_surface_count="
+  FOR /F "tokens=2 delims=:" %%A IN ('%SystemRoot%\System32\findstr.exe /C:tool_surface_sha256 "%_synapse_surface%"') DO SET "_synapse_surface_hash=%%~A"
+  FOR /F "tokens=2 delims=:" %%A IN ('%SystemRoot%\System32\findstr.exe /C:tool_count "%_synapse_surface%"') DO SET "_synapse_surface_count=%%~A"
+  SET "_synapse_surface_hash=!_synapse_surface_hash:"=!"
+  SET "_synapse_surface_hash=!_synapse_surface_hash:,=!"
+  SET "_synapse_surface_hash=!_synapse_surface_hash: =!"
+  SET "_synapse_surface_count=!_synapse_surface_count:"=!"
+  SET "_synapse_surface_count=!_synapse_surface_count:,=!"
+  SET "_synapse_surface_count=!_synapse_surface_count: =!"
+  IF NOT DEFINED _synapse_surface_hash (
+    ECHO SYNAPSE_CODEX_TOOL_SURFACE_SNAPSHOT_INVALID path=%_synapse_surface% remediation=delete the invalid snapshot and rerun scripts\synapse-setup.ps1 1>&2
+    EXIT /B 1
+  )
+  SET "SYNAPSE_TOOL_SURFACE_HASH_AT_CODEX_START=!_synapse_surface_hash!"
+  SET "SYNAPSE_TOOL_SURFACE_TOOL_COUNT_AT_CODEX_START=!_synapse_surface_count!"
+  SET "SYNAPSE_TOOL_SURFACE_SNAPSHOT_AT_CODEX_START=%_synapse_surface%"
 )
 SET "_synapse_cfg="
 SET "_synapse_tok="
+SET "_synapse_surface="
 SET "_synapse_has_cfg="
 SET "_synapse_file_token="
+SET "_synapse_surface_hash="
+SET "_synapse_surface_count="
 REM Synapse MCP token loader: end
 
 IF EXIST "%dp0%\node.exe" (
@@ -722,7 +769,7 @@ IF EXIST "%dp0%\node.exe" (
   SET PATHEXT=%PATHEXT:;.JS;=;%
 )
 
-endLocal & SET "SYNAPSE_BEARER_TOKEN=%SYNAPSE_BEARER_TOKEN%" & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@openai\codex\bin\codex.js" %*
+endLocal & SET "SYNAPSE_BEARER_TOKEN=%SYNAPSE_BEARER_TOKEN%" & SET "SYNAPSE_TOOL_SURFACE_HASH_AT_CODEX_START=%SYNAPSE_TOOL_SURFACE_HASH_AT_CODEX_START%" & SET "SYNAPSE_TOOL_SURFACE_TOOL_COUNT_AT_CODEX_START=%SYNAPSE_TOOL_SURFACE_TOOL_COUNT_AT_CODEX_START%" & SET "SYNAPSE_TOOL_SURFACE_SNAPSHOT_AT_CODEX_START=%SYNAPSE_TOOL_SURFACE_SNAPSHOT_AT_CODEX_START%" & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\node_modules\@openai\codex\bin\codex.js" %*
 '@
         Copy-Item $cmdPath "$cmdPath.synapse-bak" -Force
         Set-Content -Path $cmdPath -Value $cmd -Encoding ascii
@@ -761,8 +808,23 @@ if [ -f "$synapse_cfg" ] && grep -Eq '^\[mcp_servers\.synapse\]' "$synapse_cfg";
         SYNAPSE_BEARER_TOKEN="$synapse_file_token"
         export SYNAPSE_BEARER_TOKEN
     fi
+    synapse_surface="$APPDATA/synapse/codex-tool-surface.json"
+    if [ ! -r "$synapse_surface" ]; then
+        printf '%s\n' "SYNAPSE_CODEX_TOOL_SURFACE_SNAPSHOT_MISSING path=$synapse_surface remediation=run scripts/synapse-setup.ps1 to write the current daemon tools/list fingerprint before starting Codex" >&2
+        exit 1
+    fi
+    synapse_surface_hash=$(sed -n 's/.*"tool_surface_sha256"[[:space:]]*:[[:space:]]*"\([0-9a-fA-F][0-9a-fA-F]*\)".*/\1/p' "$synapse_surface" | head -n 1)
+    synapse_surface_count=$(sed -n 's/.*"tool_count"[[:space:]]*:[[:space:]]*\([0-9][0-9]*\).*/\1/p' "$synapse_surface" | head -n 1)
+    if [ -z "$synapse_surface_hash" ]; then
+        printf '%s\n' "SYNAPSE_CODEX_TOOL_SURFACE_SNAPSHOT_INVALID path=$synapse_surface remediation=delete the invalid snapshot and rerun scripts/synapse-setup.ps1" >&2
+        exit 1
+    fi
+    SYNAPSE_TOOL_SURFACE_HASH_AT_CODEX_START="$synapse_surface_hash"
+    SYNAPSE_TOOL_SURFACE_TOOL_COUNT_AT_CODEX_START="$synapse_surface_count"
+    SYNAPSE_TOOL_SURFACE_SNAPSHOT_AT_CODEX_START="$synapse_surface"
+    export SYNAPSE_TOOL_SURFACE_HASH_AT_CODEX_START SYNAPSE_TOOL_SURFACE_TOOL_COUNT_AT_CODEX_START SYNAPSE_TOOL_SURFACE_SNAPSHOT_AT_CODEX_START
 fi
-unset synapse_cfg synapse_tok synapse_file_token
+unset synapse_cfg synapse_tok synapse_file_token synapse_surface synapse_surface_hash synapse_surface_count
 # Synapse MCP token loader: end
 
 case `uname` in
@@ -982,6 +1044,285 @@ function Read-SynapseHealthForRestartGuard {
     } catch {
         [pscustomobject]@{ Ok = $false; Health = $null; Error = $_.Exception.Message }
     }
+}
+
+function ConvertTo-SynapseCanonicalValue {
+    param([AllowNull()][object]$Value)
+
+    if ($null -eq $Value) {
+        return $null
+    }
+
+    if ($Value -is [System.Collections.IDictionary]) {
+        $ordered = [ordered]@{}
+        foreach ($key in @($Value.Keys | Sort-Object { [string]$_ })) {
+            $ordered[[string]$key] = ConvertTo-SynapseCanonicalValue -Value $Value[$key]
+        }
+        return $ordered
+    }
+
+    if ($Value -is [System.Management.Automation.PSCustomObject]) {
+        $ordered = [ordered]@{}
+        foreach ($prop in @($Value.PSObject.Properties | Sort-Object Name)) {
+            $ordered[$prop.Name] = ConvertTo-SynapseCanonicalValue -Value $prop.Value
+        }
+        return $ordered
+    }
+
+    if ($Value -is [System.Collections.IEnumerable] -and $Value -isnot [string]) {
+        $items = New-Object System.Collections.ArrayList
+        foreach ($item in $Value) {
+            [void]$items.Add((ConvertTo-SynapseCanonicalValue -Value $item))
+        }
+        return ,($items.ToArray())
+    }
+
+    return $Value
+}
+
+function Get-SynapseCanonicalJson {
+    param([AllowNull()][object]$Value)
+
+    $canonical = ConvertTo-SynapseCanonicalValue -Value $Value
+    return ($canonical | ConvertTo-Json -Depth 100 -Compress)
+}
+
+function Get-SynapseSha256Hex {
+    param([Parameter(Mandatory=$true)][string]$Text)
+
+    $sha = [System.Security.Cryptography.SHA256]::Create()
+    try {
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Text)
+        return (($sha.ComputeHash($bytes) | ForEach-Object { $_.ToString('x2') }) -join '')
+    } finally {
+        $sha.Dispose()
+    }
+}
+
+function Read-SynapseMcpSseJsonResponse {
+    param(
+        [Parameter(Mandatory=$true)][string]$Content,
+        [Parameter(Mandatory=$true)][string]$Operation,
+        [int]$ExpectedId = 0
+    )
+
+    $trimmed = $Content.Trim()
+    if ($trimmed.StartsWith('{')) {
+        $message = $trimmed | ConvertFrom-Json
+    } else {
+        $normalized = ($Content -replace "`r`n", "`n") -replace "`r", "`n"
+        $message = $null
+        foreach ($frame in @($normalized -split "`n`n")) {
+            $dataLines = @()
+            foreach ($line in @($frame -split "`n")) {
+                if ($line.StartsWith('data:')) {
+                    $dataLines += $line.Substring(5).TrimStart()
+                }
+            }
+            $data = ($dataLines -join "`n").Trim()
+            if ($data.StartsWith('{')) {
+                $message = $data | ConvertFrom-Json
+                break
+            }
+        }
+        if ($null -eq $message) {
+            $prefix = if ($Content.Length -gt 240) { $Content.Substring(0, 240) } else { $Content }
+            Die "SYNAPSE_MCP_SSE_PARSE_FAILED operation=$Operation content_prefix=$prefix remediation=streamable HTTP returned no JSON data frame; inspect daemon logs and MCP transport compatibility"
+        }
+    }
+
+    if ($ExpectedId -ne 0 -and [int]$message.id -ne $ExpectedId) {
+        Die "SYNAPSE_MCP_JSONRPC_ID_MISMATCH operation=$Operation expected_id=$ExpectedId actual_id=$($message.id) remediation=the daemon returned an unexpected JSON-RPC response; inspect streamable HTTP session handling"
+    }
+    if ($null -ne $message.error) {
+        $errorJson = $message.error | ConvertTo-Json -Compress -Depth 8
+        Die "SYNAPSE_MCP_JSONRPC_ERROR operation=$Operation error=$errorJson remediation=repair the daemon MCP endpoint before accepting setup"
+    }
+
+    return $message
+}
+
+function Invoke-SynapseMcpHttpPost {
+    param(
+        [Parameter(Mandatory=$true)][string]$Bind,
+        [Parameter(Mandatory=$true)][string]$Token,
+        [Parameter(Mandatory=$true)][string]$Method,
+        [Parameter(Mandatory=$true)]$Params,
+        [int]$Id = 0,
+        [string]$SessionId
+    )
+
+    $headers = @{
+        Authorization = "Bearer $Token"
+        Accept = 'application/json, text/event-stream'
+    }
+    if (-not [string]::IsNullOrWhiteSpace($SessionId)) {
+        $headers['Mcp-Session-Id'] = $SessionId
+    }
+
+    $request = [ordered]@{
+        jsonrpc = '2.0'
+        method = $Method
+        params = $Params
+    }
+    if ($Id -ne 0) {
+        $request['id'] = $Id
+    }
+    $body = $request | ConvertTo-Json -Depth 30 -Compress
+
+    try {
+        return Invoke-WebRequest `
+            -Uri "http://$Bind/mcp" `
+            -Method Post `
+            -Headers $headers `
+            -ContentType 'application/json' `
+            -Body $body `
+            -TimeoutSec 8 `
+            -UseBasicParsing `
+            -ErrorAction Stop
+    } catch {
+        Die "SYNAPSE_MCP_TOOL_SURFACE_READ_FAILED stage=$Method bind=$Bind error=$($_.Exception.Message) remediation=repair streamable HTTP MCP before accepting setup"
+    }
+}
+
+function Close-SynapseMcpSetupSession {
+    param(
+        [Parameter(Mandatory=$true)][string]$Bind,
+        [Parameter(Mandatory=$true)][string]$Token,
+        [Parameter(Mandatory=$true)][string]$SessionId
+    )
+
+    $headers = @{
+        Authorization = "Bearer $Token"
+        Accept = 'application/json, text/event-stream'
+        'Mcp-Session-Id' = $SessionId
+    }
+
+    try {
+        Invoke-WebRequest -Uri "http://$Bind/mcp" -Method Delete -Headers $headers -TimeoutSec 5 -UseBasicParsing -ErrorAction Stop | Out-Null
+    } catch {
+        Info "WARN: SYNAPSE_MCP_TOOL_SURFACE_SESSION_DELETE_FAILED bind=$Bind session_id=$SessionId error=$($_.Exception.Message) remediation=inspect health active_sessions and daemon logs; setup did not leave a process behind"
+    }
+}
+
+function Read-SynapseDaemonToolSurface {
+    param(
+        [Parameter(Mandatory=$true)][string]$Bind,
+        [Parameter(Mandatory=$true)][string]$Token,
+        [Parameter(Mandatory=$true)]$Health
+    )
+
+    $sessionId = $null
+    try {
+        $initParams = [ordered]@{
+            protocolVersion = '2025-06-18'
+            capabilities = @{}
+            clientInfo = [ordered]@{ name = 'synapse-setup'; version = '0' }
+        }
+        $initResponse = Invoke-SynapseMcpHttpPost -Bind $Bind -Token $Token -Method 'initialize' -Params $initParams -Id 1
+        $sessionId = @($initResponse.Headers['Mcp-Session-Id'])[0]
+        if ([string]::IsNullOrWhiteSpace($sessionId)) {
+            Die "SYNAPSE_MCP_TOOL_SURFACE_SESSION_MISSING bind=$Bind remediation=streamable HTTP initialize did not return Mcp-Session-Id; repair daemon transport"
+        }
+        $initMessage = Read-SynapseMcpSseJsonResponse -Content $initResponse.Content -Operation 'initialize' -ExpectedId 1
+        if ($null -eq $initMessage.result -or $null -eq $initMessage.result.capabilities) {
+            Die "SYNAPSE_MCP_INITIALIZE_RESULT_INVALID bind=$Bind session_id=$sessionId remediation=daemon initialize response is missing capabilities"
+        }
+
+        Invoke-SynapseMcpHttpPost -Bind $Bind -Token $Token -SessionId $sessionId -Method 'notifications/initialized' -Params @{} | Out-Null
+
+        $tools = @()
+        $cursor = $null
+        $requestId = 2
+        do {
+            $listParams = @{}
+            if (-not [string]::IsNullOrWhiteSpace($cursor)) {
+                $listParams['cursor'] = $cursor
+            }
+            $listResponse = Invoke-SynapseMcpHttpPost -Bind $Bind -Token $Token -SessionId $sessionId -Method 'tools/list' -Params $listParams -Id $requestId
+            $listMessage = Read-SynapseMcpSseJsonResponse -Content $listResponse.Content -Operation 'tools/list' -ExpectedId $requestId
+            if ($null -eq $listMessage.result -or $null -eq $listMessage.result.tools) {
+                Die "SYNAPSE_MCP_TOOLS_LIST_RESULT_INVALID bind=$Bind session_id=$sessionId request_id=$requestId remediation=tools/list did not return a tools array"
+            }
+            $tools += @($listMessage.result.tools)
+            $cursor = [string]$listMessage.result.nextCursor
+            $requestId += 1
+        } while (-not [string]::IsNullOrWhiteSpace($cursor))
+
+        $sortedTools = @($tools | Sort-Object name)
+        $toolNames = @($sortedTools | ForEach-Object { [string]$_.name })
+        $canonical = Get-SynapseCanonicalJson -Value ([ordered]@{
+            mcp_surface = 'tools/list'
+            tools = $sortedTools
+        })
+        $hash = Get-SynapseSha256Hex -Text $canonical
+        $daemonPid = try { [int]$Health.pid } catch { $null }
+
+        return [pscustomobject]([ordered]@{
+            schema = 1
+            created_at_utc = [DateTime]::UtcNow.ToString('o')
+            bind = $Bind
+            daemon_pid = $daemonPid
+            tool_count = $toolNames.Count
+            tool_surface_sha256 = $hash
+            tool_names = $toolNames
+        })
+    } finally {
+        if (-not [string]::IsNullOrWhiteSpace($sessionId)) {
+            Close-SynapseMcpSetupSession -Bind $Bind -Token $Token -SessionId $sessionId
+        }
+    }
+}
+
+function Write-SynapseCodexToolSurfaceSnapshot {
+    param(
+        [Parameter(Mandatory=$true)][string]$Path,
+        [Parameter(Mandatory=$true)]$Surface
+    )
+
+    try {
+        $dir = Split-Path -Parent $Path
+        New-Item -ItemType Directory -Force -Path $dir | Out-Null
+        ($Surface | ConvertTo-Json -Depth 20) | Set-Content -LiteralPath $Path -Encoding utf8
+    } catch {
+        Die "SYNAPSE_CODEX_TOOL_SURFACE_SNAPSHOT_WRITE_FAILED path=$Path error=$($_.Exception.Message) remediation=repair permissions on the Synapse appdata directory before starting Codex"
+    }
+    Info "Codex tool-surface snapshot written path=$Path daemon_pid=$($Surface.daemon_pid) tool_count=$($Surface.tool_count) tool_surface_sha256=$($Surface.tool_surface_sha256)"
+}
+
+function Assert-CodexCurrentProcessToolSurfaceFresh {
+    param(
+        [AllowNull()]$CodexAncestor,
+        [Parameter(Mandatory=$true)]$CurrentSurface,
+        [AllowNull()][string]$ProcessHashAtStart,
+        [Parameter(Mandatory=$true)][string]$SnapshotPath
+    )
+
+    if ($null -eq $CodexAncestor) {
+        return
+    }
+
+    $currentHash = [string]$CurrentSurface.tool_surface_sha256
+    if ([string]::IsNullOrWhiteSpace($ProcessHashAtStart)) {
+        Die ("SYNAPSE_CODEX_TOOL_SURFACE_STALE codex_pid={0} tool_surface_at_process_start=missing current_tool_surface_sha256={1} tool_count={2} daemon_pid={3} snapshot={4} remediation=restart Codex through the patched codex launcher; this current Codex process cannot prove it loaded the current tools/list and cannot hot-add newly installed MCP tools." -f `
+            $CodexAncestor.ProcessId,
+            $currentHash,
+            $CurrentSurface.tool_count,
+            $CurrentSurface.daemon_pid,
+            $SnapshotPath)
+    }
+
+    if ($ProcessHashAtStart -ne $currentHash) {
+        Die ("SYNAPSE_CODEX_TOOL_SURFACE_STALE codex_pid={0} tool_surface_at_process_start=mismatch start_tool_surface_sha256={1} current_tool_surface_sha256={2} tool_count={3} daemon_pid={4} snapshot={5} remediation=restart Codex through the patched codex launcher; Windows cannot update this already-running Codex process's MCP tool namespace after daemon tools/list changes." -f `
+            $CodexAncestor.ProcessId,
+            $ProcessHashAtStart,
+            $currentHash,
+            $CurrentSurface.tool_count,
+            $CurrentSurface.daemon_pid,
+            $SnapshotPath)
+    }
+
+    Info "Codex current-process tool surface matches daemon snapshot codex_pid=$($CodexAncestor.ProcessId) tool_surface_sha256=$currentHash tool_count=$($CurrentSurface.tool_count)"
 }
 
 function Request-SynapseGracefulShutdown {
@@ -1536,6 +1877,9 @@ if ($cmdAncestor) {
     Die "SYNAPSE_DAEMON_CMD_ANCESTOR_FORBIDDEN pid=$healthPid cmd_pid=$($cmdAncestor.ProcessId) lineage=$lineageText remediation=rerun setup after removing legacy daemon launchers; daemon must not be launched through cmd.exe."
 }
 
+$toolSurface = Read-SynapseDaemonToolSurface -Bind $Bind -Token $token -Health $h
+Write-SynapseCodexToolSurfaceSnapshot -Path $CodexToolSurfaceSnapshotPath -Surface $toolSurface
+
 # ---------------------------------------------------------------------------
 # 8. Wire the Windows-side MCP clients
 # ---------------------------------------------------------------------------
@@ -1591,6 +1935,11 @@ $codexAncestor = $lineage | Where-Object {
 if ($codexAncestor -and $processTokenAtStart -ne $token) {
     Die ("SYNAPSE_CODEX_CURRENT_PROCESS_ENV_STALE codex_pid={0} token_at_process_start={1} token_file={2} remediation=restart Codex through the patched codex launcher; Windows cannot update an already-running Codex process environment, so this current session cannot authenticate mcp__synapse yet." -f $codexAncestor.ProcessId, ($(if ([string]::IsNullOrWhiteSpace($processTokenAtStart)) { 'missing' } else { 'mismatch' })), $TokenPath)
 }
+Assert-CodexCurrentProcessToolSurfaceFresh `
+    -CodexAncestor $codexAncestor `
+    -CurrentSurface $toolSurface `
+    -ProcessHashAtStart $processToolSurfaceHashAtStart `
+    -SnapshotPath $CodexToolSurfaceSnapshotPath
 
 Step "Done"
 Info "Synapse daemon is live on http://$Bind (MCP: http://$Bind/mcp)."
