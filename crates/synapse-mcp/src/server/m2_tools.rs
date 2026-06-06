@@ -10,14 +10,21 @@ use super::{
     release_all_with_handles, tool, tool_router, validate_act_stroke_params,
 };
 use crate::m1::mcp_error;
-use crate::m2::{ActClickPostcondition, act_stroke_error_details, act_stroke_request_details};
+use crate::m2::{
+    ActClickPostcondition, ActClickTierAttempt, CLICK_REASON_NO_OBSERVED_DELTA,
+    act_click_postmessage_with_params, act_stroke_error_details, act_stroke_request_details,
+    attach_click_tier_attempts, click_params_can_route_background_first, click_tier_failed,
+};
 use rmcp::{RoleServer, model::ErrorCode, service::RequestContext};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest as _, Sha256};
-use std::time::Duration;
-use synapse_action::{ACTION_QUEUE_CAPACITY, ActionError, ResolvedBackend, TokenBucketSnapshot};
+use std::{sync::Arc, time::Duration};
+use synapse_action::{
+    ACTION_QUEUE_CAPACITY, ActionError, ActionHandle, RecordingBackend, ResolvedBackend,
+    TokenBucketSnapshot,
+};
 use synapse_core::{
     AccessibleNode, Action, Backend, ForegroundContext, PathPoint, PathSpec, Point, Rect,
     StrokeMotionModel, StrokeTiming, VelocityProfile, error_codes,
@@ -142,21 +149,17 @@ impl SynapseService {
         let verify_timeout_ms = params.verify_timeout_ms;
         let (handle, recording, _connection_closed_cancel) =
             self.m2_action_context_for_request(&request_context)?;
-        let result = match act_click_with_handle(handle, recording, params).await {
-            Ok(mut response) => {
-                if let Some(before) = before_delta_signature {
-                    match self.verify_click_delta(before, verify_timeout_ms).await {
-                        Ok(postcondition) => {
-                            response.postcondition = postcondition;
-                            Ok(response)
-                        }
-                        Err(error) => Err(error),
-                    }
-                } else {
-                    Ok(response)
-                }
-            }
-            Err(error) => Err(error),
+        let result = if let Some(before) = before_delta_signature {
+            self.act_click_with_verified_router(
+                handle,
+                recording,
+                params,
+                before,
+                verify_timeout_ms,
+            )
+            .await
+        } else {
+            act_click_with_handle(handle, recording, params).await
         };
         self.audit_action_result("act_click", &result)?;
         result.map(Json)
@@ -685,6 +688,158 @@ struct ClickElementFingerprint {
 }
 
 impl SynapseService {
+    async fn act_click_with_verified_router(
+        &self,
+        handle: ActionHandle,
+        recording: Option<Arc<RecordingBackend>>,
+        params: ActClickParams,
+        before: ClickDeltaSignature,
+        verify_timeout_ms: u32,
+    ) -> Result<ActClickResponse, ErrorData> {
+        match act_click_with_handle(handle.clone(), recording.clone(), params.clone()).await {
+            Ok(response) => {
+                match self
+                    .verify_click_response(response, before.clone(), verify_timeout_ms)
+                    .await
+                {
+                    Ok(response) => Ok(response),
+                    Err(error)
+                        if can_route_click_element_background_first(
+                            &params,
+                            recording.as_ref(),
+                        ) && should_try_next_click_tier(&error) =>
+                    {
+                        let tier_attempts = click_tier_attempts_from_error(&error);
+                        self.act_click_try_postmessage_then_foreground(
+                            handle,
+                            recording,
+                            params,
+                            before,
+                            verify_timeout_ms,
+                            tier_attempts,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error)
+                if can_route_click_element_background_first(&params, recording.as_ref())
+                    && should_try_next_click_tier(&error) =>
+            {
+                let tier_attempts = click_tier_attempts_from_error(&error);
+                self.act_click_try_postmessage_then_foreground(
+                    handle,
+                    recording,
+                    params,
+                    before,
+                    verify_timeout_ms,
+                    tier_attempts,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn act_click_try_postmessage_then_foreground(
+        &self,
+        handle: ActionHandle,
+        recording: Option<Arc<RecordingBackend>>,
+        params: ActClickParams,
+        before: ClickDeltaSignature,
+        verify_timeout_ms: u32,
+        tier_attempts: Vec<ActClickTierAttempt>,
+    ) -> Result<ActClickResponse, ErrorData> {
+        match act_click_postmessage_with_params(&params, tier_attempts).await {
+            Ok(response) => {
+                match self
+                    .verify_click_response(response, before.clone(), verify_timeout_ms)
+                    .await
+                {
+                    Ok(response) => Ok(response),
+                    Err(error) if should_try_next_click_tier(&error) => {
+                        let tier_attempts = click_tier_attempts_from_error(&error);
+                        self.act_click_try_foreground(
+                            handle,
+                            recording,
+                            params,
+                            before,
+                            verify_timeout_ms,
+                            tier_attempts,
+                        )
+                        .await
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            Err(error) if should_try_next_click_tier(&error) => {
+                let tier_attempts = click_tier_attempts_from_error(&error);
+                self.act_click_try_foreground(
+                    handle,
+                    recording,
+                    params,
+                    before,
+                    verify_timeout_ms,
+                    tier_attempts,
+                )
+                .await
+            }
+            Err(error) => Err(error),
+        }
+    }
+
+    async fn act_click_try_foreground(
+        &self,
+        handle: ActionHandle,
+        recording: Option<Arc<RecordingBackend>>,
+        mut params: ActClickParams,
+        before: ClickDeltaSignature,
+        verify_timeout_ms: u32,
+        prior_attempts: Vec<ActClickTierAttempt>,
+    ) -> Result<ActClickResponse, ErrorData> {
+        params.use_invoke_pattern = false;
+        match act_click_with_handle(handle, recording, params).await {
+            Ok(mut response) => {
+                let current_attempts = std::mem::take(&mut response.tier_attempts);
+                response.tier_attempts =
+                    merge_click_tier_attempts(prior_attempts, current_attempts);
+                self.verify_click_response(response, before, verify_timeout_ms)
+                    .await
+            }
+            Err(error) => {
+                let mut tier_attempts = prior_attempts;
+                tier_attempts.extend(click_tier_attempts_from_error(&error));
+                Err(attach_click_tier_attempts(error, tier_attempts))
+            }
+        }
+    }
+
+    async fn verify_click_response(
+        &self,
+        mut response: ActClickResponse,
+        before: ClickDeltaSignature,
+        verify_timeout_ms: u32,
+    ) -> Result<ActClickResponse, ErrorData> {
+        match self.verify_click_delta(before, verify_timeout_ms).await {
+            Ok(postcondition) => {
+                response.postcondition = postcondition;
+                Ok(response)
+            }
+            Err(error) => {
+                let mut tier_attempts = response.tier_attempts.clone();
+                tier_attempts.push(click_tier_failed(
+                    response.backend_tier_used.clone(),
+                    CLICK_REASON_NO_OBSERVED_DELTA,
+                    error_codes::ACTION_NO_OBSERVED_DELTA,
+                    response.required_foreground,
+                    error.message.to_string(),
+                ));
+                Err(attach_click_tier_attempts(error, tier_attempts))
+            }
+        }
+    }
+
     async fn capture_click_delta_signature(
         &self,
         max_elements: usize,
@@ -752,6 +907,50 @@ impl SynapseService {
             ),
         })
     }
+}
+
+fn can_route_click_element_background_first(
+    params: &ActClickParams,
+    recording: Option<&Arc<RecordingBackend>>,
+) -> bool {
+    recording.is_none() && click_params_can_route_background_first(params)
+}
+
+fn should_try_next_click_tier(error: &ErrorData) -> bool {
+    matches!(
+        click_error_data_code(error),
+        Some(
+            error_codes::ACTION_ELEMENT_PATTERN_UNSUPPORTED
+                | error_codes::ACTION_NO_OBSERVED_DELTA
+                | error_codes::ACTION_BACKEND_UNAVAILABLE
+        )
+    )
+}
+
+fn click_error_data_code(error: &ErrorData) -> Option<&str> {
+    error
+        .data
+        .as_ref()
+        .and_then(|data| data.get("code"))
+        .and_then(Value::as_str)
+}
+
+fn click_tier_attempts_from_error(error: &ErrorData) -> Vec<ActClickTierAttempt> {
+    error
+        .data
+        .as_ref()
+        .and_then(|data| data.get("tier_attempts"))
+        .cloned()
+        .and_then(|attempts| serde_json::from_value(attempts).ok())
+        .unwrap_or_default()
+}
+
+fn merge_click_tier_attempts(
+    mut prior_attempts: Vec<ActClickTierAttempt>,
+    current_attempts: Vec<ActClickTierAttempt>,
+) -> Vec<ActClickTierAttempt> {
+    prior_attempts.extend(current_attempts);
+    prior_attempts
 }
 
 fn elements_fingerprint_hash(elements: &[AccessibleNode]) -> Result<String, ErrorData> {

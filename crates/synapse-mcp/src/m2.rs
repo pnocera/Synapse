@@ -22,6 +22,10 @@ use tokio::{sync::watch, task::JoinHandle};
 use tokio_util::sync::CancellationToken;
 
 pub use click::{ActClickParams, ActClickPostcondition, ActClickResponse, act_click_with_handle};
+pub(crate) use click::{
+    ActClickTierAttempt, CLICK_REASON_NO_OBSERVED_DELTA, act_click_postmessage_with_params,
+    attach_click_tier_attempts, click_params_can_route_background_first, click_tier_failed,
+};
 #[cfg(test)]
 pub use clipboard::ActClipboardFormat;
 pub use clipboard::{ActClipboardParams, ActClipboardResponse, ActClipboardVerb, act_clipboard};

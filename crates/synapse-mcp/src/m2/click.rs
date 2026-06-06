@@ -1,7 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use rmcp::{ErrorData, model::ErrorCode};
-use serde_json::json;
+use serde_json::{Map, Value, json};
 use synapse_action::{ActionError, ActionHandle, RecordingBackend, cached_double_click_timing};
 use synapse_core::{Action, Backend, ButtonAction, ElementId, MouseTarget, Point, error_codes};
 
@@ -14,7 +14,7 @@ mod schema;
 mod tests;
 
 use schema::ActClickTarget;
-pub use schema::{ActClickParams, ActClickPostcondition, ActClickResponse};
+pub use schema::{ActClickParams, ActClickPostcondition, ActClickResponse, ActClickTierAttempt};
 
 const MAX_CLICK_HOLD_MS: u32 = 30_000;
 const SUPPORTED_UIA_CLICK_PATTERNS: [&str; 5] = [
@@ -24,6 +24,17 @@ const SUPPORTED_UIA_CLICK_PATTERNS: [&str; 5] = [
     "ExpandCollapsePattern",
     "LegacyIAccessiblePattern.DoDefaultAction",
 ];
+pub(crate) const CLICK_TIER_CDP: &str = "cdp";
+pub(crate) const CLICK_TIER_UIA: &str = "uia";
+pub(crate) const CLICK_TIER_POSTMESSAGE: &str = "postmessage";
+pub(crate) const CLICK_TIER_FOREGROUND: &str = "foreground";
+pub(crate) const CLICK_REASON_PATTERN_UNSUPPORTED: &str = "pattern_unsupported";
+pub(crate) const CLICK_REASON_ELEMENT_STALE: &str = "element_stale";
+pub(crate) const CLICK_REASON_BACKEND_UNAVAILABLE: &str = "backend_unavailable";
+pub(crate) const CLICK_REASON_TARGET_INVALID: &str = "target_invalid";
+pub(crate) const CLICK_REASON_PARAMS_INVALID: &str = "params_invalid";
+pub(crate) const CLICK_REASON_NO_OBSERVED_DELTA: &str = "no_observed_delta";
+pub(crate) const CLICK_REASON_ERROR: &str = "error";
 
 pub async fn act_click_with_handle(
     handle: ActionHandle,
@@ -79,22 +90,109 @@ pub async fn act_click_with_handle(
         });
     }
 
-    if let Some(recording) = recording {
-        record::execute_recording(&recording, &actions, params.clicks, double_click_timing).await?;
+    let tier_attempts = if let Some(recording) = recording {
+        if let Err(error) =
+            record::execute_recording(&recording, &actions, params.clicks, double_click_timing)
+                .await
+        {
+            let error_code = click_error_code(&error);
+            let reason_code = click_reason_for_error_code(&error_code);
+            let detail = error.message.to_string();
+            return Err(attach_click_tier_attempts(
+                error,
+                vec![click_tier_failed(
+                    CLICK_TIER_FOREGROUND,
+                    reason_code,
+                    error_code,
+                    true,
+                    detail,
+                )],
+            ));
+        }
+        vec![click_tier_delivered(
+            CLICK_TIER_FOREGROUND,
+            true,
+            "screen-coordinate click recorded through the foreground input tier",
+        )]
     } else {
-        record::execute_actor_actions(handle, actions, double_click_timing).await?;
-    }
+        match record::execute_actor_actions(handle, actions, double_click_timing).await {
+            Ok(()) => vec![click_tier_delivered(
+                CLICK_TIER_FOREGROUND,
+                true,
+                "screen-coordinate click delivered through the foreground input tier",
+            )],
+            Err(error) => {
+                let error_code = click_error_code(&error);
+                let reason_code = click_reason_for_error_code(&error_code);
+                let detail = error.message.to_string();
+                return Err(attach_click_tier_attempts(
+                    error,
+                    vec![click_tier_failed(
+                        CLICK_TIER_FOREGROUND,
+                        reason_code,
+                        error_code,
+                        true,
+                        detail,
+                    )],
+                ));
+            }
+        }
+    };
+    let backend_tier_used = click_backend_tier_used(&tier_attempts);
+    let required_foreground = click_required_foreground(&tier_attempts);
 
     Ok(ActClickResponse {
         ok: true,
         used_invoke_pattern: false,
         backend_used: backend_used_name(params.backend).to_owned(),
+        backend_tier_used,
+        required_foreground,
+        tier_attempts,
         postcondition: schema::postcondition_not_requested(),
         press_hold_ms: params.hold_ms,
         double_click_window_ms: double_click_timing.window_ms,
         inter_click_delay_ms: double_click_timing.inter_click_delay_ms,
         elapsed_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
     })
+}
+
+pub(crate) async fn act_click_postmessage_with_params(
+    params: &ActClickParams,
+    mut prior_attempts: Vec<ActClickTierAttempt>,
+) -> Result<ActClickResponse, ErrorData> {
+    validate_click_params(params)?;
+    let started = Instant::now();
+    let double_click_timing = cached_double_click_timing();
+    match &params.target {
+        ActClickTarget::Element(element) => {
+            ensure_element_transport_backend_allowed(params, "PostMessage")?;
+            element::execute_element_postmessage_click(
+                params,
+                element,
+                prior_attempts,
+                double_click_timing,
+                started,
+            )
+            .await
+        }
+        ActClickTarget::Point(point) => {
+            let detail = format!(
+                "act_click PostMessage tier requires an element target resolved to an HWND, got point ({}, {})",
+                point.x, point.y
+            );
+            prior_attempts.push(click_tier_failed(
+                CLICK_TIER_POSTMESSAGE,
+                CLICK_REASON_TARGET_INVALID,
+                error_codes::ACTION_TARGET_INVALID,
+                false,
+                detail.clone(),
+            ));
+            Err(attach_click_tier_attempts(
+                mcp_error(error_codes::ACTION_TARGET_INVALID, detail),
+                prior_attempts,
+            ))
+        }
+    }
 }
 
 /// Routes a click on a CDP web element id through CDP (#686): resolve the
@@ -115,19 +213,33 @@ async fn execute_cdp_click(
         .element_id
         .parts()
         .map_err(|err| {
-            mcp_error(
-                error_codes::ACTION_ELEMENT_NOT_RESOLVED,
-                format!("web element id is malformed: {err}"),
+            let detail = format!("web element id is malformed: {err}");
+            attach_click_tier_attempts(
+                mcp_error(error_codes::ACTION_ELEMENT_NOT_RESOLVED, detail.clone()),
+                vec![click_tier_failed(
+                    CLICK_TIER_CDP,
+                    CLICK_REASON_TARGET_INVALID,
+                    error_codes::ACTION_ELEMENT_NOT_RESOLVED,
+                    false,
+                    detail,
+                )],
             )
         })?
         .hwnd;
     let endpoint = synapse_a11y::endpoint_for_window(hwnd).ok_or_else(|| {
-        mcp_error(
-            error_codes::A11Y_CDP_UNREACHABLE,
-            format!(
-                "no reachable CDP endpoint for web element {} (browser closed or debug port gone)",
-                element.element_id
-            ),
+        let detail = format!(
+            "no reachable CDP endpoint for web element {} (browser closed or debug port gone)",
+            element.element_id
+        );
+        attach_click_tier_attempts(
+            mcp_error(error_codes::A11Y_CDP_UNREACHABLE, detail.clone()),
+            vec![click_tier_failed(
+                CLICK_TIER_CDP,
+                CLICK_REASON_BACKEND_UNAVAILABLE,
+                error_codes::A11Y_CDP_UNREACHABLE,
+                false,
+                detail,
+            )],
         )
     })?;
     // Foreground window title disambiguates which tab owns the per-document node.
@@ -139,9 +251,17 @@ async fn execute_cdp_click(
         MouseButton::Right => synapse_a11y::CdpMouseButton::Right,
         MouseButton::Middle => synapse_a11y::CdpMouseButton::Middle,
         other => {
-            return Err(mcp_error(
-                error_codes::TOOL_PARAMS_INVALID,
-                format!("act_click button {other:?} is not supported for web (CDP) elements"),
+            let detail =
+                format!("act_click button {other:?} is not supported for web (CDP) elements");
+            return Err(attach_click_tier_attempts(
+                mcp_error(error_codes::TOOL_PARAMS_INVALID, detail.clone()),
+                vec![click_tier_failed(
+                    CLICK_TIER_CDP,
+                    CLICK_REASON_PARAMS_INVALID,
+                    error_codes::TOOL_PARAMS_INVALID,
+                    false,
+                    detail,
+                )],
             ));
         }
     };
@@ -154,12 +274,31 @@ async fn execute_cdp_click(
         i64::from(params.clicks),
     )
     .await
-    .map_err(|err| action_error_to_mcp(&a11y_to_action_error(&err)))?;
+    .map_err(|err| {
+        let error = action_error_to_mcp(&a11y_to_action_error(&err));
+        attach_click_tier_attempts(
+            error,
+            vec![click_tier_failed(
+                CLICK_TIER_CDP,
+                click_reason_for_error_code(err.code()),
+                err.code(),
+                false,
+                err.to_string(),
+            )],
+        )
+    })?;
 
     Ok(ActClickResponse {
         ok: true,
         used_invoke_pattern: false,
         backend_used: "cdp".to_owned(),
+        backend_tier_used: CLICK_TIER_CDP.to_owned(),
+        required_foreground: false,
+        tier_attempts: vec![click_tier_delivered(
+            CLICK_TIER_CDP,
+            false,
+            "web element click delivered through Chrome DevTools Protocol",
+        )],
         postcondition: schema::postcondition_not_requested(),
         press_hold_ms: params.hold_ms,
         double_click_window_ms: double_click_timing.window_ms,
@@ -174,6 +313,177 @@ async fn execute_cdp_click(
 fn a11y_to_action_error(err: &synapse_a11y::A11yError) -> ActionError {
     ActionError::TargetInvalid {
         detail: format!("{} ({})", err, err.code()),
+    }
+}
+
+pub(crate) fn click_tier_delivered(
+    tier: &'static str,
+    required_foreground: bool,
+    detail: impl Into<String>,
+) -> ActClickTierAttempt {
+    let attempt = ActClickTierAttempt {
+        tier: tier.to_owned(),
+        status: "delivered".to_owned(),
+        reason_code: None,
+        error_code: None,
+        detail: Some(detail.into()),
+        required_foreground,
+    };
+    log_click_tier_attempt(&attempt);
+    attempt
+}
+
+pub(crate) fn click_tier_failed(
+    tier: impl Into<String>,
+    reason_code: impl Into<String>,
+    error_code: impl Into<String>,
+    required_foreground: bool,
+    detail: impl Into<String>,
+) -> ActClickTierAttempt {
+    let attempt = ActClickTierAttempt {
+        tier: tier.into(),
+        status: "failed".to_owned(),
+        reason_code: Some(reason_code.into()),
+        error_code: Some(error_code.into()),
+        detail: Some(detail.into()),
+        required_foreground,
+    };
+    log_click_tier_attempt(&attempt);
+    attempt
+}
+
+pub(crate) fn attach_click_tier_attempts(
+    mut error: ErrorData,
+    tier_attempts: Vec<ActClickTierAttempt>,
+) -> ErrorData {
+    let attempts = serde_json::to_value(&tier_attempts).unwrap_or_else(|err| {
+        json!([{
+            "tier": "telemetry",
+            "status": "failed",
+            "reason_code": "attempt_chain_encode_failed",
+            "error_code": error_codes::TOOL_INTERNAL_ERROR,
+            "detail": err.to_string(),
+            "required_foreground": false,
+        }])
+    });
+    let mut data = match error.data.take() {
+        Some(Value::Object(map)) => map,
+        Some(other) => {
+            let mut map = Map::new();
+            map.insert("original_data".to_owned(), other);
+            map
+        }
+        None => Map::new(),
+    };
+    data.insert("tier_attempts".to_owned(), attempts);
+    data.insert("silent_fallback_allowed".to_owned(), Value::Bool(false));
+    error.data = Some(Value::Object(data));
+    error
+}
+
+pub(crate) fn click_backend_tier_used(tier_attempts: &[ActClickTierAttempt]) -> String {
+    tier_attempts
+        .iter()
+        .rev()
+        .find(|attempt| attempt.status == "delivered")
+        .map(|attempt| attempt.tier.clone())
+        .unwrap_or_else(|| "none".to_owned())
+}
+
+pub(crate) fn click_required_foreground(tier_attempts: &[ActClickTierAttempt]) -> bool {
+    tier_attempts
+        .iter()
+        .rev()
+        .find(|attempt| attempt.status == "delivered")
+        .is_some_and(|attempt| attempt.required_foreground)
+}
+
+pub(crate) fn click_params_can_route_background_first(params: &ActClickParams) -> bool {
+    if !matches!(params.backend, Backend::Auto | Backend::Software) {
+        return false;
+    }
+    match &params.target {
+        ActClickTarget::Element(element) => {
+            #[cfg(windows)]
+            if synapse_a11y::cdp_backend_from_element_id(&element.element_id).is_some() {
+                return false;
+            }
+            true
+        }
+        ActClickTarget::Point(_) => false,
+    }
+}
+
+pub(crate) fn click_error_code(error: &ErrorData) -> String {
+    error
+        .data
+        .as_ref()
+        .and_then(|data| data.get("code"))
+        .and_then(Value::as_str)
+        .unwrap_or(error_codes::TOOL_INTERNAL_ERROR)
+        .to_owned()
+}
+
+pub(crate) fn error_has_click_tier_attempts(error: &ErrorData) -> bool {
+    error
+        .data
+        .as_ref()
+        .and_then(|data| data.get("tier_attempts"))
+        .and_then(Value::as_array)
+        .is_some_and(|attempts| !attempts.is_empty())
+}
+
+pub(crate) fn click_reason_for_error_code(error_code: &str) -> &'static str {
+    match error_code {
+        error_codes::ACTION_ELEMENT_PATTERN_UNSUPPORTED => CLICK_REASON_PATTERN_UNSUPPORTED,
+        error_codes::TRANSIENT_ELEMENT_EXPIRED | error_codes::A11Y_ELEMENT_STALE => {
+            CLICK_REASON_ELEMENT_STALE
+        }
+        error_codes::ACTION_BACKEND_UNAVAILABLE
+        | error_codes::ACTION_QUEUE_FULL
+        | error_codes::ACTION_RATE_LIMITED
+        | error_codes::A11Y_CDP_UNREACHABLE
+        | error_codes::A11Y_CDP_ATTACH_FAILED
+        | error_codes::A11Y_CDP_AXTREE_FAILED => CLICK_REASON_BACKEND_UNAVAILABLE,
+        error_codes::ACTION_TARGET_INVALID | error_codes::ACTION_ELEMENT_NOT_RESOLVED => {
+            CLICK_REASON_TARGET_INVALID
+        }
+        error_codes::TOOL_PARAMS_INVALID => CLICK_REASON_PARAMS_INVALID,
+        error_codes::ACTION_NO_OBSERVED_DELTA => CLICK_REASON_NO_OBSERVED_DELTA,
+        _ => CLICK_REASON_ERROR,
+    }
+}
+
+fn log_click_tier_attempt(attempt: &ActClickTierAttempt) {
+    let tier = attempt.tier.as_str();
+    let status = attempt.status.as_str();
+    let reason_code = attempt.reason_code.as_deref().unwrap_or("none");
+    let error_code = attempt.error_code.as_deref().unwrap_or("none");
+    let detail = attempt.detail.as_deref().unwrap_or("");
+    if status == "failed" {
+        tracing::warn!(
+            code = "M2_ACT_CLICK_TIER_ATTEMPT",
+            kind = "act_click",
+            tier,
+            status,
+            reason_code,
+            error_code,
+            required_foreground = attempt.required_foreground,
+            detail,
+            "act_click backend tier attempt failed"
+        );
+    } else {
+        tracing::info!(
+            code = "M2_ACT_CLICK_TIER_ATTEMPT",
+            kind = "act_click",
+            tier,
+            status,
+            reason_code,
+            error_code,
+            required_foreground = attempt.required_foreground,
+            detail,
+            "act_click backend tier attempt delivered"
+        );
     }
 }
 
@@ -220,12 +530,28 @@ fn ensure_element_transport_backend_allowed(
     transport: &str,
 ) -> Result<(), ErrorData> {
     if matches!(params.backend, Backend::Vigem | Backend::Hardware) {
-        return Err(action_error_to_mcp(&ActionError::BackendUnavailable {
-            detail: format!(
-                "act_click element target requested backend={} but {transport} element delivery is only valid for backend=auto or backend=software; no fallback delivery was attempted",
-                backend_used_name(params.backend)
-            ),
-        }));
+        let tier = match transport {
+            "CDP" => CLICK_TIER_CDP,
+            "PostMessage" => CLICK_TIER_POSTMESSAGE,
+            _ => CLICK_TIER_UIA,
+        };
+        let detail = format!(
+            "act_click element target requested backend={} but {transport} element delivery is only valid for backend=auto or backend=software; no fallback delivery was attempted",
+            backend_used_name(params.backend)
+        );
+        let error = action_error_to_mcp(&ActionError::BackendUnavailable {
+            detail: detail.clone(),
+        });
+        return Err(attach_click_tier_attempts(
+            error,
+            vec![click_tier_failed(
+                tier,
+                CLICK_REASON_BACKEND_UNAVAILABLE,
+                error_codes::ACTION_BACKEND_UNAVAILABLE,
+                false,
+                detail,
+            )],
+        ));
     }
     Ok(())
 }
@@ -238,12 +564,28 @@ fn point_mouse_target(target: &ActClickTarget) -> Result<MouseTarget, ErrorData>
                 y: point.y,
             },
         }),
-        ActClickTarget::Element(element) => Err(action_error_to_mcp(&ActionError::TargetInvalid {
-            detail: format!(
+        ActClickTarget::Element(element) => {
+            let detail = format!(
                 "act_click element target {} reached the point-target path unexpectedly",
                 element.element_id
-            ),
-        })),
+            );
+            let error = action_error_to_mcp(&ActionError::TargetInvalid {
+                detail: format!(
+                    "act_click element target {} reached the point-target path unexpectedly",
+                    element.element_id
+                ),
+            });
+            Err(attach_click_tier_attempts(
+                error,
+                vec![click_tier_failed(
+                    CLICK_TIER_FOREGROUND,
+                    CLICK_REASON_TARGET_INVALID,
+                    error_codes::ACTION_TARGET_INVALID,
+                    true,
+                    detail,
+                )],
+            ))
+        }
     }
 }
 
@@ -262,6 +604,13 @@ fn action_error_to_mcp(error: &ActionError) -> ErrorData {
 fn transient_element_expired_error(element_id: &ElementId, detail: &str) -> ErrorData {
     let root_hwnd = element_id.parts().ok().map(|parts| parts.hwnd);
     let recommended_pattern = "Call observe or find again immediately before acting on the transient UI, then pass the fresh element_id to act_click; do not reuse element_ids from expired toast/snackbar observations.";
+    let tier_attempts = vec![click_tier_failed(
+        CLICK_TIER_UIA,
+        CLICK_REASON_ELEMENT_STALE,
+        error_codes::TRANSIENT_ELEMENT_EXPIRED,
+        false,
+        detail.to_owned(),
+    )];
     tracing::warn!(
         code = error_codes::TRANSIENT_ELEMENT_EXPIRED,
         element_id = %element_id,
@@ -270,26 +619,36 @@ fn transient_element_expired_error(element_id: &ElementId, detail: &str) -> Erro
         recommended_pattern,
         "act_click transient UI element expired before dispatch; no fallback click attempted"
     );
-    ErrorData::new(
-        ErrorCode(-32099),
-        format!("transient UI element expired before act_click dispatch: {detail}"),
-        Some(json!({
-            "code": error_codes::TRANSIENT_ELEMENT_EXPIRED,
-            "detail_code": "UIA_ELEMENT_STALE_AFTER_OBSERVE",
-            "transient": true,
-            "fallback_attempted": false,
-            "element_id": element_id.to_string(),
-            "root_hwnd": root_hwnd,
-            "source_of_truth": "live UI Automation re-resolution under the element_id root HWND",
-            "recommended_next_tools": ["observe", "find", "act_click"],
-            "recommended_pattern": recommended_pattern,
-            "detail": detail,
-        })),
+    attach_click_tier_attempts(
+        ErrorData::new(
+            ErrorCode(-32099),
+            format!("transient UI element expired before act_click dispatch: {detail}"),
+            Some(json!({
+                "code": error_codes::TRANSIENT_ELEMENT_EXPIRED,
+                "detail_code": "UIA_ELEMENT_STALE_AFTER_OBSERVE",
+                "transient": true,
+                "fallback_attempted": false,
+                "element_id": element_id.to_string(),
+                "root_hwnd": root_hwnd,
+                "source_of_truth": "live UI Automation re-resolution under the element_id root HWND",
+                "recommended_next_tools": ["observe", "find", "act_click"],
+                "recommended_pattern": recommended_pattern,
+                "detail": detail,
+            })),
+        ),
+        tier_attempts,
     )
 }
 
 fn element_pattern_unsupported_error(element_id: &ElementId, detail: &str) -> ErrorData {
     let root_hwnd = element_id.parts().ok().map(|parts| parts.hwnd);
+    let tier_attempts = vec![click_tier_failed(
+        CLICK_TIER_UIA,
+        CLICK_REASON_PATTERN_UNSUPPORTED,
+        error_codes::ACTION_ELEMENT_PATTERN_UNSUPPORTED,
+        false,
+        detail.to_owned(),
+    )];
     tracing::warn!(
         code = error_codes::ACTION_ELEMENT_PATTERN_UNSUPPORTED,
         element_id = %element_id,
@@ -299,22 +658,25 @@ fn element_pattern_unsupported_error(element_id: &ElementId, detail: &str) -> Er
         fallback_attempted = false,
         "act_click element target exposes no supported UIA click control pattern; no fallback delivery attempted"
     );
-    ErrorData::new(
-        ErrorCode(-32099),
-        format!("element target exposes no supported UIA click control pattern: {detail}"),
-        Some(json!({
-            "code": error_codes::ACTION_ELEMENT_PATTERN_UNSUPPORTED,
-            "detail_code": "UIA_CONTROL_PATTERN_UNSUPPORTED",
-            "transient": false,
-            "fallback_attempted": false,
-            "element_id": element_id.to_string(),
-            "root_hwnd": root_hwnd,
-            "attempted_patterns": SUPPORTED_UIA_CLICK_PATTERNS,
-            "source_of_truth": "live UI Automation control-pattern availability on the re-resolved element",
-            "router_escalation_required": true,
-            "router_next_tier": "postmessage",
-            "detail": detail,
-        })),
+    attach_click_tier_attempts(
+        ErrorData::new(
+            ErrorCode(-32099),
+            format!("element target exposes no supported UIA click control pattern: {detail}"),
+            Some(json!({
+                "code": error_codes::ACTION_ELEMENT_PATTERN_UNSUPPORTED,
+                "detail_code": "UIA_CONTROL_PATTERN_UNSUPPORTED",
+                "transient": false,
+                "fallback_attempted": false,
+                "element_id": element_id.to_string(),
+                "root_hwnd": root_hwnd,
+                "attempted_patterns": SUPPORTED_UIA_CLICK_PATTERNS,
+                "source_of_truth": "live UI Automation control-pattern availability on the re-resolved element",
+                "router_escalation_required": true,
+                "router_next_tier": "postmessage",
+                "detail": detail,
+            })),
+        ),
+        tier_attempts,
     )
 }
 

@@ -25,9 +25,14 @@ use windows::{
 };
 
 use super::{
-    action_error_to_mcp, backend_used_name, record,
+    CLICK_REASON_BACKEND_UNAVAILABLE, CLICK_TIER_FOREGROUND, CLICK_TIER_POSTMESSAGE,
+    CLICK_TIER_UIA, action_error_to_mcp, attach_click_tier_attempts, backend_used_name,
+    click_backend_tier_used, click_error_code, click_reason_for_error_code,
+    click_required_foreground, click_tier_delivered, click_tier_failed,
+    error_has_click_tier_attempts, record,
     schema::{
-        ActClickElementTarget, ActClickParams, ActClickResponse, postcondition_not_requested,
+        ActClickElementTarget, ActClickParams, ActClickResponse, ActClickTierAttempt,
+        postcondition_not_requested,
     },
 };
 
@@ -51,22 +56,95 @@ pub(super) async fn execute_element_click(
             },
         );
         let actions = coordinate_click_actions(params, screen_point);
+        let mut tier_attempts = Vec::new();
         let backend_used = if let Some(recording) = recording {
-            record::execute_recording(recording, &actions, params.clicks, timing).await?;
+            if let Err(error) =
+                record::execute_recording(recording, &actions, params.clicks, timing).await
+            {
+                let error_code = click_error_code(&error);
+                let reason_code = click_reason_for_error_code(&error_code);
+                tier_attempts.push(click_tier_failed(
+                    CLICK_TIER_FOREGROUND,
+                    reason_code,
+                    error_code,
+                    true,
+                    error.message.to_string(),
+                ));
+                return Err(attach_click_tier_attempts(error, tier_attempts));
+            }
+            tier_attempts.push(click_tier_delivered(
+                CLICK_TIER_FOREGROUND,
+                true,
+                "coordinate element click recorded through the foreground input tier",
+            ));
             backend_used_name(params.backend).to_owned()
         } else {
             match record::execute_actor_actions(handle, actions, timing).await {
-                Ok(()) => backend_used_name(params.backend).to_owned(),
-                Err(error) if should_try_hwnd_message_fallback(&error) => {
-                    post_element_window_message_click(params, element, screen_point, timing).await?
+                Ok(()) => {
+                    tier_attempts.push(click_tier_delivered(
+                        CLICK_TIER_FOREGROUND,
+                        true,
+                        "coordinate element click delivered through the foreground input tier",
+                    ));
+                    backend_used_name(params.backend).to_owned()
                 }
-                Err(error) => return Err(error),
+                Err(error) if should_try_hwnd_message_fallback(&error) => {
+                    let foreground_detail = error.message.to_string();
+                    tier_attempts.push(click_tier_failed(
+                        CLICK_TIER_FOREGROUND,
+                        CLICK_REASON_BACKEND_UNAVAILABLE,
+                        error_codes::ACTION_BACKEND_UNAVAILABLE,
+                        true,
+                        foreground_detail,
+                    ));
+                    match post_element_window_message_click(params, element, screen_point, timing)
+                        .await
+                    {
+                        Ok(backend_used) => {
+                            tier_attempts.push(click_tier_delivered(
+                                CLICK_TIER_POSTMESSAGE,
+                                false,
+                                "coordinate element click delivered through HWND PostMessage",
+                            ));
+                            backend_used
+                        }
+                        Err(error) => {
+                            let error_code = click_error_code(&error);
+                            let reason_code = click_reason_for_error_code(&error_code);
+                            tier_attempts.push(click_tier_failed(
+                                CLICK_TIER_POSTMESSAGE,
+                                reason_code,
+                                error_code,
+                                false,
+                                error.message.to_string(),
+                            ));
+                            return Err(attach_click_tier_attempts(error, tier_attempts));
+                        }
+                    }
+                }
+                Err(error) => {
+                    let error_code = click_error_code(&error);
+                    let reason_code = click_reason_for_error_code(&error_code);
+                    tier_attempts.push(click_tier_failed(
+                        CLICK_TIER_FOREGROUND,
+                        reason_code,
+                        error_code,
+                        true,
+                        error.message.to_string(),
+                    ));
+                    return Err(attach_click_tier_attempts(error, tier_attempts));
+                }
             }
         };
+        let backend_tier_used = click_backend_tier_used(&tier_attempts);
+        let required_foreground = click_required_foreground(&tier_attempts);
         return Ok(ActClickResponse {
             ok: true,
             used_invoke_pattern: false,
             backend_used,
+            backend_tier_used,
+            required_foreground,
+            tier_attempts,
             postcondition: postcondition_not_requested(),
             press_hold_ms: params.hold_ms,
             double_click_window_ms: timing.window_ms,
@@ -78,6 +156,7 @@ pub(super) async fn execute_element_click(
     let mut state = EmitState::new();
     let mut used_invoke_pattern = false;
     let mut backend_used = "software";
+    let mut uia_outcomes = Vec::new();
     for click_index in 0..params.clicks {
         let outcome = if let Some(recording) = recording {
             click_element_or_fallback(&element.element_id, recording, &mut state, params.button)
@@ -85,7 +164,24 @@ pub(super) async fn execute_element_click(
             let backend = synapse_action::backend::software::SoftwareBackend::new();
             click_element_or_fallback(&element.element_id, &backend, &mut state, params.button)
         }
-        .map_err(|error| action_error_to_mcp(&error))?;
+        .map_err(|error| {
+            let mcp_error = action_error_to_mcp(&error);
+            if error_has_click_tier_attempts(&mcp_error) {
+                return mcp_error;
+            }
+            let error_code = click_error_code(&mcp_error);
+            let reason_code = click_reason_for_error_code(&error_code);
+            attach_click_tier_attempts(
+                mcp_error,
+                vec![click_tier_failed(
+                    CLICK_TIER_UIA,
+                    reason_code,
+                    error_code,
+                    false,
+                    error.detail().to_owned(),
+                )],
+            )
+        })?;
 
         match outcome {
             ElementClickOutcome::Invoked => {
@@ -97,6 +193,7 @@ pub(super) async fn execute_element_click(
                 );
                 used_invoke_pattern = true;
                 backend_used = "uia";
+                uia_outcomes.push("invoked".to_owned());
             }
             ElementClickOutcome::Toggled {
                 before_state,
@@ -114,6 +211,7 @@ pub(super) async fn execute_element_click(
                 );
                 used_invoke_pattern = true;
                 backend_used = "uia";
+                uia_outcomes.push("toggled".to_owned());
             }
             ElementClickOutcome::Selected {
                 was_selected,
@@ -131,6 +229,7 @@ pub(super) async fn execute_element_click(
                 );
                 used_invoke_pattern = true;
                 backend_used = "uia";
+                uia_outcomes.push("selected".to_owned());
             }
             ElementClickOutcome::Expanded {
                 before_state,
@@ -150,6 +249,7 @@ pub(super) async fn execute_element_click(
                 );
                 used_invoke_pattern = true;
                 backend_used = "uia";
+                uia_outcomes.push("expanded".to_owned());
             }
             ElementClickOutcome::Collapsed {
                 before_state,
@@ -169,6 +269,7 @@ pub(super) async fn execute_element_click(
                 );
                 used_invoke_pattern = true;
                 backend_used = "uia";
+                uia_outcomes.push("collapsed".to_owned());
             }
             ElementClickOutcome::LegacyDefaultAction { default_action } => {
                 trace_element_click_outcome(
@@ -182,6 +283,7 @@ pub(super) async fn execute_element_click(
                 );
                 used_invoke_pattern = true;
                 backend_used = "uia";
+                uia_outcomes.push("legacy_default_action".to_owned());
             }
             ElementClickOutcome::CoordinateFallback(plan) => {
                 tracing::error!(
@@ -211,10 +313,82 @@ pub(super) async fn execute_element_click(
         }
     }
 
+    let tier_attempts = vec![click_tier_delivered(
+        CLICK_TIER_UIA,
+        false,
+        format!(
+            "UI Automation semantic click delivered; outcomes={}",
+            uia_outcomes.join(",")
+        ),
+    )];
     Ok(ActClickResponse {
         ok: true,
         used_invoke_pattern,
         backend_used: backend_used.to_owned(),
+        backend_tier_used: click_backend_tier_used(&tier_attempts),
+        required_foreground: click_required_foreground(&tier_attempts),
+        tier_attempts,
+        postcondition: postcondition_not_requested(),
+        press_hold_ms: params.hold_ms,
+        double_click_window_ms: timing.window_ms,
+        inter_click_delay_ms: timing.inter_click_delay_ms,
+        elapsed_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
+    })
+}
+
+pub(super) async fn execute_element_postmessage_click(
+    params: &ActClickParams,
+    element: &ActClickElementTarget,
+    mut tier_attempts: Vec<ActClickTierAttempt>,
+    timing: DoubleClickTiming,
+    started: Instant,
+) -> Result<ActClickResponse, ErrorData> {
+    let screen_point = match element_center(&element.element_id) {
+        Ok(point) => point,
+        Err(error) => {
+            let error_code = click_error_code(&error);
+            let reason_code = click_reason_for_error_code(&error_code);
+            tier_attempts.push(click_tier_failed(
+                CLICK_TIER_POSTMESSAGE,
+                reason_code,
+                error_code,
+                false,
+                error.message.to_string(),
+            ));
+            return Err(attach_click_tier_attempts(error, tier_attempts));
+        }
+    };
+    let backend_used =
+        match post_element_window_message_click(params, element, screen_point, timing).await {
+            Ok(backend_used) => {
+                tier_attempts.push(click_tier_delivered(
+                    CLICK_TIER_POSTMESSAGE,
+                    false,
+                    "element click delivered through HWND PostMessage",
+                ));
+                backend_used
+            }
+            Err(error) => {
+                let error_code = click_error_code(&error);
+                let reason_code = click_reason_for_error_code(&error_code);
+                tier_attempts.push(click_tier_failed(
+                    CLICK_TIER_POSTMESSAGE,
+                    reason_code,
+                    error_code,
+                    false,
+                    error.message.to_string(),
+                ));
+                return Err(attach_click_tier_attempts(error, tier_attempts));
+            }
+        };
+
+    Ok(ActClickResponse {
+        ok: true,
+        used_invoke_pattern: false,
+        backend_used,
+        backend_tier_used: click_backend_tier_used(&tier_attempts),
+        required_foreground: click_required_foreground(&tier_attempts),
+        tier_attempts,
         postcondition: postcondition_not_requested(),
         press_hold_ms: params.hold_ms,
         double_click_window_ms: timing.window_ms,

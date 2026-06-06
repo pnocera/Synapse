@@ -87,11 +87,25 @@ pub struct ActClickResponse {
     pub ok: bool,
     pub used_invoke_pattern: bool,
     pub backend_used: String,
+    pub backend_tier_used: String,
+    pub required_foreground: bool,
+    pub tier_attempts: Vec<ActClickTierAttempt>,
     pub postcondition: ActClickPostcondition,
     pub press_hold_ms: u32,
     pub double_click_window_ms: u32,
     pub inter_click_delay_ms: u32,
     pub elapsed_ms: u32,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ActClickTierAttempt {
+    pub tier: String,
+    pub status: String,
+    pub reason_code: Option<String>,
+    pub error_code: Option<String>,
+    pub detail: Option<String>,
+    pub required_foreground: bool,
 }
 
 #[derive(Clone, Debug, Serialize, JsonSchema)]
