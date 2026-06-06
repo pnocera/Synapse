@@ -202,6 +202,11 @@ fn a11y_error_to_action(
         synapse_a11y::A11yError::ElementPatternUnsupported { .. } => {
             resolver::element_pattern_unsupported(element_id, detail)
         }
+        synapse_a11y::A11yError::ElementValueUnsupported { .. } => {
+            resolver::element_pattern_unsupported(element_id, detail)
+        }
+        synapse_a11y::A11yError::ElementValueReadOnly { .. }
+        | synapse_a11y::A11yError::ElementNotEnabled { .. } => resolver::target_invalid(detail),
         synapse_a11y::A11yError::InvalidElementId { .. }
         | synapse_a11y::A11yError::NoForeground { .. } => resolver::element_not_resolved(detail),
         synapse_a11y::A11yError::NotAvailable { detail } => {

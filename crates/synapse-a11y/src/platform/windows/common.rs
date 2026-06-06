@@ -201,6 +201,7 @@ pub(super) fn create_cache_request(
         UIProperty::LocalizedControlType,
         UIProperty::Name,
         UIProperty::HasKeyboardFocus,
+        UIProperty::IsKeyboardFocusable,
         UIProperty::IsEnabled,
         UIProperty::AutomationId,
         UIProperty::ClassName,
@@ -329,7 +330,7 @@ fn push_pattern(
     }
 }
 
-fn cached_bool(element: &UIElement, property: UIProperty) -> bool {
+pub(super) fn cached_bool(element: &UIElement, property: UIProperty) -> bool {
     element
         .get_cached_property_value(property)
         .ok()

@@ -36,6 +36,9 @@ pub struct ActClickParams {
     #[serde(default = "default_use_invoke_pattern")]
     #[schemars(default = "default_use_invoke_pattern")]
     pub use_invoke_pattern: bool,
+    #[serde(default = "default_coordinate_fallback_on_unsupported")]
+    #[schemars(default = "default_coordinate_fallback_on_unsupported")]
+    pub coordinate_fallback_on_unsupported: bool,
     #[serde(default)]
     #[schemars(default)]
     pub verify_delta: bool,
@@ -142,6 +145,8 @@ impl<'de> Deserialize<'de> for ActClickParams {
             backend: Backend,
             #[serde(default = "default_use_invoke_pattern")]
             use_invoke_pattern: bool,
+            #[serde(default = "default_coordinate_fallback_on_unsupported")]
+            coordinate_fallback_on_unsupported: bool,
             #[serde(default)]
             verify_delta: bool,
             #[serde(default = "default_verify_timeout_ms")]
@@ -171,6 +176,7 @@ impl<'de> Deserialize<'de> for ActClickParams {
             hold_ms: raw.hold_ms,
             backend: raw.backend,
             use_invoke_pattern: raw.use_invoke_pattern,
+            coordinate_fallback_on_unsupported: raw.coordinate_fallback_on_unsupported,
             verify_delta: raw.verify_delta,
             verify_timeout_ms: raw.verify_timeout_ms,
             deprecated_curve_alias_used,
@@ -216,6 +222,10 @@ pub(in crate::m2::click) const fn default_click_backend() -> Backend {
 }
 
 pub(in crate::m2::click) const fn default_use_invoke_pattern() -> bool {
+    true
+}
+
+pub(in crate::m2::click) const fn default_coordinate_fallback_on_unsupported() -> bool {
     true
 }
 

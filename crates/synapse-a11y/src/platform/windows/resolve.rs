@@ -5,17 +5,18 @@ use uiautomation::{
         UIExpandCollapsePattern, UIInvokePattern, UILegacyIAccessiblePattern,
         UISelectionItemPattern, UITogglePattern, UIValuePattern,
     },
-    types::{ElementMode, ExpandCollapseState, Handle, Rect as UiaRect, TreeScope},
+    types::{ElementMode, ExpandCollapseState, Handle, Rect as UiaRect, TreeScope, UIProperty},
 };
 
 use crate::{
-    A11yError, A11yResult, ElementClickAction, ElementValueReadback, ElementValueSetReadback,
-    ExpandState,
+    A11yError, A11yResult, ElementClickAction, ElementMetadataReadback, ElementValueReadback,
+    ElementValueSetReadback, ExpandState,
 };
 
 use super::common::{
-    TreeView, cached_hwnd, cached_role, cached_runtime_id_hex_or_fallback, create_cache_request,
-    map_uia_error, with_automation,
+    TreeView, cached_bool, cached_hwnd, cached_patterns, cached_role,
+    cached_runtime_id_hex_or_fallback, cached_value, create_cache_request, map_uia_error,
+    with_automation,
 };
 
 const RE_RESOLVE_NODE_BUDGET: usize = 20_000;
@@ -429,13 +430,21 @@ pub fn set_element_value(id: &ElementId, value: &str) -> A11yResult<ElementValue
     let value = value.to_owned();
     with_automation(move |automation| {
         let element = re_resolve_on_worker(automation, &id)?;
-        let pattern: UIValuePattern = element.get_pattern().map_err(|err| {
-            A11yError::internal(format!("ValuePattern not exposed for element {id}: {err}"))
-        })?;
+        if !cached_bool(&element, UIProperty::IsEnabled) {
+            return Err(A11yError::ElementNotEnabled {
+                detail: format!("element {id} IsEnabled=false before ValuePattern.SetValue"),
+            });
+        }
+        let pattern: UIValuePattern =
+            element
+                .get_pattern()
+                .map_err(|err| A11yError::ElementValueUnsupported {
+                    detail: format!("ValuePattern not exposed for element {id}: {err}"),
+                })?;
         if pattern.is_readonly().map_err(map_uia_error)? {
-            return Err(A11yError::internal(format!(
-                "ValuePattern is read-only for element {id}"
-            )));
+            return Err(A11yError::ElementValueReadOnly {
+                detail: format!("ValuePattern is read-only for element {id}"),
+            });
         }
         let before_value = pattern.get_value().map_err(map_uia_error)?;
         pattern.set_value(&value).map_err(map_uia_error)?;
@@ -452,15 +461,39 @@ pub fn element_value(id: &ElementId) -> A11yResult<ElementValueReadback> {
     let id = id.clone();
     with_automation(move |automation| {
         let element = re_resolve_on_worker(automation, &id)?;
-        let pattern: UIValuePattern = element.get_pattern().map_err(|err| {
-            A11yError::internal(format!("ValuePattern not exposed for element {id}: {err}"))
-        })?;
+        let pattern: UIValuePattern =
+            element
+                .get_pattern()
+                .map_err(|err| A11yError::ElementValueUnsupported {
+                    detail: format!("ValuePattern not exposed for element {id}: {err}"),
+                })?;
         let is_readonly = pattern.is_readonly().map_err(map_uia_error)?;
         let value = pattern.get_value().map_err(map_uia_error)?;
         Ok(ElementValueReadback {
             method: "uia_value_pattern".to_owned(),
             value,
             is_readonly,
+        })
+    })
+}
+
+pub fn element_metadata(id: &ElementId) -> A11yResult<ElementMetadataReadback> {
+    let id = id.clone();
+    with_automation(move |automation| {
+        let element = re_resolve_on_worker(automation, &id)?;
+        let automation_id = element
+            .get_cached_automation_id()
+            .ok()
+            .filter(|value| !value.is_empty());
+        Ok(ElementMetadataReadback {
+            name: element.get_cached_name().unwrap_or_default(),
+            role: cached_role(&element),
+            automation_id,
+            bbox: element_rect(&element)?,
+            enabled: cached_bool(&element, UIProperty::IsEnabled),
+            keyboard_focusable: cached_bool(&element, UIProperty::IsKeyboardFocusable),
+            patterns: cached_patterns(&element),
+            value: cached_value(&element),
         })
     })
 }

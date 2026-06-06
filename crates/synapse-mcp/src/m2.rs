@@ -6,6 +6,7 @@ pub(crate) mod postcondition;
 mod press;
 mod release_all;
 mod scroll;
+mod set_value;
 mod stroke;
 mod type_text;
 
@@ -40,6 +41,9 @@ pub use press::{
 };
 pub use release_all::{ReleaseAllParams, ReleaseAllResponse, release_all_with_handles};
 pub use scroll::{ActScrollParams, ActScrollResponse, act_scroll_with_handle};
+pub use set_value::{
+    ActSetValueParams, ActSetValueResponse, act_set_value, act_set_value_request_details,
+};
 pub use stroke::{
     ActStrokeParams, ActStrokeResponse, act_stroke_error_details, act_stroke_request_details,
     act_stroke_validation_failure_details, act_stroke_with_handle, validate_act_stroke_params,

@@ -10,7 +10,8 @@ use super::{
     schema::{
         ActClickParams, ActClickPointTarget, ActClickTarget, ClickVelocityProfile,
         default_click_backend, default_click_button, default_click_count,
-        default_click_duration_ms, default_click_velocity_profile, default_use_invoke_pattern,
+        default_click_duration_ms, default_click_velocity_profile,
+        default_coordinate_fallback_on_unsupported, default_use_invoke_pattern,
     },
 };
 
@@ -41,6 +42,7 @@ async fn coordinate_click_leaves_actor_held_state_empty() {
             hold_ms: super::schema::default_click_hold_ms(),
             backend: default_click_backend(),
             use_invoke_pattern: default_use_invoke_pattern(),
+            coordinate_fallback_on_unsupported: default_coordinate_fallback_on_unsupported(),
             verify_delta: false,
             verify_timeout_ms: super::schema::default_verify_timeout_ms(),
             deprecated_curve_alias_used: false,
@@ -95,6 +97,7 @@ async fn element_click_rejects_non_mouse_element_transports_before_delivery() {
                 hold_ms: super::schema::default_click_hold_ms(),
                 backend,
                 use_invoke_pattern: default_use_invoke_pattern(),
+                coordinate_fallback_on_unsupported: default_coordinate_fallback_on_unsupported(),
                 verify_delta: false,
                 verify_timeout_ms: super::schema::default_verify_timeout_ms(),
                 deprecated_curve_alias_used: false,
@@ -264,6 +267,7 @@ async fn browser_ocr_element_click_uses_coordinate_route_even_when_invoke_defaul
             hold_ms: super::schema::default_click_hold_ms(),
             backend: default_click_backend(),
             use_invoke_pattern: default_use_invoke_pattern(),
+            coordinate_fallback_on_unsupported: default_coordinate_fallback_on_unsupported(),
             verify_delta: false,
             verify_timeout_ms: super::schema::default_verify_timeout_ms(),
             deprecated_curve_alias_used: false,
@@ -320,6 +324,7 @@ async fn browser_ocr_element_click_rejects_empty_ocr_bbox_before_uia_resolution(
             hold_ms: super::schema::default_click_hold_ms(),
             backend: default_click_backend(),
             use_invoke_pattern: default_use_invoke_pattern(),
+            coordinate_fallback_on_unsupported: default_coordinate_fallback_on_unsupported(),
             verify_delta: false,
             verify_timeout_ms: super::schema::default_verify_timeout_ms(),
             deprecated_curve_alias_used: false,

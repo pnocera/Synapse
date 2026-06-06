@@ -58,6 +58,20 @@ pub struct ElementValueReadback {
     pub is_readonly: bool,
 }
 
+/// Live metadata read from a re-resolved element on the UIA worker.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct ElementMetadataReadback {
+    pub name: String,
+    pub role: String,
+    pub automation_id: Option<String>,
+    pub bbox: Rect,
+    pub enabled: bool,
+    pub keyboard_focusable: bool,
+    pub patterns: Vec<synapse_core::UiaPattern>,
+    pub value: Option<String>,
+}
+
 /// Resolves an element and reads its current bounding rectangle as plain data.
 ///
 /// # Errors
@@ -117,6 +131,17 @@ pub fn set_element_value(id: &ElementId, value: &str) -> A11yResult<ElementValue
 /// readback fails, and `A11Y_NOT_AVAILABLE` on non-Windows.
 pub fn element_value(id: &ElementId) -> A11yResult<ElementValueReadback> {
     platform::element_value(id)
+}
+
+/// Reads live metadata for a re-resolved element without mutating it.
+///
+/// # Errors
+///
+/// Returns `A11Y_ELEMENT_STALE` when the element id cannot be re-resolved, a
+/// structured UIA error for OS failures, or `A11Y_NOT_AVAILABLE` on
+/// non-Windows.
+pub fn element_metadata(id: &ElementId) -> A11yResult<ElementMetadataReadback> {
+    platform::element_metadata(id)
 }
 
 /// Read-only mirror of `uiautomation::types::ExpandCollapseState`. Kept

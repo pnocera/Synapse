@@ -4,9 +4,9 @@ use synapse_core::{
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::{
-    A11yError, A11yResult, AccessibleEvent, ElementClickAction, ElementSearchScope,
-    ElementValueReadback, ElementValueSetReadback, ExpandState, UIElement, UiaWorkerReadback,
-    WinEventHookReadback,
+    A11yError, A11yResult, AccessibleEvent, ElementClickAction, ElementMetadataReadback,
+    ElementSearchScope, ElementValueReadback, ElementValueSetReadback, ExpandState, UIElement,
+    UiaWorkerReadback, WinEventHookReadback,
 };
 
 pub struct WinEventSubscription {
@@ -196,6 +196,12 @@ pub fn set_element_value(_id: &ElementId, _value: &str) -> A11yResult<ElementVal
 pub fn element_value(_id: &ElementId) -> A11yResult<ElementValueReadback> {
     Err(A11yError::not_available(
         "UIA element ValuePattern readback requires Windows",
+    ))
+}
+
+pub fn element_metadata(_id: &ElementId) -> A11yResult<ElementMetadataReadback> {
+    Err(A11yError::not_available(
+        "UIA element metadata readback requires Windows",
     ))
 }
 

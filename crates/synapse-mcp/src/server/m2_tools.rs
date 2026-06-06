@@ -1,10 +1,11 @@
 use super::{
     ActClickParams, ActClickResponse, ActClipboardParams, ActClipboardResponse, ActClipboardVerb,
     ActKeymapParams, ActKeymapResponse, ActPadParams, ActPadResponse, ActPressParams,
-    ActPressResponse, ActScrollParams, ActScrollResponse, ActStrokeParams, ActStrokeResponse,
-    ActTypeParams, ActTypeResponse, ErrorData, Json, Parameters, ReleaseAllParams,
-    ReleaseAllResponse, SynapseService, act_click_with_handle, act_clipboard,
-    act_keymap_with_handle, act_pad_with_handle, act_press_with_handle, act_scroll_with_handle,
+    ActPressResponse, ActScrollParams, ActScrollResponse, ActSetValueParams, ActSetValueResponse,
+    ActStrokeParams, ActStrokeResponse, ActTypeParams, ActTypeResponse, ErrorData, Json,
+    Parameters, ReleaseAllParams, ReleaseAllResponse, SynapseService, act_click_with_handle,
+    act_clipboard, act_keymap_with_handle, act_pad_with_handle, act_press_with_handle,
+    act_scroll_with_handle, act_set_value, act_set_value_request_details,
     act_stroke_validation_failure_details, act_stroke_with_handle, act_type_with_handle,
     action_preflight::{ActionPreflightReadback, ForegroundProof},
     release_all_with_handles, tool, tool_router, validate_act_stroke_params,
@@ -114,7 +115,7 @@ const fn default_queue_blocker_duration_ms() -> u32 {
 #[tool_router(router = m2_tool_router, vis = "pub(super)")]
 impl SynapseService {
     #[tool(
-        description = "Click a screen coordinate or UI Automation element. Default element delivery uses background UIA control patterns (Invoke, Toggle, SelectionItem, ExpandCollapse, LegacyIAccessible.DoDefaultAction) and returns ACTION_ELEMENT_PATTERN_UNSUPPORTED when none is exposed; no implicit coordinate fallback is attempted. velocity_profile controls coordinate-move timing only, while explicit spatial paths belong to act_stroke. If a previously observed transient element expired before dispatch, returns TRANSIENT_ELEMENT_EXPIRED with re-observe/find guidance."
+        description = "Click a screen coordinate or UI Automation element. Default element delivery uses background UIA control patterns (Invoke, Toggle, SelectionItem, ExpandCollapse, LegacyIAccessible.DoDefaultAction). When those patterns are unsupported, coordinate_fallback_on_unsupported=true allows a recorded bbox-center coordinate click only for enabled keyboard-focusable edit/document/text targets or elements exposing Value/Text patterns; set false to fail closed with ACTION_ELEMENT_PATTERN_UNSUPPORTED. velocity_profile controls coordinate-move timing only, while explicit spatial paths belong to act_stroke. If a previously observed transient element expired before dispatch, returns TRANSIENT_ELEMENT_EXPIRED with re-observe/find guidance."
     )]
     pub async fn act_click(
         &self,
@@ -223,6 +224,39 @@ impl SynapseService {
             (other, _) => other,
         };
         self.audit_action_result("act_type", &result)?;
+        result.map(Json)
+    }
+
+    #[tool(
+        description = "Set a UI Automation element's ValuePattern value directly and verify with a separate UIA value readback. Requires a real enabled non-read-only ValuePattern target; does not fall back to keyboard typing."
+    )]
+    pub async fn act_set_value(
+        &self,
+        params: Parameters<ActSetValueParams>,
+    ) -> Result<Json<ActSetValueResponse>, ErrorData> {
+        let params = params.0;
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "act_set_value",
+            "tool.invocation kind=act_set_value"
+        );
+        let request_details = act_set_value_request_details(&params);
+        let preflight = match self.ensure_supported_use_allows_action("act_set_value") {
+            Ok(preflight) => preflight,
+            Err(error) => {
+                self.audit_action_denied_with_details("act_set_value", &error, &request_details);
+                return Err(error);
+            }
+        };
+        self.audit_action_started_with_details(
+            "act_set_value",
+            &json!({
+                "request": request_details,
+                "preflight": preflight,
+            }),
+        )?;
+        let result = act_set_value(params).await;
+        self.audit_action_result("act_set_value", &result)?;
         result.map(Json)
     }
 

@@ -13,6 +13,12 @@ pub enum A11yError {
     ElementStale { detail: String },
     #[error("UI Automation element has no supported click control pattern: {detail}")]
     ElementPatternUnsupported { detail: String },
+    #[error("UI Automation element does not support ValuePattern: {detail}")]
+    ElementValueUnsupported { detail: String },
+    #[error("UI Automation element ValuePattern is read-only: {detail}")]
+    ElementValueReadOnly { detail: String },
+    #[error("UI Automation element is not enabled: {detail}")]
+    ElementNotEnabled { detail: String },
     #[error("Chromium DevTools Protocol is unreachable: {detail}")]
     CdpUnreachable { detail: String },
     #[error("Chromium DevTools Protocol attach failed: {detail}")]
@@ -34,6 +40,10 @@ impl A11yError {
             Self::ElementStale { .. } => error_codes::A11Y_ELEMENT_STALE,
             Self::ElementPatternUnsupported { .. } => {
                 error_codes::ACTION_ELEMENT_PATTERN_UNSUPPORTED
+            }
+            Self::ElementValueUnsupported { .. } => error_codes::ACTION_ELEMENT_PATTERN_UNSUPPORTED,
+            Self::ElementValueReadOnly { .. } | Self::ElementNotEnabled { .. } => {
+                error_codes::ACTION_TARGET_INVALID
             }
             Self::CdpUnreachable { .. } => error_codes::A11Y_CDP_UNREACHABLE,
             Self::CdpAttachFailed { .. } => error_codes::A11Y_CDP_ATTACH_FAILED,

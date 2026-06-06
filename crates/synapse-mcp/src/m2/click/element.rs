@@ -5,7 +5,9 @@ use synapse_action::{
     ActionError, ActionHandle, DoubleClickTiming, ElementClickOutcome, EmitState, RecordingBackend,
     click_element_or_fallback,
 };
-use synapse_core::{Action, ButtonAction, MouseButton, MouseTarget, Point, error_codes};
+use synapse_core::{
+    Action, ButtonAction, MouseButton, MouseTarget, Point, UiaPattern, error_codes,
+};
 use tokio::time::{Duration, sleep};
 
 #[cfg(windows)]
@@ -45,112 +47,17 @@ pub(super) async fn execute_element_click(
     started: Instant,
 ) -> Result<ActClickResponse, ErrorData> {
     if element_is_coordinate_only(&element.element_id) || !params.use_invoke_pattern {
-        let screen_point = element_center(&element.element_id)?;
-        trace_element_click_outcome(
+        return execute_coordinate_element_click(
+            handle,
+            params,
             element,
-            0,
+            recording,
+            timing,
+            started,
+            Vec::new(),
             "coordinate_direct",
-            ElementClickTraceReadback {
-                fallback_screen_point: Some(screen_point),
-                ..ElementClickTraceReadback::default()
-            },
-        );
-        let actions = coordinate_click_actions(params, screen_point);
-        let mut tier_attempts = Vec::new();
-        let backend_used = if let Some(recording) = recording {
-            if let Err(error) =
-                record::execute_recording(recording, &actions, params.clicks, timing).await
-            {
-                let error_code = click_error_code(&error);
-                let reason_code = click_reason_for_error_code(&error_code);
-                tier_attempts.push(click_tier_failed(
-                    CLICK_TIER_FOREGROUND,
-                    reason_code,
-                    error_code,
-                    true,
-                    error.message.to_string(),
-                ));
-                return Err(attach_click_tier_attempts(error, tier_attempts));
-            }
-            tier_attempts.push(click_tier_delivered(
-                CLICK_TIER_FOREGROUND,
-                true,
-                "coordinate element click recorded through the foreground input tier",
-            ));
-            backend_used_name(params.backend).to_owned()
-        } else {
-            match record::execute_actor_actions(handle, actions, timing).await {
-                Ok(()) => {
-                    tier_attempts.push(click_tier_delivered(
-                        CLICK_TIER_FOREGROUND,
-                        true,
-                        "coordinate element click delivered through the foreground input tier",
-                    ));
-                    backend_used_name(params.backend).to_owned()
-                }
-                Err(error) if should_try_hwnd_message_fallback(&error) => {
-                    let foreground_detail = error.message.to_string();
-                    tier_attempts.push(click_tier_failed(
-                        CLICK_TIER_FOREGROUND,
-                        CLICK_REASON_BACKEND_UNAVAILABLE,
-                        error_codes::ACTION_BACKEND_UNAVAILABLE,
-                        true,
-                        foreground_detail,
-                    ));
-                    match post_element_window_message_click(params, element, screen_point, timing)
-                        .await
-                    {
-                        Ok(backend_used) => {
-                            tier_attempts.push(click_tier_delivered(
-                                CLICK_TIER_POSTMESSAGE,
-                                false,
-                                "coordinate element click delivered through HWND PostMessage",
-                            ));
-                            backend_used
-                        }
-                        Err(error) => {
-                            let error_code = click_error_code(&error);
-                            let reason_code = click_reason_for_error_code(&error_code);
-                            tier_attempts.push(click_tier_failed(
-                                CLICK_TIER_POSTMESSAGE,
-                                reason_code,
-                                error_code,
-                                false,
-                                error.message.to_string(),
-                            ));
-                            return Err(attach_click_tier_attempts(error, tier_attempts));
-                        }
-                    }
-                }
-                Err(error) => {
-                    let error_code = click_error_code(&error);
-                    let reason_code = click_reason_for_error_code(&error_code);
-                    tier_attempts.push(click_tier_failed(
-                        CLICK_TIER_FOREGROUND,
-                        reason_code,
-                        error_code,
-                        true,
-                        error.message.to_string(),
-                    ));
-                    return Err(attach_click_tier_attempts(error, tier_attempts));
-                }
-            }
-        };
-        let backend_tier_used = click_backend_tier_used(&tier_attempts);
-        let required_foreground = click_required_foreground(&tier_attempts);
-        return Ok(ActClickResponse {
-            ok: true,
-            used_invoke_pattern: false,
-            backend_used,
-            backend_tier_used,
-            required_foreground,
-            tier_attempts,
-            postcondition: postcondition_not_requested(),
-            press_hold_ms: params.hold_ms,
-            double_click_window_ms: timing.window_ms,
-            inter_click_delay_ms: timing.inter_click_delay_ms,
-            elapsed_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
-        });
+        )
+        .await;
     }
 
     let mut state = EmitState::new();
@@ -158,30 +65,73 @@ pub(super) async fn execute_element_click(
     let mut backend_used = "software";
     let mut uia_outcomes = Vec::new();
     for click_index in 0..params.clicks {
-        let outcome = if let Some(recording) = recording {
+        let outcome_result = if let Some(recording) = recording {
             click_element_or_fallback(&element.element_id, recording, &mut state, params.button)
         } else {
             let backend = synapse_action::backend::software::SoftwareBackend::new();
             click_element_or_fallback(&element.element_id, &backend, &mut state, params.button)
-        }
-        .map_err(|error| {
-            let mcp_error = action_error_to_mcp(&error);
-            if error_has_click_tier_attempts(&mcp_error) {
-                return mcp_error;
-            }
-            let error_code = click_error_code(&mcp_error);
-            let reason_code = click_reason_for_error_code(&error_code);
-            attach_click_tier_attempts(
-                mcp_error,
-                vec![click_tier_failed(
+        };
+        let outcome = match outcome_result {
+            Ok(outcome) => outcome,
+            Err(error) => {
+                let error_code = error.code().to_owned();
+                let reason_code = click_reason_for_error_code(&error_code);
+                let tier_attempts = vec![click_tier_failed(
                     CLICK_TIER_UIA,
                     reason_code,
-                    error_code,
+                    error_code.clone(),
                     false,
                     error.detail().to_owned(),
-                )],
-            )
-        })?;
+                )];
+                if error_code == error_codes::ACTION_ELEMENT_PATTERN_UNSUPPORTED
+                    && params.coordinate_fallback_on_unsupported
+                {
+                    let metadata = element_coordinate_fallback_metadata(&element.element_id)?;
+                    if coordinate_fallback_allowed_for_metadata(&metadata) {
+                        tracing::info!(
+                            code = "M2_ACT_CLICK_COORDINATE_FALLBACK_ON_UNSUPPORTED",
+                            kind = "act_click",
+                            element_id = %element.element_id,
+                            role = %metadata.role,
+                            automation_id = metadata.automation_id.as_deref(),
+                            enabled = metadata.enabled,
+                            keyboard_focusable = metadata.keyboard_focusable,
+                            patterns = ?metadata.patterns,
+                            bbox = ?metadata.bbox,
+                            "act_click UIA pattern unsupported; explicit coordinate fallback allowed for focusable edit/document-like element"
+                        );
+                        return execute_coordinate_element_click(
+                            handle,
+                            params,
+                            element,
+                            recording,
+                            timing,
+                            started,
+                            tier_attempts,
+                            "coordinate_fallback_on_unsupported",
+                        )
+                        .await;
+                    }
+                    tracing::warn!(
+                        code = "M2_ACT_CLICK_COORDINATE_FALLBACK_DENIED",
+                        kind = "act_click",
+                        element_id = %element.element_id,
+                        role = %metadata.role,
+                        automation_id = metadata.automation_id.as_deref(),
+                        enabled = metadata.enabled,
+                        keyboard_focusable = metadata.keyboard_focusable,
+                        patterns = ?metadata.patterns,
+                        bbox = ?metadata.bbox,
+                        "act_click UIA pattern unsupported; coordinate fallback denied because element is not an enabled focusable edit/document-like target"
+                    );
+                }
+                let mcp_error = action_error_to_mcp(&error);
+                if error_has_click_tier_attempts(&mcp_error) {
+                    return Err(mcp_error);
+                }
+                return Err(attach_click_tier_attempts(mcp_error, tier_attempts));
+            }
+        };
 
         match outcome {
             ElementClickOutcome::Invoked => {
@@ -334,6 +284,164 @@ pub(super) async fn execute_element_click(
         inter_click_delay_ms: timing.inter_click_delay_ms,
         elapsed_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
     })
+}
+
+async fn execute_coordinate_element_click(
+    handle: ActionHandle,
+    params: &ActClickParams,
+    element: &ActClickElementTarget,
+    recording: Option<&RecordingBackend>,
+    timing: DoubleClickTiming,
+    started: Instant,
+    mut tier_attempts: Vec<ActClickTierAttempt>,
+    trace_outcome: &'static str,
+) -> Result<ActClickResponse, ErrorData> {
+    let screen_point = match element_center(&element.element_id) {
+        Ok(screen_point) => screen_point,
+        Err(error) => {
+            let error_code = click_error_code(&error);
+            let reason_code = click_reason_for_error_code(&error_code);
+            tier_attempts.push(click_tier_failed(
+                CLICK_TIER_FOREGROUND,
+                reason_code,
+                error_code,
+                true,
+                error.message.to_string(),
+            ));
+            return Err(attach_click_tier_attempts(error, tier_attempts));
+        }
+    };
+    trace_element_click_outcome(
+        element,
+        0,
+        trace_outcome,
+        ElementClickTraceReadback {
+            fallback_screen_point: Some(screen_point),
+            ..ElementClickTraceReadback::default()
+        },
+    );
+    let actions = coordinate_click_actions(params, screen_point);
+    let backend_used = if let Some(recording) = recording {
+        if let Err(error) =
+            record::execute_recording(recording, &actions, params.clicks, timing).await
+        {
+            let error_code = click_error_code(&error);
+            let reason_code = click_reason_for_error_code(&error_code);
+            tier_attempts.push(click_tier_failed(
+                CLICK_TIER_FOREGROUND,
+                reason_code,
+                error_code,
+                true,
+                error.message.to_string(),
+            ));
+            return Err(attach_click_tier_attempts(error, tier_attempts));
+        }
+        tier_attempts.push(click_tier_delivered(
+            CLICK_TIER_FOREGROUND,
+            true,
+            "coordinate element click recorded through the foreground input tier",
+        ));
+        backend_used_name(params.backend).to_owned()
+    } else {
+        match record::execute_actor_actions(handle, actions, timing).await {
+            Ok(()) => {
+                tier_attempts.push(click_tier_delivered(
+                    CLICK_TIER_FOREGROUND,
+                    true,
+                    "coordinate element click delivered through the foreground input tier",
+                ));
+                backend_used_name(params.backend).to_owned()
+            }
+            Err(error) if should_try_hwnd_message_fallback(&error) => {
+                let foreground_detail = error.message.to_string();
+                tier_attempts.push(click_tier_failed(
+                    CLICK_TIER_FOREGROUND,
+                    CLICK_REASON_BACKEND_UNAVAILABLE,
+                    error_codes::ACTION_BACKEND_UNAVAILABLE,
+                    true,
+                    foreground_detail,
+                ));
+                match post_element_window_message_click(params, element, screen_point, timing).await
+                {
+                    Ok(backend_used) => {
+                        tier_attempts.push(click_tier_delivered(
+                            CLICK_TIER_POSTMESSAGE,
+                            false,
+                            "coordinate element click delivered through HWND PostMessage",
+                        ));
+                        backend_used
+                    }
+                    Err(error) => {
+                        let error_code = click_error_code(&error);
+                        let reason_code = click_reason_for_error_code(&error_code);
+                        tier_attempts.push(click_tier_failed(
+                            CLICK_TIER_POSTMESSAGE,
+                            reason_code,
+                            error_code,
+                            false,
+                            error.message.to_string(),
+                        ));
+                        return Err(attach_click_tier_attempts(error, tier_attempts));
+                    }
+                }
+            }
+            Err(error) => {
+                let error_code = click_error_code(&error);
+                let reason_code = click_reason_for_error_code(&error_code);
+                tier_attempts.push(click_tier_failed(
+                    CLICK_TIER_FOREGROUND,
+                    reason_code,
+                    error_code,
+                    true,
+                    error.message.to_string(),
+                ));
+                return Err(attach_click_tier_attempts(error, tier_attempts));
+            }
+        }
+    };
+    let backend_tier_used = click_backend_tier_used(&tier_attempts);
+    let required_foreground = click_required_foreground(&tier_attempts);
+    Ok(ActClickResponse {
+        ok: true,
+        used_invoke_pattern: false,
+        backend_used,
+        backend_tier_used,
+        required_foreground,
+        tier_attempts,
+        postcondition: postcondition_not_requested(),
+        press_hold_ms: params.hold_ms,
+        double_click_window_ms: timing.window_ms,
+        inter_click_delay_ms: timing.inter_click_delay_ms,
+        elapsed_ms: u32::try_from(started.elapsed().as_millis()).unwrap_or(u32::MAX),
+    })
+}
+
+fn element_coordinate_fallback_metadata(
+    element_id: &synapse_core::ElementId,
+) -> Result<synapse_a11y::ElementMetadataReadback, ErrorData> {
+    synapse_a11y::element_metadata(element_id)
+        .map_err(|error| action_error_to_mcp(&element_resolution_error(element_id, error)))
+}
+
+fn coordinate_fallback_allowed_for_metadata(
+    metadata: &synapse_a11y::ElementMetadataReadback,
+) -> bool {
+    metadata.enabled
+        && metadata.keyboard_focusable
+        && metadata.bbox.w > 0
+        && metadata.bbox.h > 0
+        && (editable_role(&metadata.role) || exposes_text_value_pattern(&metadata.patterns))
+}
+
+fn editable_role(role: &str) -> bool {
+    let role = role.to_ascii_lowercase();
+    role.contains("edit") || role.contains("document") || role.contains("text")
+}
+
+fn exposes_text_value_pattern(patterns: &[UiaPattern]) -> bool {
+    patterns
+        .iter()
+        .any(|pattern| matches!(pattern, UiaPattern::Value | UiaPattern::Text))
 }
 
 pub(super) async fn execute_element_postmessage_click(
@@ -848,7 +956,8 @@ mod tests {
     use super::*;
     use crate::m2::click::schema::{
         ActClickTarget, ClickVelocityProfile, default_click_button, default_click_duration_ms,
-        default_click_hold_ms, default_verify_timeout_ms,
+        default_click_hold_ms, default_coordinate_fallback_on_unsupported,
+        default_verify_timeout_ms,
     };
 
     #[test]
@@ -866,6 +975,7 @@ mod tests {
             hold_ms: default_click_hold_ms(),
             backend: Backend::Software,
             use_invoke_pattern: false,
+            coordinate_fallback_on_unsupported: default_coordinate_fallback_on_unsupported(),
             verify_delta: false,
             verify_timeout_ms: default_verify_timeout_ms(),
             deprecated_curve_alias_used: false,
@@ -901,6 +1011,84 @@ mod tests {
             ));
         }
         println!("readback=act_click_element_coordinate_direct before={before} after={after:?}");
+    }
+
+    #[test]
+    fn coordinate_fallback_allows_enabled_focusable_edit_with_value_pattern() {
+        let metadata = synapse_a11y::ElementMetadataReadback {
+            name: "File name:".to_owned(),
+            role: "edit".to_owned(),
+            automation_id: Some("1148".to_owned()),
+            bbox: synapse_core::Rect {
+                x: 10,
+                y: 20,
+                w: 200,
+                h: 24,
+            },
+            enabled: true,
+            keyboard_focusable: true,
+            patterns: vec![synapse_core::UiaPattern::Value],
+            value: Some("before.txt".to_owned()),
+        };
+
+        let allowed = coordinate_fallback_allowed_for_metadata(&metadata);
+
+        println!(
+            "readback=act_click_coordinate_fallback edge=enabled_edit metadata={metadata:?} allowed={allowed}"
+        );
+        assert!(allowed);
+    }
+
+    #[test]
+    fn coordinate_fallback_denies_non_text_button() {
+        let metadata = synapse_a11y::ElementMetadataReadback {
+            name: "OK".to_owned(),
+            role: "button".to_owned(),
+            automation_id: Some("1".to_owned()),
+            bbox: synapse_core::Rect {
+                x: 10,
+                y: 20,
+                w: 80,
+                h: 24,
+            },
+            enabled: true,
+            keyboard_focusable: true,
+            patterns: vec![synapse_core::UiaPattern::Invoke],
+            value: None,
+        };
+
+        let allowed = coordinate_fallback_allowed_for_metadata(&metadata);
+
+        println!(
+            "readback=act_click_coordinate_fallback edge=non_text_button metadata={metadata:?} allowed={allowed}"
+        );
+        assert!(!allowed);
+    }
+
+    #[test]
+    fn coordinate_fallback_denies_non_focusable_value_element() {
+        let metadata = synapse_a11y::ElementMetadataReadback {
+            name: "Readout".to_owned(),
+            role: "text".to_owned(),
+            automation_id: None,
+            bbox: synapse_core::Rect {
+                x: 10,
+                y: 20,
+                w: 120,
+                h: 24,
+            },
+            enabled: true,
+            keyboard_focusable: false,
+            patterns: vec![synapse_core::UiaPattern::Value],
+            value: Some("42".to_owned()),
+        };
+
+        let allowed = coordinate_fallback_allowed_for_metadata(&metadata);
+
+        println!(
+            "readback=act_click_coordinate_fallback edge=non_focusable_value metadata={metadata:?} allowed={allowed}"
+        );
+        assert!(!allowed);
     }
 
     #[cfg(windows)]
