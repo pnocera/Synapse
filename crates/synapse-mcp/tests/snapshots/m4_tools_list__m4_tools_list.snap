@@ -3,7 +3,7 @@ source: crates/synapse-mcp/tests/m4_tools_list.rs
 expression: snapshot
 ---
 {
-  "count": 78,
+  "count": 86,
   "m4_defaults": [
     {
       "actual": 33,
@@ -162,12 +162,14 @@ expression: snapshot
     "act_click",
     "act_clipboard",
     "act_combo",
+    "act_focus_window",
     "act_keymap",
     "act_launch",
     "act_pad",
     "act_press",
     "act_run_shell",
     "act_scroll",
+    "act_set_value",
     "act_stroke",
     "act_type",
     "action_diagnostic_queue_full_setup",
@@ -177,6 +179,10 @@ expression: snapshot
     "audit_export_bundle",
     "audit_intelligence_query",
     "capture_screenshot",
+    "clear_target",
+    "control_lease_acquire",
+    "control_lease_release",
+    "control_lease_status",
     "everquest_action_prior_record",
     "everquest_action_prior_scorecard",
     "everquest_autocombat",
@@ -203,6 +209,7 @@ expression: snapshot
     "everquest_world_model_record",
     "everquest_world_summary",
     "find",
+    "get_target",
     "health",
     "observe",
     "observe_delta",
@@ -231,6 +238,7 @@ expression: snapshot
     "replay_record",
     "set_capture_target",
     "set_perception_mode",
+    "set_target",
     "storage_gc_once",
     "storage_inspect",
     "storage_pressure_sample",

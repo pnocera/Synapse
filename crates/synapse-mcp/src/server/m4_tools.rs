@@ -37,7 +37,9 @@ impl SynapseService {
         result.map(Json)
     }
 
-    #[tool(description = "Run a local shell command only when startup policy permits it")]
+    #[tool(
+        description = "Run an allowlisted executable child process. command is an executable path/name only; pass flags and shell snippets in args, using an explicit shell executable when shell syntax is required."
+    )]
     pub async fn act_run_shell(
         &self,
         params: Parameters<ActRunShellParams>,

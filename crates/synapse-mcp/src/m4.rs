@@ -312,9 +312,15 @@ pub struct ActComboResponse {
 #[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct ActRunShellParams {
+    #[schemars(
+        description = "Executable path or program name only. Do not include arguments, quotes, pipes, redirection, or other shell syntax here; pass arguments in args. For shell syntax, set command to an explicit shell executable such as powershell.exe or cmd.exe and put the shell flags/snippet in args."
+    )]
     pub command: String,
     #[serde(default)]
-    #[schemars(default)]
+    #[schemars(
+        default,
+        description = "Arguments passed literally to the executable. These are not parsed by a shell unless command itself is an explicit shell executable."
+    )]
     pub args: Vec<String>,
     pub working_dir: Option<String>,
     #[serde(default)]
@@ -1455,12 +1461,14 @@ fn push_key_chord_combo_steps(out: &mut Vec<ComboStep>, at_ms: u32, keys: Vec<Ke
 }
 
 fn validate_run_shell_params(params: &ActRunShellParams) -> Result<(), ErrorData> {
-    if params.command.trim().is_empty() {
+    let command = params.command.trim();
+    if command.is_empty() {
         return Err(mcp_error(
             error_codes::TOOL_PARAMS_INVALID,
             "act_run_shell command must not be empty",
         ));
     }
+    validate_run_shell_command_shape(params, command)?;
     if params.timeout_ms == 0 || params.timeout_ms > MAX_SHELL_TIMEOUT_MS {
         return Err(mcp_error(
             error_codes::TOOL_PARAMS_INVALID,
@@ -1471,6 +1479,116 @@ fn validate_run_shell_params(params: &ActRunShellParams) -> Result<(), ErrorData
         validate_run_shell_idempotency_key(key)?;
     }
     Ok(())
+}
+
+fn validate_run_shell_command_shape(
+    params: &ActRunShellParams,
+    command: &str,
+) -> Result<(), ErrorData> {
+    if command != params.command {
+        return Err(shell_tool_error(
+            error_codes::TOOL_PARAMS_INVALID,
+            "act_run_shell command must not include leading or trailing whitespace",
+            json!({
+                "code": error_codes::TOOL_PARAMS_INVALID,
+                "command": params.command,
+                "trimmed_command": command,
+                "args": params.args,
+                "working_dir": params.working_dir,
+                "reason": "command_has_outer_whitespace",
+            }),
+        ));
+    }
+
+    if is_wrapped_in_quotes(command) {
+        return Err(shell_tool_error(
+            error_codes::TOOL_PARAMS_INVALID,
+            "act_run_shell command must be an unquoted executable path/name; pass arguments separately in args",
+            json!({
+                "code": error_codes::TOOL_PARAMS_INVALID,
+                "command": params.command,
+                "args": params.args,
+                "working_dir": params.working_dir,
+                "reason": "command_must_not_be_quoted",
+                "expected_shape_windows": {
+                    "command": r"C:\Program Files\PowerShell\7\pwsh.exe",
+                    "args": ["-NoProfile", "-Command", "Write-Output ok"],
+                },
+            }),
+        ));
+    }
+    if starts_with_unclosed_quote(command) {
+        return Err(shell_tool_error(
+            error_codes::TOOL_PARAMS_INVALID,
+            "act_run_shell command has an opening quote without a closing quote; pass the unquoted executable path/name in command",
+            json!({
+                "code": error_codes::TOOL_PARAMS_INVALID,
+                "command": params.command,
+                "args": params.args,
+                "working_dir": params.working_dir,
+                "reason": "command_has_unbalanced_quote",
+            }),
+        ));
+    }
+
+    let Some(first_token) = first_command_token(command) else {
+        return Ok(());
+    };
+    if first_token == command || command_exists_verbatim(command, params.working_dir.as_deref()) {
+        return Ok(());
+    }
+
+    Err(shell_tool_error(
+        error_codes::TOOL_PARAMS_INVALID,
+        "act_run_shell command must be an executable path/name only; pass flags and shell snippets in args",
+        json!({
+            "code": error_codes::TOOL_PARAMS_INVALID,
+            "command": params.command,
+            "args": params.args,
+            "working_dir": params.working_dir,
+            "reason": "command_contains_arguments",
+            "detected_executable_token": first_token,
+            "expected_shape_windows_powershell": {
+                "command": "powershell.exe",
+                "args": ["-NoProfile", "-Command", "Write-Output ok"],
+            },
+            "expected_shape_windows_cmd": {
+                "command": "cmd.exe",
+                "args": ["/d", "/c", "echo ok"],
+            },
+        }),
+    ))
+}
+
+fn is_wrapped_in_quotes(command: &str) -> bool {
+    command.len() >= 2 && command.starts_with('"') && command.ends_with('"')
+}
+
+fn starts_with_unclosed_quote(command: &str) -> bool {
+    command.starts_with('"') && !command[1..].contains('"')
+}
+
+fn command_exists_verbatim(command: &str, working_dir: Option<&str>) -> bool {
+    let path = Path::new(command);
+    if path.is_file() {
+        return true;
+    }
+    if path.is_relative() {
+        if let Some(working_dir) = working_dir {
+            return Path::new(working_dir).join(path).is_file();
+        }
+    }
+    false
+}
+
+fn first_command_token(command: &str) -> Option<&str> {
+    if command.starts_with('"') {
+        let closing_quote = command[1..].find('"')? + 1;
+        return Some(&command[..=closing_quote]);
+    }
+    command
+        .char_indices()
+        .find_map(|(index, ch)| ch.is_whitespace().then_some(&command[..index]))
 }
 
 fn validate_run_shell_idempotency_key(key: &str) -> Result<(), ErrorData> {
@@ -3595,6 +3713,126 @@ mod tests {
             shell_command_line(&params),
             "cmd.exe /c \"echo hello\" \"\""
         );
+    }
+
+    #[test]
+    fn shell_params_reject_command_string_with_embedded_args() {
+        let params = shell_params(
+            "powershell -NoProfile -Command Write-Output SYN769",
+            Vec::new(),
+            30_000,
+        );
+
+        let error = match validate_run_shell_params(&params) {
+            Ok(()) => panic!("command string with embedded args should be rejected"),
+            Err(error) => error,
+        };
+
+        let reason = error
+            .data
+            .as_ref()
+            .and_then(|data| data.get("reason"))
+            .and_then(|reason| reason.as_str());
+        println!(
+            "readback=act_run_shell_command_shape edge=embedded_args before={:?} after_reason={reason:?}",
+            params.command
+        );
+        assert_eq!(reason, Some("command_contains_arguments"));
+    }
+
+    #[test]
+    fn shell_params_reject_quoted_command_path() {
+        let params = shell_params(
+            r#""C:\Program Files\PowerShell\7\pwsh.exe""#,
+            Vec::new(),
+            30_000,
+        );
+
+        let error = match validate_run_shell_params(&params) {
+            Ok(()) => panic!("quoted command path should be rejected"),
+            Err(error) => error,
+        };
+
+        let reason = error
+            .data
+            .as_ref()
+            .and_then(|data| data.get("reason"))
+            .and_then(|reason| reason.as_str());
+        println!(
+            "readback=act_run_shell_command_shape edge=quoted_path before={:?} after_reason={reason:?}",
+            params.command
+        );
+        assert_eq!(reason, Some("command_must_not_be_quoted"));
+    }
+
+    #[test]
+    fn shell_params_reject_unbalanced_command_quote() {
+        let params = shell_params(
+            r#""C:\Program Files\PowerShell\7\pwsh.exe"#,
+            Vec::new(),
+            30_000,
+        );
+
+        let error = match validate_run_shell_params(&params) {
+            Ok(()) => panic!("unbalanced command quote should be rejected"),
+            Err(error) => error,
+        };
+
+        let reason = error
+            .data
+            .as_ref()
+            .and_then(|data| data.get("reason"))
+            .and_then(|reason| reason.as_str());
+        println!(
+            "readback=act_run_shell_command_shape edge=unbalanced_quote before={:?} after_reason={reason:?}",
+            params.command
+        );
+        assert_eq!(reason, Some("command_has_unbalanced_quote"));
+    }
+
+    #[test]
+    fn shell_params_allow_existing_command_path_with_spaces() {
+        let dir = tempfile::TempDir::new()
+            .unwrap_or_else(|error| panic!("create temp shell path dir: {error}"));
+        let nested = dir.path().join("dir with spaces");
+        std::fs::create_dir_all(&nested)
+            .unwrap_or_else(|error| panic!("create nested temp path: {error}"));
+        let command_path = nested.join("tool with spaces.exe");
+        std::fs::write(&command_path, b"synthetic executable path marker")
+            .unwrap_or_else(|error| panic!("write temp command path: {error}"));
+        let params = shell_params(
+            &command_path.display().to_string(),
+            vec!["--version"],
+            30_000,
+        );
+
+        println!(
+            "readback=act_run_shell_command_shape edge=existing_path_with_spaces before={:?}",
+            params.command
+        );
+        validate_run_shell_params(&params).unwrap_or_else(|error| {
+            panic!("existing executable path with spaces rejected: {error}")
+        });
+    }
+
+    #[test]
+    fn shell_params_allow_working_dir_relative_command_path_with_spaces() {
+        let dir = tempfile::TempDir::new()
+            .unwrap_or_else(|error| panic!("create temp shell working dir: {error}"));
+        let command_name = "tool with spaces.exe";
+        let command_path = dir.path().join(command_name);
+        std::fs::write(&command_path, b"synthetic executable path marker")
+            .unwrap_or_else(|error| panic!("write temp command path: {error}"));
+        let mut params = shell_params(command_name, vec!["--version"], 30_000);
+        params.working_dir = Some(dir.path().display().to_string());
+
+        println!(
+            "readback=act_run_shell_command_shape edge=working_dir_relative_path before={:?} working_dir={:?}",
+            params.command, params.working_dir
+        );
+        validate_run_shell_params(&params).unwrap_or_else(|error| {
+            panic!("working_dir-relative executable path with spaces rejected: {error}")
+        });
     }
 
     #[test]

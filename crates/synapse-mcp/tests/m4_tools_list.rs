@@ -4,16 +4,18 @@ use anyhow::{Context, ensure};
 use serde_json::{Value, json};
 use synapse_test_utils::stdio_mcp_client::StdioMcpClient;
 
-const EXPECTED_TOOLS: [&str; 78] = [
+const EXPECTED_TOOLS: [&str; 86] = [
     "act_click",
     "act_clipboard",
     "act_combo",
+    "act_focus_window",
     "act_keymap",
     "act_launch",
     "act_pad",
     "act_press",
     "act_run_shell",
     "act_scroll",
+    "act_set_value",
     "act_stroke",
     "act_type",
     "action_diagnostic_queue_full_setup",
@@ -23,6 +25,10 @@ const EXPECTED_TOOLS: [&str; 78] = [
     "audit_export_bundle",
     "audit_intelligence_query",
     "capture_screenshot",
+    "clear_target",
+    "control_lease_acquire",
+    "control_lease_release",
+    "control_lease_status",
     "everquest_action_prior_record",
     "everquest_action_prior_scorecard",
     "everquest_autocombat",
@@ -49,6 +55,7 @@ const EXPECTED_TOOLS: [&str; 78] = [
     "everquest_world_model_record",
     "everquest_world_summary",
     "find",
+    "get_target",
     "health",
     "observe",
     "observe_delta",
@@ -77,6 +84,7 @@ const EXPECTED_TOOLS: [&str; 78] = [
     "replay_record",
     "set_capture_target",
     "set_perception_mode",
+    "set_target",
     "storage_gc_once",
     "storage_inspect",
     "storage_pressure_sample",
@@ -110,10 +118,11 @@ async fn m4_tools_list_snapshot_defaults_and_closed_schemas() -> anyhow::Result<
         .map(str::to_owned)
         .collect::<Vec<_>>();
     assert_eq!(names, expected);
-    assert_eq!(names.len(), 78);
+    assert_eq!(names.len(), 86);
     assert_no_duplicate_names(&names)?;
 
     assert_schema_roots_closed(tools)?;
+    assert_act_run_shell_semantics_described(tools)?;
     let defaults = m4_default_readbacks(tools)?;
 
     let snapshot = json!({
@@ -170,6 +179,38 @@ fn assert_schema_roots_closed(tools: &[Value]) -> anyhow::Result<()> {
             );
         }
     }
+    Ok(())
+}
+
+fn assert_act_run_shell_semantics_described(tools: &[Value]) -> anyhow::Result<()> {
+    let tool = tool_by_name(tools, "act_run_shell")?;
+    let tool_description = tool
+        .get("description")
+        .and_then(Value::as_str)
+        .context("act_run_shell description missing")?;
+    ensure!(
+        tool_description.contains("executable path/name only")
+            && tool_description.contains("explicit shell executable"),
+        "act_run_shell description must explain executable-plus-args semantics: {tool_description}"
+    );
+
+    let command_description = value_at(tool, "inputSchema.properties.command.description")?
+        .as_str()
+        .context("act_run_shell command description missing")?;
+    ensure!(
+        command_description.contains("Executable path or program name only")
+            && command_description.contains("Do not include arguments"),
+        "act_run_shell command schema must reject shell-command-string ambiguity: {command_description}"
+    );
+
+    let args_description = value_at(tool, "inputSchema.properties.args.description")?
+        .as_str()
+        .context("act_run_shell args description missing")?;
+    ensure!(
+        args_description.contains("Arguments passed literally")
+            && args_description.contains("not parsed by a shell"),
+        "act_run_shell args schema must explain literal argument passing: {args_description}"
+    );
     Ok(())
 }
 
