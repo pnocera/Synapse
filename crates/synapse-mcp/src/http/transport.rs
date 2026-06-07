@@ -233,13 +233,17 @@ fn router(
         .context("read action handle for HTTP session cleanup")?;
     let session_targets_cleanup = service.session_targets_handle();
     let cdp_target_owners_cleanup = service.cdp_target_owners_handle();
+    let session_registry = service.session_registry_handle();
     let (mcp_service, session_manager) = streamable_service(shutdown_cancel, service)
         .context("initialize HTTP MCP session state")?;
+    let session_request =
+        session::SessionCleanupState::request_state(Arc::clone(&session_registry));
     let session_cleanup = session::SessionCleanupState::new(
         action_cleanup_handle.clone(),
         Arc::clone(&session_manager),
         session_targets_cleanup,
         cdp_target_owners_cleanup.clone(),
+        Arc::clone(&session_registry),
     );
     let _stale_cleanup_task = spawn_stale_session_input_cleanup(
         action_cleanup_handle,
@@ -259,7 +263,10 @@ fn router(
         .route("/events", get(events).post(publish_event))
         .route("/events/stats", get(event_stats))
         .nest_service("/mcp", mcp_service)
-        .layer(middleware::from_fn(session::require_mcp_session))
+        .layer(middleware::from_fn_with_state(
+            session_request,
+            session::require_mcp_session,
+        ))
         .layer(middleware::from_fn_with_state(
             session_cleanup,
             session::release_held_inputs_on_delete,
@@ -276,9 +283,17 @@ fn streamable_service(
     service: SynapseService,
 ) -> anyhow::Result<(McpHttpService, Arc<LocalSessionManager>)> {
     let session_config = session::load_session_config().context("load HTTP session config")?;
+    {
+        let session_registry = service.session_registry_handle();
+        let mut registry = session_registry.lock().map_err(|_poisoned| {
+            anyhow::anyhow!("session registry lock poisoned during HTTP session setup")
+        })?;
+        registry.set_stale_after(session_config.keep_alive);
+    }
     let session_store = Arc::new(SynapseMcpSessionStore::new(
         session_store_db(&service)?,
         session_config.keep_alive,
+        service.session_registry_handle(),
     ));
     let mut config = StreamableHttpServerConfig::default()
         .with_cancellation_token(shutdown_cancel.child_token());
@@ -565,11 +580,20 @@ fn session_store_db(service: &SynapseService) -> anyhow::Result<Arc<Db>> {
 struct SynapseMcpSessionStore {
     db: Arc<Db>,
     ttl: Option<Duration>,
+    session_registry: crate::server::session_registry::SharedSessionRegistry,
 }
 
 impl SynapseMcpSessionStore {
-    fn new(db: Arc<Db>, ttl: Option<Duration>) -> Self {
-        Self { db, ttl }
+    fn new(
+        db: Arc<Db>,
+        ttl: Option<Duration>,
+        session_registry: crate::server::session_registry::SharedSessionRegistry,
+    ) -> Self {
+        Self {
+            db,
+            ttl,
+            session_registry,
+        }
     }
 }
 
@@ -635,6 +659,13 @@ impl SessionStore for SynapseMcpSessionStore {
             stored_at_unix_ms = persisted.stored_at_unix_ms,
             "loaded MCP HTTP session state from CF_KV"
         );
+        record_registry_initialized(
+            &self.session_registry,
+            session_id,
+            &persisted.state,
+            persisted.stored_at_unix_ms,
+        )
+        .map_err(session_store_error)?;
         Ok(Some(persisted.state))
     }
 
@@ -656,6 +687,8 @@ impl SessionStore for SynapseMcpSessionStore {
             ttl_ms = self.ttl.map(duration_millis_u64),
             "persisted MCP HTTP session state to CF_KV"
         );
+        record_registry_initialized(&self.session_registry, session_id, state, stored_at_unix_ms)
+            .map_err(session_store_error)?;
         Ok(())
     }
 
@@ -669,8 +702,44 @@ impl SessionStore for SynapseMcpSessionStore {
             session_id,
             "deleted MCP HTTP session state from CF_KV"
         );
+        record_registry_closed(&self.session_registry, session_id).map_err(session_store_error)?;
         Ok(())
     }
+}
+
+fn record_registry_initialized(
+    session_registry: &crate::server::session_registry::SharedSessionRegistry,
+    session_id: &str,
+    state: &SessionState,
+    now_unix_ms: u64,
+) -> Result<(), synapse_storage::StorageError> {
+    let mut registry =
+        session_registry
+            .lock()
+            .map_err(|_error| synapse_storage::StorageError::WriteFailed {
+                cf_name: cf::CF_KV.to_owned(),
+                detail: "session registry lock poisoned during session store".to_owned(),
+            })?;
+    registry.record_initialized(session_id, state, "http", now_unix_ms);
+    Ok(())
+}
+
+fn record_registry_closed(
+    session_registry: &crate::server::session_registry::SharedSessionRegistry,
+    session_id: &str,
+) -> Result<(), synapse_storage::StorageError> {
+    let mut registry =
+        session_registry
+            .lock()
+            .map_err(|_error| synapse_storage::StorageError::WriteFailed {
+                cf_name: cf::CF_KV.to_owned(),
+                detail: "session registry lock poisoned during session delete".to_owned(),
+            })?;
+    registry.record_closed(
+        session_id,
+        crate::server::session_registry::unix_time_ms_now(),
+    );
+    Ok(())
 }
 
 fn mcp_session_store_key(session_id: &str) -> Vec<u8> {
@@ -899,10 +968,11 @@ async fn wait_for_shutdown_signal(phase: &'static str) -> anyhow::Result<()> {
 mod tests {
     use std::{
         collections::HashMap,
-        sync::{Arc, Mutex, MutexGuard, PoisonError},
+        sync::{Arc, Mutex},
         time::Duration,
     };
 
+    use crate::test_support;
     use anyhow::Context as _;
     use rmcp::model::{ClientCapabilities, Implementation, InitializeRequestParams};
     use rmcp::transport::streamable_http_server::session::SessionManager as _;
@@ -911,13 +981,7 @@ mod tests {
 
     use super::*;
 
-    static LEASE_SERIAL: Mutex<()> = Mutex::new(());
-
-    fn lease_serial() -> MutexGuard<'static, ()> {
-        let guard = LEASE_SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
-        let _prior = synapse_action::lease::force_clear("http_transport_lease_test_reset");
-        guard
-    }
+    const TEST_RESET_REASON: &str = "http_transport_lease_test_reset";
 
     fn test_session_state(name: &str) -> SessionState {
         SessionState::new(InitializeRequestParams::new(
@@ -934,11 +998,21 @@ mod tests {
         Arc::new(Mutex::new(HashMap::new()))
     }
 
+    fn empty_session_registry() -> crate::server::session_registry::SharedSessionRegistry {
+        Arc::new(Mutex::new(
+            crate::server::session_registry::SessionRegistry::default(),
+        ))
+    }
+
     #[tokio::test]
     async fn synapse_mcp_session_store_round_trips_exact_keys_and_deletes() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let db = Arc::new(Db::open(&temp.path().join("db"), SCHEMA_VERSION)?);
-        let store = SynapseMcpSessionStore::new(Arc::clone(&db), Some(Duration::from_mins(5)));
+        let store = SynapseMcpSessionStore::new(
+            Arc::clone(&db),
+            Some(Duration::from_mins(5)),
+            empty_session_registry(),
+        );
 
         assert!(
             store
@@ -1003,7 +1077,11 @@ mod tests {
     async fn synapse_mcp_session_store_deletes_expired_rows() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let db = Arc::new(Db::open(&temp.path().join("db"), SCHEMA_VERSION)?);
-        let store = SynapseMcpSessionStore::new(Arc::clone(&db), Some(Duration::from_millis(1)));
+        let store = SynapseMcpSessionStore::new(
+            Arc::clone(&db),
+            Some(Duration::from_millis(1)),
+            empty_session_registry(),
+        );
         let key = mcp_session_store_key("expired-session");
 
         store
@@ -1041,7 +1119,11 @@ mod tests {
     async fn synapse_mcp_session_store_deletes_legacy_rows_without_ttl() -> anyhow::Result<()> {
         let temp = tempfile::tempdir()?;
         let db = Arc::new(Db::open(&temp.path().join("db"), SCHEMA_VERSION)?);
-        let store = SynapseMcpSessionStore::new(Arc::clone(&db), Some(Duration::from_mins(5)));
+        let store = SynapseMcpSessionStore::new(
+            Arc::clone(&db),
+            Some(Duration::from_mins(5)),
+            empty_session_registry(),
+        );
         let key = mcp_session_store_key("legacy-session");
         let legacy_state = test_session_state("legacy-test");
         let legacy_encoded = synapse_storage::encode_json(&legacy_state)?;
@@ -1074,7 +1156,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_session_cleanup_releases_absent_inputs_only() -> anyhow::Result<()> {
-        let _serial = lease_serial();
+        let _serial = test_support::lease_serial(TEST_RESET_REASON);
         let cancel = CancellationToken::new();
         let backend: Arc<dyn ActionBackend> = Arc::new(RecordingBackend::new());
         let (handle, snapshot_handle, join) =
@@ -1157,7 +1239,7 @@ mod tests {
 
     #[tokio::test]
     async fn stale_session_cleanup_releases_absent_lease_without_inputs() -> anyhow::Result<()> {
-        let _serial = lease_serial();
+        let _serial = test_support::lease_serial(TEST_RESET_REASON);
         let cancel = CancellationToken::new();
         let backend: Arc<dyn ActionBackend> = Arc::new(RecordingBackend::new());
         let (handle, snapshot_handle, join) =
@@ -1194,7 +1276,7 @@ mod tests {
 
     #[tokio::test]
     async fn expired_lease_cleanup_releases_held_input_before_reacquire() -> anyhow::Result<()> {
-        let _serial = lease_serial();
+        let _serial = test_support::lease_serial(TEST_RESET_REASON);
         let cancel = CancellationToken::new();
         let backend: Arc<dyn ActionBackend> = Arc::new(RecordingBackend::new());
         let (handle, snapshot_handle, join) =

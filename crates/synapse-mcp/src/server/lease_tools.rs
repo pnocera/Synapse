@@ -291,24 +291,10 @@ fn lease_not_held_error(session_id: &str, error: &synapse_action::LeaseError) ->
 #[cfg(test)]
 mod tests {
     use super::{acquire_lease_for_session, lease_status_for_session, release_lease_for_session};
-    use std::sync::{Mutex, MutexGuard, PoisonError};
-    use synapse_action::lease;
+    use crate::test_support;
     use synapse_core::error_codes;
 
-    // The lease is process-global, so these tests cannot run concurrently with
-    // each other. Serialize them on a module-local mutex and reset the lease
-    // under the guard so no test observes another's holder.
-    static SERIAL: Mutex<()> = Mutex::new(());
-
-    fn serial() -> MutexGuard<'static, ()> {
-        let guard = SERIAL.lock().unwrap_or_else(PoisonError::into_inner);
-        let _prior = lease::force_clear("lease_tools_test_reset");
-        guard
-    }
-
-    fn reset() {
-        let _prior = lease::force_clear("lease_tools_test_reset");
-    }
+    const TEST_RESET_REASON: &str = "lease_tools_test_reset";
 
     fn error_code(error: &rmcp::ErrorData) -> Option<String> {
         error
@@ -321,7 +307,7 @@ mod tests {
 
     #[test]
     fn acquire_then_status_then_release_round_trip() -> anyhow::Result<()> {
-        let _serial = serial();
+        let _serial = test_support::lease_serial(TEST_RESET_REASON);
         let session = "fsv-tool-acquire";
         let acquired = acquire_lease_for_session(session, 5_000)
             .map_err(|error| anyhow::anyhow!("acquire failed: {error:?}"))?;
@@ -352,13 +338,13 @@ mod tests {
             "readback=input_lease step=after_release held={} owner={:?}",
             after.held, after.owner_session_id
         );
-        reset();
+        test_support::reset_lease(TEST_RESET_REASON);
         Ok(())
     }
 
     #[test]
     fn second_session_is_refused_busy_with_holder() -> anyhow::Result<()> {
-        let _serial = serial();
+        let _serial = test_support::lease_serial(TEST_RESET_REASON);
         let owner = "fsv-tool-busy-owner";
         let contender = "fsv-tool-busy-contender";
         let _held = acquire_lease_for_session(owner, 5_000)
@@ -386,13 +372,13 @@ mod tests {
             "readback=input_lease step=busy requesting={contender} holder={:?}",
             status.owner_session_id
         );
-        reset();
+        test_support::reset_lease(TEST_RESET_REASON);
         Ok(())
     }
 
     #[test]
     fn non_owner_release_errors_not_held() -> anyhow::Result<()> {
-        let _serial = serial();
+        let _serial = test_support::lease_serial(TEST_RESET_REASON);
         let owner = "fsv-tool-nonowner-owner";
         let intruder = "fsv-tool-nonowner-intruder";
         let _held = acquire_lease_for_session(owner, 5_000)
@@ -408,13 +394,13 @@ mod tests {
         );
         // Owner's lease survives the intruder's failed release.
         assert!(lease_status_for_session(owner).is_owner);
-        reset();
+        test_support::reset_lease(TEST_RESET_REASON);
         Ok(())
     }
 
     #[test]
     fn repeat_acquire_by_owner_renews() -> anyhow::Result<()> {
-        let _serial = serial();
+        let _serial = test_support::lease_serial(TEST_RESET_REASON);
         let session = "fsv-tool-renew";
         let _first = acquire_lease_for_session(session, 5_000)
             .map_err(|error| anyhow::anyhow!("first acquire failed: {error:?}"))?;
@@ -422,7 +408,7 @@ mod tests {
             .map_err(|error| anyhow::anyhow!("renew failed: {error:?}"))?;
         assert_eq!(second.outcome, "renewed");
         assert!(second.is_owner);
-        reset();
+        test_support::reset_lease(TEST_RESET_REASON);
         Ok(())
     }
 }

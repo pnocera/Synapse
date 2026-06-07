@@ -144,9 +144,13 @@ mod m3_tools;
 mod m4_tools;
 mod reality;
 mod schema_sanitize;
+pub(crate) mod session_registry;
+mod session_tools;
 mod target_policy;
 #[cfg(test)]
 mod tests;
+
+use session_registry::{SessionRegistry, SharedSessionRegistry};
 
 /// A single MCP session's active perception target (epic #720). When set,
 /// `observe`/`find`/`read_text`/`capture_screenshot` perceive this target
@@ -193,6 +197,7 @@ pub struct SynapseService {
     m4_config: M4ServiceConfig,
     session_targets: SharedSessionTargets,
     cdp_target_owners: SharedCdpTargetOwners,
+    session_registry: SharedSessionRegistry,
 }
 
 impl SynapseService {
@@ -214,6 +219,7 @@ impl SynapseService {
             m4_config: M4ServiceConfig::from_env()?,
             session_targets: Arc::new(Mutex::new(HashMap::new())),
             cdp_target_owners: Arc::new(Mutex::new(HashMap::new())),
+            session_registry: Arc::new(Mutex::new(SessionRegistry::default())),
         })
     }
 
@@ -246,6 +252,7 @@ impl SynapseService {
             m4_config,
             session_targets: Arc::new(Mutex::new(HashMap::new())),
             cdp_target_owners: Arc::new(Mutex::new(HashMap::new())),
+            session_registry: Arc::new(Mutex::new(SessionRegistry::default())),
         })
     }
 
@@ -278,6 +285,7 @@ impl SynapseService {
             m4_config,
             session_targets: Arc::new(Mutex::new(HashMap::new())),
             cdp_target_owners: Arc::new(Mutex::new(HashMap::new())),
+            session_registry: Arc::new(Mutex::new(SessionRegistry::default())),
         })
     }
 
@@ -306,6 +314,14 @@ impl SynapseService {
 
     pub(crate) const fn cdp_target_owners_ref(&self) -> &SharedCdpTargetOwners {
         &self.cdp_target_owners
+    }
+
+    pub(crate) fn session_registry_handle(&self) -> SharedSessionRegistry {
+        Arc::clone(&self.session_registry)
+    }
+
+    pub(crate) const fn session_registry_ref(&self) -> &SharedSessionRegistry {
+        &self.session_registry
     }
 
     /// Resolves the session's active target, if any. The cloned value is
@@ -354,6 +370,7 @@ impl SynapseService {
         let mut router = Self::m1_tool_router()
             + Self::m2_tool_router()
             + Self::lease_tool_router()
+            + Self::session_tool_router()
             + Self::reality_tool_router()
             + Self::m3_tool_router()
             + Self::m4_tool_router();

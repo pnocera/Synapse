@@ -4,7 +4,7 @@ assertion_line: 136
 expression: snapshot
 ---
 {
-  "count": 88,
+  "count": 90,
   "m4_defaults": [
     {
       "actual": 33,
@@ -239,6 +239,8 @@ expression: snapshot
     "reflex_register",
     "release_all",
     "replay_record",
+    "session_list",
+    "session_status",
     "set_capture_target",
     "set_perception_mode",
     "set_target",

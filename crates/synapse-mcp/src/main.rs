@@ -52,6 +52,8 @@ mod safety;
 mod server;
 mod single_instance;
 mod stdio_eof;
+#[cfg(test)]
+mod test_support;
 
 use std::{num::NonZeroUsize, path::PathBuf, process::ExitCode, time::Duration};
 

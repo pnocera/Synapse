@@ -21,11 +21,17 @@ tokio::task_local! {
 }
 
 #[derive(Clone)]
+pub(super) struct SessionRequestState {
+    session_registry: crate::server::session_registry::SharedSessionRegistry,
+}
+
+#[derive(Clone)]
 pub(super) struct SessionCleanupState {
     action_handle: ActionHandle,
     session_manager: Arc<LocalSessionManager>,
     session_targets: crate::server::SharedSessionTargets,
     cdp_target_owners: crate::server::SharedCdpTargetOwners,
+    session_registry: crate::server::session_registry::SharedSessionRegistry,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -35,17 +41,25 @@ enum SessionFailure {
 }
 
 impl SessionCleanupState {
+    pub(super) fn request_state(
+        session_registry: crate::server::session_registry::SharedSessionRegistry,
+    ) -> SessionRequestState {
+        SessionRequestState { session_registry }
+    }
+
     pub(super) fn new(
         action_handle: ActionHandle,
         session_manager: Arc<LocalSessionManager>,
         session_targets: crate::server::SharedSessionTargets,
         cdp_target_owners: crate::server::SharedCdpTargetOwners,
+        session_registry: crate::server::session_registry::SharedSessionRegistry,
     ) -> Self {
         Self {
             action_handle,
             session_manager,
             session_targets,
             cdp_target_owners,
+            session_registry,
         }
     }
 }
@@ -66,7 +80,11 @@ pub(super) fn load_session_config() -> anyhow::Result<SessionConfig> {
     Ok(config)
 }
 
-pub(super) async fn require_mcp_session(request: Request<Body>, next: Next) -> Response {
+pub(super) async fn require_mcp_session(
+    State(state): State<SessionRequestState>,
+    request: Request<Body>,
+    next: Next,
+) -> Response {
     if !is_mcp_endpoint(request.uri().path()) {
         return next.run(request).await;
     }
@@ -74,6 +92,15 @@ pub(super) async fn require_mcp_session(request: Request<Body>, next: Next) -> R
     let request = match enforce_session_header(request).await {
         Ok(request) => request,
         Err(response) => return response,
+    };
+    let request = match session_id.as_deref() {
+        Some(session_id) => {
+            match record_session_request(&state.session_registry, session_id, request).await {
+                Ok(request) => request,
+                Err(response) => return response,
+            }
+        }
+        None => request,
     };
     CURRENT_MCP_SESSION_ID
         .scope(session_id, async move {
@@ -137,6 +164,23 @@ pub(super) async fn release_held_inputs_on_delete(
         .session_targets
         .lock()
         .is_ok_and(|mut targets| targets.remove(&session_id).is_some());
+    let registry_closed = match state.session_registry.lock() {
+        Ok(mut registry) => {
+            registry.record_closed(
+                &session_id,
+                crate::server::session_registry::unix_time_ms_now(),
+            );
+            true
+        }
+        Err(_error) => {
+            tracing::error!(
+                code = synapse_core::error_codes::TOOL_INTERNAL_ERROR,
+                session_id,
+                "HTTP MCP session cleanup could not lock cross-session registry"
+            );
+            false
+        }
+    };
     let cdp_cleanup =
         cleanup_session_cdp_targets(&state.cdp_target_owners, &session_id, "http_delete").await;
     match result {
@@ -151,6 +195,7 @@ pub(super) async fn release_held_inputs_on_delete(
                 input_lease_released = summary.lease_released,
                 expired_lease_cleanup_completed = summary.expired_lease_cleanup_completed,
                 session_target_cleared = target_cleared,
+                session_registry_closed = registry_closed,
                 before = ?before,
                 after = ?after,
                 cdp_cleanup_reason = cdp_cleanup.reason,
@@ -369,6 +414,64 @@ async fn allow_initialize_without_session(
     }
 }
 
+async fn record_session_request(
+    session_registry: &crate::server::session_registry::SharedSessionRegistry,
+    session_id: &str,
+    request: Request<Body>,
+) -> Result<Request<Body>, Response> {
+    if request.method() != Method::POST {
+        record_session_heartbeat(session_registry, session_id, None)?;
+        return Ok(request);
+    }
+
+    let (parts, body) = request.into_parts();
+    let bytes = to_bytes(body, MAX_MCP_REQUEST_BYTES)
+        .await
+        .map_err(|_| payload_too_large())?;
+    let action = serde_json::from_slice::<serde_json::Value>(&bytes)
+        .ok()
+        .and_then(|value| jsonrpc_action_label(&value));
+    record_session_heartbeat(session_registry, session_id, action)?;
+    Ok(Request::from_parts(parts, Body::from(bytes)))
+}
+
+fn record_session_heartbeat(
+    session_registry: &crate::server::session_registry::SharedSessionRegistry,
+    session_id: &str,
+    action: Option<String>,
+) -> Result<(), Response> {
+    let mut registry = session_registry.lock().map_err(|_error| {
+        tracing::error!(
+            code = synapse_core::error_codes::TOOL_INTERNAL_ERROR,
+            session_id,
+            "HTTP MCP session request could not lock cross-session registry"
+        );
+        session_registry_failed()
+    })?;
+    registry.record_seen(
+        session_id,
+        action,
+        crate::server::session_registry::unix_time_ms_now(),
+    );
+    Ok(())
+}
+
+fn jsonrpc_action_label(value: &serde_json::Value) -> Option<String> {
+    if value.is_array() {
+        return Some("jsonrpc_batch".to_owned());
+    }
+    let method = value.get("method")?.as_str()?;
+    if method == "tools/call"
+        && let Some(name) = value
+            .get("params")
+            .and_then(|params| params.get("name"))
+            .and_then(serde_json::Value::as_str)
+    {
+        return Some(format!("tools/call:{name}"));
+    }
+    Some(method.to_owned())
+}
+
 fn jsonrpc_method_is_initialize(value: &serde_json::Value) -> bool {
     value
         .get("method")
@@ -407,11 +510,20 @@ fn cleanup_failed(error: synapse_action::ActionError) -> Response {
         .into_response()
 }
 
+fn session_registry_failed() -> Response {
+    (
+        StatusCode::INTERNAL_SERVER_ERROR,
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        "SESSION_REGISTRY_UNAVAILABLE",
+    )
+        .into_response()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        CURRENT_MCP_SESSION_ID, current_mcp_session_id, jsonrpc_method_is_initialize,
-        parse_idle_timeout,
+        CURRENT_MCP_SESSION_ID, current_mcp_session_id, jsonrpc_action_label,
+        jsonrpc_method_is_initialize, parse_idle_timeout,
     };
 
     #[test]
@@ -429,6 +541,22 @@ mod tests {
         });
         assert!(jsonrpc_method_is_initialize(&init));
         assert!(!jsonrpc_method_is_initialize(&list));
+    }
+
+    #[test]
+    fn jsonrpc_action_label_extracts_tool_call_name() {
+        let value = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": {"name": "session_list", "arguments": {}}
+        });
+        assert_eq!(
+            jsonrpc_action_label(&value).as_deref(),
+            Some("tools/call:session_list")
+        );
+        let list = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"tools/list"});
+        assert_eq!(jsonrpc_action_label(&list).as_deref(), Some("tools/list"));
     }
 
     #[test]

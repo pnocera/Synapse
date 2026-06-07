@@ -1,0 +1,345 @@
+//! Cross-session registry MCP tools for multi-agent coordination (#794).
+//!
+//! The registry is a read model: HTTP lifecycle/heartbeat state is joined with
+//! the existing active-target registry and input lease snapshot at read time.
+//! It does not gate any action/perception path.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use rmcp::{RoleServer, model::ErrorCode, service::RequestContext};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use serde_json::json;
+use synapse_action::lease;
+use synapse_core::error_codes;
+
+use super::{
+    ErrorData, Json, Parameters, SessionTarget, SynapseService, TargetWire, mcp_error,
+    session_registry::SessionRegistryRead, session_registry::unix_time_ms_now, tool, tool_router,
+};
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionListParams {
+    /// Include explicitly closed sessions. Live and stale sessions are always
+    /// included because stale peers are part of the crash/disconnect readback.
+    #[serde(default)]
+    #[schemars(default)]
+    pub include_closed: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionStatusParams {
+    /// MCP Streamable HTTP session id to inspect.
+    pub session_id: String,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionLeaseReadback {
+    pub held: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub owner_session_id: Option<String>,
+    pub is_owner: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub acquired_at_ms_ago: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub renewed_at_ms_ago: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ttl_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub expires_in_ms: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionSummary {
+    #[serde(flatten)]
+    pub registry: SessionRegistryRead,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub active_target: Option<TargetWire>,
+    pub lease: SessionLeaseReadback,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionListResponse {
+    pub now_unix_ms: u64,
+    pub stale_after_ms: u64,
+    pub registry_entry_count: usize,
+    pub target_session_count: usize,
+    pub returned_count: usize,
+    pub input_lease_held: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_lease_owner_session_id: Option<String>,
+    pub sessions: Vec<SessionSummary>,
+}
+
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionStatusResponse {
+    pub now_unix_ms: u64,
+    pub stale_after_ms: u64,
+    pub found: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<SessionSummary>,
+}
+
+#[tool_router(router = session_tool_router, vis = "pub(super)")]
+impl SynapseService {
+    #[tool(
+        description = "List all known MCP sessions as a non-blocking cross-session read model: session id, client kind, liveness, heartbeat, active target, input-lease ownership, and last JSON-RPC tool action. Stale sessions are reported rather than hidden."
+    )]
+    pub async fn session_list(
+        &self,
+        params: Parameters<SessionListParams>,
+    ) -> Result<Json<SessionListResponse>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "session_list",
+            "tool.invocation kind=session_list"
+        );
+        self.session_list_impl(params.0.include_closed).map(Json)
+    }
+
+    #[tool(
+        description = "Return one MCP session's registry row joined with active target and input-lease state. Unknown sessions return found=false instead of blocking or scanning external state."
+    )]
+    pub async fn session_status(
+        &self,
+        params: Parameters<SessionStatusParams>,
+        _request_context: RequestContext<RoleServer>,
+    ) -> Result<Json<SessionStatusResponse>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "session_status",
+            "tool.invocation kind=session_status"
+        );
+        validate_session_id(&params.0.session_id)?;
+        self.session_status_impl(&params.0.session_id).map(Json)
+    }
+}
+
+impl SynapseService {
+    fn session_list_impl(&self, include_closed: bool) -> Result<SessionListResponse, ErrorData> {
+        let now_unix_ms = unix_time_ms_now();
+        let (registry_reads, stale_after_ms, registry_entry_count) =
+            self.session_registry_reads(now_unix_ms)?;
+        let targets = self.session_target_wires()?;
+        let lease_status = lease::status();
+        let mut session_ids = registry_reads
+            .keys()
+            .chain(targets.keys())
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if let Some(owner) = lease_status.owner_session_id.as_ref() {
+            session_ids.insert(owner.clone());
+        }
+        let mut sessions = Vec::new();
+        for session_id in session_ids {
+            let Some(summary) = build_session_summary(
+                &session_id,
+                registry_reads.get(&session_id).cloned(),
+                targets.get(&session_id).cloned(),
+                &lease_status,
+                now_unix_ms,
+                stale_after_ms,
+            ) else {
+                continue;
+            };
+            if !include_closed && summary.registry.lifecycle == "closed" {
+                continue;
+            }
+            sessions.push(summary);
+        }
+        sessions.sort_by(|a, b| a.registry.session_id.cmp(&b.registry.session_id));
+        let returned_count = sessions.len();
+        Ok(SessionListResponse {
+            now_unix_ms,
+            stale_after_ms,
+            registry_entry_count,
+            target_session_count: targets.len(),
+            returned_count,
+            input_lease_held: lease_status.held,
+            input_lease_owner_session_id: lease_status.owner_session_id.clone(),
+            sessions,
+        })
+    }
+
+    fn session_status_impl(&self, session_id: &str) -> Result<SessionStatusResponse, ErrorData> {
+        let now_unix_ms = unix_time_ms_now();
+        let (registry_reads, stale_after_ms, _registry_entry_count) =
+            self.session_registry_reads(now_unix_ms)?;
+        let targets = self.session_target_wires()?;
+        let lease_status = lease::status();
+        let session = build_session_summary(
+            session_id,
+            registry_reads.get(session_id).cloned(),
+            targets.get(session_id).cloned(),
+            &lease_status,
+            now_unix_ms,
+            stale_after_ms,
+        );
+        Ok(SessionStatusResponse {
+            now_unix_ms,
+            stale_after_ms,
+            found: session.is_some(),
+            session,
+        })
+    }
+
+    fn session_registry_reads(
+        &self,
+        now_unix_ms: u64,
+    ) -> Result<(BTreeMap<String, SessionRegistryRead>, u64, usize), ErrorData> {
+        let guard = self.session_registry_ref().lock().map_err(|_error| {
+            mcp_error(
+                error_codes::TOOL_INTERNAL_ERROR,
+                "session registry lock poisoned",
+            )
+        })?;
+        let stale_after_ms = guard.stale_after_ms();
+        let reads = guard
+            .reads(now_unix_ms)
+            .into_iter()
+            .map(|entry| (entry.session_id.clone(), entry))
+            .collect::<BTreeMap<_, _>>();
+        let count = reads.len();
+        drop(guard);
+        Ok((reads, stale_after_ms, count))
+    }
+
+    fn session_target_wires(&self) -> Result<BTreeMap<String, TargetWire>, ErrorData> {
+        let guard = self.session_targets_ref().lock().map_err(|_error| {
+            mcp_error(
+                error_codes::TOOL_INTERNAL_ERROR,
+                "session target registry lock poisoned",
+            )
+        })?;
+        let targets = guard
+            .iter()
+            .map(|(session_id, target)| (session_id.clone(), session_target_wire(target)))
+            .collect::<BTreeMap<_, _>>();
+        drop(guard);
+        Ok(targets)
+    }
+}
+
+fn build_session_summary(
+    session_id: &str,
+    registry: Option<SessionRegistryRead>,
+    active_target: Option<TargetWire>,
+    lease_status: &synapse_action::LeaseStatus,
+    now_unix_ms: u64,
+    stale_after_ms: u64,
+) -> Option<SessionSummary> {
+    let registry = registry.or_else(|| {
+        (active_target.is_some() || lease_status.owner_session_id.as_deref() == Some(session_id))
+            .then(|| synthetic_registry_read(session_id, now_unix_ms, stale_after_ms))
+    })?;
+    Some(SessionSummary {
+        registry,
+        active_target,
+        lease: SessionLeaseReadback {
+            held: lease_status.held,
+            owner_session_id: lease_status.owner_session_id.clone(),
+            is_owner: lease_status.owner_session_id.as_deref() == Some(session_id),
+            acquired_at_ms_ago: lease_status.acquired_at_ms_ago,
+            renewed_at_ms_ago: lease_status.renewed_at_ms_ago,
+            ttl_ms: lease_status.ttl_ms,
+            expires_in_ms: lease_status.expires_in_ms,
+        },
+    })
+}
+
+fn synthetic_registry_read(
+    session_id: &str,
+    now_unix_ms: u64,
+    stale_after_ms: u64,
+) -> SessionRegistryRead {
+    SessionRegistryRead {
+        session_id: session_id.to_owned(),
+        transport: "unknown".to_owned(),
+        client_name: None,
+        client_version: None,
+        protocol_version: None,
+        agent_kind: "unknown".to_owned(),
+        lifecycle: "unregistered".to_owned(),
+        started_at_unix_ms: now_unix_ms,
+        last_seen_unix_ms: now_unix_ms,
+        last_seen_ms_ago: 0,
+        stale_after_ms,
+        closed_at_unix_ms: None,
+        last_action: None,
+        last_reason_code: None,
+    }
+}
+
+fn session_target_wire(target: &SessionTarget) -> TargetWire {
+    match target {
+        SessionTarget::Window { hwnd } => TargetWire::Window { window_hwnd: *hwnd },
+        SessionTarget::Cdp {
+            window_hwnd,
+            cdp_target_id,
+        } => TargetWire::Cdp {
+            window_hwnd: *window_hwnd,
+            cdp_target_id: cdp_target_id.clone(),
+        },
+    }
+}
+
+fn validate_session_id(session_id: &str) -> Result<(), ErrorData> {
+    if session_id.trim().is_empty() {
+        return Err(ErrorData::new(
+            ErrorCode(-32099),
+            "session_id must not be empty",
+            Some(json!({"code": error_codes::TOOL_PARAMS_INVALID})),
+        ));
+    }
+    if session_id.chars().count() > 512 {
+        return Err(ErrorData::new(
+            ErrorCode(-32099),
+            "session_id must be at most 512 Unicode scalar values",
+            Some(json!({"code": error_codes::TOOL_PARAMS_INVALID})),
+        ));
+    }
+    if !session_id.chars().all(|ch| ('!'..='~').contains(&ch)) {
+        return Err(ErrorData::new(
+            ErrorCode(-32099),
+            "session_id must contain only visible ASCII characters",
+            Some(json!({"code": error_codes::TOOL_PARAMS_INVALID})),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn session_status_rejects_empty_or_non_visible_ascii_ids() {
+        assert!(validate_session_id("").is_err());
+        assert!(validate_session_id("abc def").is_err());
+        assert!(validate_session_id("abc\n").is_err());
+        assert!(validate_session_id("session-1").is_ok());
+    }
+
+    #[test]
+    fn synthetic_entries_cover_target_or_lease_only_sessions() {
+        let session_id = "lease-only";
+        let lease_status = synapse_action::LeaseStatus {
+            held: true,
+            owner_session_id: Some(session_id.to_owned()),
+            acquired_at_ms_ago: Some(1),
+            renewed_at_ms_ago: Some(1),
+            ttl_ms: Some(30_000),
+            expires_in_ms: Some(29_999),
+        };
+        let summary =
+            build_session_summary(session_id, None, None, &lease_status, 1_000, 500).unwrap();
+        assert_eq!(summary.registry.lifecycle, "unregistered");
+        assert!(summary.lease.is_owner);
+    }
+}
