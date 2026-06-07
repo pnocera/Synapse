@@ -14,7 +14,7 @@ static ACTION_AUDIT_SEQ: AtomicU32 = AtomicU32::new(0);
 
 impl SynapseService {
     pub(super) fn audit_action_started(&self, tool: &'static str) -> Result<(), ErrorData> {
-        self.write_action_audit_row(tool, "started", None, &json!({}))
+        self.write_action_audit_row(tool, "started", None, &json!({}), None)
     }
 
     pub(super) fn audit_action_started_with_details(
@@ -22,7 +22,16 @@ impl SynapseService {
         tool: &'static str,
         details: &Value,
     ) -> Result<(), ErrorData> {
-        self.write_action_audit_row(tool, "started", None, details)
+        self.write_action_audit_row(tool, "started", None, details, None)
+    }
+
+    pub(super) fn audit_action_started_with_details_for_session(
+        &self,
+        tool: &'static str,
+        details: &Value,
+        session_id: &str,
+    ) -> Result<(), ErrorData> {
+        self.write_action_audit_row(tool, "started", None, details, Some(session_id))
     }
 
     pub(super) fn audit_action_denied(&self, tool: &'static str, error: &ErrorData) {
@@ -44,6 +53,7 @@ impl SynapseService {
                 "data": error.data.clone(),
                 "request": details,
             }),
+            None,
         ) {
             tracing::warn!(
                 code = "ACTION_AUDIT_WRITE_FAILED",
@@ -68,6 +78,7 @@ impl SynapseService {
                 &json!({
                     "response": response,
                 }),
+                None,
             ),
             Err(error) => self.write_action_audit_row(
                 tool,
@@ -77,6 +88,36 @@ impl SynapseService {
                     "message": error.message.to_string(),
                     "data": error.data.clone(),
                 }),
+                None,
+            ),
+        }
+    }
+
+    pub(super) fn audit_action_result_for_session<T: Serialize>(
+        &self,
+        tool: &'static str,
+        result: &Result<T, ErrorData>,
+        session_id: &str,
+    ) -> Result<(), ErrorData> {
+        match result {
+            Ok(response) => self.write_action_audit_row(
+                tool,
+                "ok",
+                None,
+                &json!({
+                    "response": response,
+                }),
+                Some(session_id),
+            ),
+            Err(error) => self.write_action_audit_row(
+                tool,
+                "error",
+                error_data_code(error),
+                &json!({
+                    "message": error.message.to_string(),
+                    "data": error.data.clone(),
+                }),
+                Some(session_id),
             ),
         }
     }
@@ -86,7 +127,7 @@ impl SynapseService {
         tool: &'static str,
         details: &Value,
     ) -> Result<(), ErrorData> {
-        self.write_action_audit_row(tool, "ok", None, details)
+        self.write_action_audit_row(tool, "ok", None, details, None)
     }
 
     pub(super) fn audit_action_error_with_details(
@@ -104,6 +145,7 @@ impl SynapseService {
                 "data": error.data.clone(),
                 "request": details,
             }),
+            None,
         )
     }
 
@@ -128,10 +170,14 @@ impl SynapseService {
         status: &'static str,
         error_code: Option<&str>,
         details: &Value,
+        action_session_id: Option<&str>,
     ) -> Result<(), ErrorData> {
         let (ts_ns, seq) = next_audit_key_parts();
         let active_profile = self.action_audit_active_profile();
-        let audit_context = self.current_action_audit_context()?;
+        let mut audit_context = self.current_action_audit_context()?;
+        if let Some(action_session_id) = action_session_id {
+            audit_context.session_id = Some(action_session_id.to_owned());
+        }
         let session_id = audit_context.session_id.clone();
         let profile_id = audit_context.profile_id.clone();
         let profile_version = audit_context.profile_version.clone();

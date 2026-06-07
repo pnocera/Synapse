@@ -4,13 +4,15 @@ use super::{
     ActRunShellStartParams, ActRunShellStartResponse, ActRunShellStatusParams,
     ActRunShellStatusResponse, ActSpawnAgentCli, ActSpawnAgentLogPaths, ActSpawnAgentParams,
     ActSpawnAgentResponse, ActSpawnAgentTarget, ErrorData, Json, LaunchWindowState, Parameters,
-    RunShellAuthorization, SynapseService, authorize_run_shell, authorize_run_shell_start,
-    cancel_shell_job, execute_combo, launch, launch_process_history_row,
-    launch_process_history_row_key, launch_request_details, mcp_error, required_combo_permissions,
-    run_authorized_shell, run_shell_idempotency_completed_row, run_shell_idempotency_replay,
-    run_shell_idempotency_reservation_row, run_shell_idempotency_row_key,
-    run_shell_request_details, run_shell_start_request_details, shell_job_status,
-    start_authorized_shell_job, tool, tool_router, validate_agent_spawn_params,
+    RunShellAuthorization, ShellExecutionContext, SynapseService, authorize_run_shell,
+    authorize_run_shell_start, cancel_shell_job, execute_combo, launch, launch_process_history_row,
+    launch_process_history_row_key, launch_request_details, mcp_error,
+    prepare_run_shell_params_for_context, prepare_run_shell_start_params_for_context,
+    required_combo_permissions, run_authorized_shell, run_shell_idempotency_completed_row,
+    run_shell_idempotency_replay, run_shell_idempotency_reservation_row,
+    run_shell_idempotency_row_key, run_shell_request_details, run_shell_start_request_details,
+    shell_execution_context_for_session, shell_job_status, start_authorized_shell_job, tool,
+    tool_router, validate_agent_spawn_params,
 };
 
 use std::{
@@ -71,6 +73,7 @@ impl SynapseService {
     pub async fn act_run_shell(
         &self,
         params: Parameters<ActRunShellParams>,
+        request_context: RequestContext<RoleServer>,
     ) -> Result<Json<ActRunShellResponse>, ErrorData> {
         tracing::info!(
             code = "MCP_TOOL_INVOCATION",
@@ -82,16 +85,22 @@ impl SynapseService {
             self.audit_action_denied("act_run_shell", &error);
             return Err(error);
         }
-        let params = params.0;
-        self.audit_action_started_with_details(
+        let raw_params = params.0;
+        let session_id = require_shell_session_id(&request_context)?;
+        let shell_context = shell_execution_context_for_session(&session_id)?;
+        let params = prepare_run_shell_params_for_context(raw_params, &shell_context)?;
+        self.audit_action_started_with_details_for_session(
             "act_run_shell",
             &run_shell_request_details(&params),
+            &session_id,
         )?;
         let result = match authorize_run_shell(&self.m4_config, &params) {
-            Ok(authorization) => run_shell_with_idempotency(self, params, authorization).await,
+            Ok(authorization) => {
+                run_shell_with_idempotency(self, params, authorization, Some(&shell_context)).await
+            }
             Err(error) => Err(error),
         };
-        self.audit_action_result("act_run_shell", &result)?;
+        self.audit_action_result_for_session("act_run_shell", &result, &session_id)?;
         result.map(Json)
     }
 
@@ -101,6 +110,7 @@ impl SynapseService {
     pub async fn act_run_shell_start(
         &self,
         params: Parameters<ActRunShellStartParams>,
+        request_context: RequestContext<RoleServer>,
     ) -> Result<Json<ActRunShellStartResponse>, ErrorData> {
         tracing::info!(
             code = "MCP_TOOL_INVOCATION",
@@ -112,16 +122,22 @@ impl SynapseService {
             self.audit_action_denied("act_run_shell_start", &error);
             return Err(error);
         }
-        let params = params.0;
-        self.audit_action_started_with_details(
+        let raw_params = params.0;
+        let session_id = require_shell_session_id(&request_context)?;
+        let shell_context = shell_execution_context_for_session(&session_id)?;
+        let params = prepare_run_shell_start_params_for_context(raw_params, &shell_context)?;
+        self.audit_action_started_with_details_for_session(
             "act_run_shell_start",
             &run_shell_start_request_details(&params),
+            &session_id,
         )?;
         let result = match authorize_run_shell_start(&self.m4_config, &params) {
-            Ok(authorization) => start_authorized_shell_job(params, &authorization),
+            Ok(authorization) => {
+                start_authorized_shell_job(params, &authorization, Some(&shell_context))
+            }
             Err(error) => Err(error),
         };
-        self.audit_action_result("act_run_shell_start", &result)?;
+        self.audit_action_result_for_session("act_run_shell_start", &result, &session_id)?;
         result.map(Json)
     }
 
@@ -131,6 +147,7 @@ impl SynapseService {
     pub async fn act_run_shell_status(
         &self,
         params: Parameters<ActRunShellStatusParams>,
+        request_context: RequestContext<RoleServer>,
     ) -> Result<Json<ActRunShellStatusResponse>, ErrorData> {
         tracing::info!(
             code = "MCP_TOOL_INVOCATION",
@@ -143,15 +160,18 @@ impl SynapseService {
             return Err(error);
         }
         let params = params.0;
-        self.audit_action_started_with_details(
+        let session_id = require_shell_session_id(&request_context)?;
+        self.audit_action_started_with_details_for_session(
             "act_run_shell_status",
             &json!({
                 "job_id": &params.job_id,
                 "tail_bytes": params.tail_bytes,
+                "session_id": &session_id,
             }),
+            &session_id,
         )?;
-        let result = shell_job_status(&params);
-        self.audit_action_result("act_run_shell_status", &result)?;
+        let result = shell_job_status(&params, Some(&session_id));
+        self.audit_action_result_for_session("act_run_shell_status", &result, &session_id)?;
         result.map(Json)
     }
 
@@ -161,6 +181,7 @@ impl SynapseService {
     pub async fn act_run_shell_cancel(
         &self,
         params: Parameters<ActRunShellJobIdParams>,
+        request_context: RequestContext<RoleServer>,
     ) -> Result<Json<ActRunShellCancelResponse>, ErrorData> {
         tracing::info!(
             code = "MCP_TOOL_INVOCATION",
@@ -173,14 +194,17 @@ impl SynapseService {
             return Err(error);
         }
         let params = params.0;
-        self.audit_action_started_with_details(
+        let session_id = require_shell_session_id(&request_context)?;
+        self.audit_action_started_with_details_for_session(
             "act_run_shell_cancel",
             &json!({
                 "job_id": &params.job_id,
+                "session_id": &session_id,
             }),
+            &session_id,
         )?;
-        let result = cancel_shell_job(&params);
-        self.audit_action_result("act_run_shell_cancel", &result)?;
+        let result = cancel_shell_job(&params, Some(&session_id));
+        self.audit_action_result_for_session("act_run_shell_cancel", &result, &session_id)?;
         result.map(Json)
     }
 
@@ -262,6 +286,17 @@ fn record_launch_process_history(
     runtime
         .storage_put_process_history_rows(vec![(row_key, row)])
         .map_err(|error| mcp_error(error.code(), error.to_string()))
+}
+
+fn require_shell_session_id(
+    request_context: &RequestContext<RoleServer>,
+) -> Result<String, ErrorData> {
+    super::context::mcp_session_id_from_request_context(request_context)?.ok_or_else(|| {
+        mcp_error(
+            error_codes::HTTP_SESSION_INVALID,
+            "act_run_shell tools require an MCP session id (run the daemon in HTTP mode so each agent has its own Mcp-Session-Id)",
+        )
+    })
 }
 
 impl SynapseService {
@@ -1142,9 +1177,11 @@ async fn run_shell_with_idempotency(
     service: &SynapseService,
     params: ActRunShellParams,
     authorization: RunShellAuthorization,
+    context: Option<&ShellExecutionContext>,
 ) -> Result<ActRunShellResponse, ErrorData> {
-    let Some(row_key) = run_shell_idempotency_row_key(&params)? else {
-        return run_authorized_shell(params, &authorization).await;
+    let session_id = context.map(ShellExecutionContext::session_id);
+    let Some(row_key) = run_shell_idempotency_row_key(&params, session_id)? else {
+        return run_authorized_shell(params, &authorization, context).await;
     };
 
     let runtime = service.reflex_runtime()?;
@@ -1160,16 +1197,18 @@ async fn run_shell_with_idempotency(
             .map_err(|error| mcp_error(error.code(), error.to_string()))?
         {
             drop(runtime);
-            return run_shell_idempotency_replay(&params, &existing);
+            return run_shell_idempotency_replay(&params, &existing, session_id);
         }
-        let reservation = run_shell_idempotency_reservation_row(&params, &authorization)?;
+        let reservation =
+            run_shell_idempotency_reservation_row(&params, &authorization, session_id)?;
         runtime
             .storage_put_kv_rows(vec![(row_key.clone(), reservation)])
             .map_err(|error| mcp_error(error.code(), error.to_string()))?;
     }
 
-    let response = run_authorized_shell(params.clone(), &authorization).await?;
-    let completed = run_shell_idempotency_completed_row(&params, &authorization, &response)?;
+    let response = run_authorized_shell(params.clone(), &authorization, context).await?;
+    let completed =
+        run_shell_idempotency_completed_row(&params, &authorization, &response, session_id)?;
     {
         let runtime = runtime.lock().map_err(|_error| {
             mcp_error(

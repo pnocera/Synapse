@@ -183,6 +183,30 @@ pub(super) async fn release_held_inputs_on_delete(
     };
     let cdp_cleanup =
         cleanup_session_cdp_targets(&state.cdp_target_owners, &session_id, "http_delete").await;
+    let shell_cleanup = match crate::m4::cleanup_shell_jobs_for_session(&session_id, "http_delete")
+    {
+        Ok(readback) => readback,
+        Err(error) => {
+            tracing::error!(
+                code = ?error.code,
+                session_id,
+                detail = %error.message,
+                "HTTP MCP session cleanup could not reap session-owned shell jobs"
+            );
+            crate::m4::ShellSessionCleanupReadback {
+                reason: "http_delete".to_owned(),
+                session_id: session_id.clone(),
+                job_root: None,
+                status_files_read: 0,
+                live_jobs_before: 0,
+                termination_attempted: 0,
+                termination_succeeded: 0,
+                failed: 1,
+                job_ids: Vec::new(),
+                remaining_process_ids: Vec::new(),
+            }
+        }
+    };
     match result {
         Ok(summary) => {
             tracing::info!(
@@ -203,6 +227,14 @@ pub(super) async fn release_held_inputs_on_delete(
                 cdp_closed = cdp_cleanup.closed,
                 cdp_failed = cdp_cleanup.failed,
                 cdp_target_ids = ?cdp_cleanup.target_ids,
+                shell_job_root = ?shell_cleanup.job_root,
+                shell_status_files_read = shell_cleanup.status_files_read,
+                shell_live_jobs_before = shell_cleanup.live_jobs_before,
+                shell_termination_attempted = shell_cleanup.termination_attempted,
+                shell_termination_succeeded = shell_cleanup.termination_succeeded,
+                shell_failed = shell_cleanup.failed,
+                shell_job_ids = ?shell_cleanup.job_ids,
+                shell_remaining_process_ids = ?shell_cleanup.remaining_process_ids,
                 "readback=session_input_ownership edge=http_delete after_cleanup"
             );
             response
