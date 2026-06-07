@@ -7,6 +7,12 @@ use synapse_core::{Action, Backend, ButtonAction, ElementId, MouseTarget, Point,
 
 use crate::m1::mcp_error;
 
+#[cfg(windows)]
+use windows::Win32::{
+    Foundation::HWND,
+    UI::WindowsAndMessaging::{GA_ROOT, GetAncestor, IsWindow},
+};
+
 mod element;
 mod record;
 mod schema;
@@ -440,7 +446,7 @@ pub(crate) fn click_params_can_route_background_first(params: &ActClickParams) -
 pub(crate) fn click_target_root_hwnd(params: &ActClickParams) -> Result<Option<i64>, ErrorData> {
     match &params.target {
         ActClickTarget::Element(element) => {
-            let hwnd = element
+            let parsed_hwnd = element
                 .element_id
                 .parts()
                 .map_err(|error| {
@@ -453,10 +459,41 @@ pub(crate) fn click_target_root_hwnd(params: &ActClickParams) -> Result<Option<i
                     )
                 })?
                 .hwnd;
+            let hwnd = verified_top_level_hwnd(parsed_hwnd).map_err(|detail| {
+                mcp_error(
+                    error_codes::ACTION_TARGET_INVALID,
+                    format!(
+                        "act_click element id {} could not be normalized for target-window verification: {detail}",
+                        element.element_id
+                    ),
+                )
+            })?;
             Ok(Some(hwnd))
         }
         ActClickTarget::Point(_) => Ok(None),
     }
+}
+
+#[cfg(windows)]
+fn verified_top_level_hwnd(hwnd: i64) -> Result<i64, String> {
+    let seed = HWND(hwnd as isize as *mut std::ffi::c_void);
+    if seed.0.is_null() || !unsafe { IsWindow(Some(seed)) }.as_bool() {
+        return Err(format!("element HWND 0x{hwnd:x} is not a live window"));
+    }
+    let root = unsafe { GetAncestor(seed, GA_ROOT) };
+    let root = if root.0.is_null() { seed } else { root };
+    if !unsafe { IsWindow(Some(root)) }.as_bool() {
+        return Err(format!(
+            "top-level root HWND 0x{:x} for element HWND 0x{hwnd:x} is not live",
+            root.0 as usize
+        ));
+    }
+    Ok(root.0 as usize as i64)
+}
+
+#[cfg(not(windows))]
+fn verified_top_level_hwnd(hwnd: i64) -> Result<i64, String> {
+    Ok(hwnd)
 }
 
 pub(crate) fn click_error_code(error: &ErrorData) -> String {

@@ -1,4 +1,0 @@
-{"type":"thread.started","thread_id":"019e9e4b-e8a4-7ae3-915a-4914c0a8c612"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"CODEx-PING"}}
-{"type":"turn.completed","usage":{"input_tokens":13057,"cached_input_tokens":4992,"output_tokens":49,"reasoning_output_tokens":39}}

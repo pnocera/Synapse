@@ -1,4 +1,0 @@
-{"type":"thread.started","thread_id":"019e9e4d-6164-7bf0-9f13-6aa1b947e044"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"CODEX-PS1-PING"}}
-{"type":"turn.completed","usage":{"input_tokens":13060,"cached_input_tokens":4992,"output_tokens":32,"reasoning_output_tokens":19}}

@@ -1,5 +1,0 @@
-Reading additional input from stdin...
-{"type":"thread.started","thread_id":"019e9e4e-d496-7ba3-9734-1a9630207848"}
-{"type":"turn.started"}
-{"type":"item.completed","item":{"id":"item_0","type":"agent_message","text":"CODEX-EXE-PING"}}
-{"type":"turn.completed","usage":{"input_tokens":13060,"cached_input_tokens":4992,"output_tokens":38,"reasoning_output_tokens":25}}

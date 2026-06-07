@@ -51,3 +51,6 @@ tracing-*.log
 
 # Playwright MCP session artifacts (console logs, page snapshots).
 .playwright-mcp/
+
+# Scratch / investigation working state — never part of the repo.
+/tmp/

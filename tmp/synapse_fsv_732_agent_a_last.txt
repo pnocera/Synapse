@@ -1,3 +1,0 @@
-Lease session id: `0e3e1c68-cf7b-43d7-852c-27b588a8f9bb`
-
-Release result: `released`
