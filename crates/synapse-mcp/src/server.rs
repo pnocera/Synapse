@@ -1,5 +1,5 @@
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     sync::{Arc, Mutex, MutexGuard},
     time::Instant,
 };
@@ -107,8 +107,8 @@ use crate::{
         ActRunShellStartParams, ActRunShellStartResponse, ActRunShellStatusParams,
         ActRunShellStatusResponse, ActSpawnAgentCli, ActSpawnAgentLogPaths, ActSpawnAgentParams,
         ActSpawnAgentResponse, ActSpawnAgentTarget, LaunchWindowState, M4ServiceConfig,
-        RunShellAuthorization, ShellExecutionContext, authorize_run_shell,
-        authorize_run_shell_start, cancel_shell_job, execute_combo, launch,
+        RunShellAuthorization, ShellExecutionContext, assign_owned_process_job,
+        authorize_run_shell, authorize_run_shell_start, cancel_shell_job, execute_combo, launch,
         launch_process_history_row, launch_process_history_row_key, launch_request_details,
         prepare_run_shell_params_for_context, prepare_run_shell_start_params_for_context,
         required_combo_permissions, run_authorized_shell, run_shell_idempotency_completed_row,
@@ -151,6 +151,7 @@ mod m3_tools;
 mod m4_tools;
 mod reality;
 mod schema_sanitize;
+pub(crate) mod session_lifecycle;
 pub(crate) mod session_registry;
 mod session_tools;
 mod target_policy;
@@ -205,6 +206,8 @@ pub struct SynapseService {
     session_targets: SharedSessionTargets,
     cdp_target_owners: SharedCdpTargetOwners,
     session_registry: SharedSessionRegistry,
+    session_processes: session_lifecycle::SharedSessionProcessResources,
+    terminated_sessions: session_lifecycle::SharedTerminatedSessions,
 }
 
 impl SynapseService {
@@ -227,6 +230,8 @@ impl SynapseService {
             session_targets: Arc::new(Mutex::new(HashMap::new())),
             cdp_target_owners: Arc::new(Mutex::new(HashMap::new())),
             session_registry: Arc::new(Mutex::new(SessionRegistry::default())),
+            session_processes: Arc::new(Mutex::new(BTreeMap::new())),
+            terminated_sessions: Arc::new(Mutex::new(BTreeSet::new())),
         })
     }
 
@@ -260,6 +265,8 @@ impl SynapseService {
             session_targets: Arc::new(Mutex::new(HashMap::new())),
             cdp_target_owners: Arc::new(Mutex::new(HashMap::new())),
             session_registry: Arc::new(Mutex::new(SessionRegistry::default())),
+            session_processes: Arc::new(Mutex::new(BTreeMap::new())),
+            terminated_sessions: Arc::new(Mutex::new(BTreeSet::new())),
         })
     }
 
@@ -293,6 +300,8 @@ impl SynapseService {
             session_targets: Arc::new(Mutex::new(HashMap::new())),
             cdp_target_owners: Arc::new(Mutex::new(HashMap::new())),
             session_registry: Arc::new(Mutex::new(SessionRegistry::default())),
+            session_processes: Arc::new(Mutex::new(BTreeMap::new())),
+            terminated_sessions: Arc::new(Mutex::new(BTreeSet::new())),
         })
     }
 
@@ -307,16 +316,8 @@ impl SynapseService {
         Arc::clone(&self.m3_state)
     }
 
-    pub(crate) fn session_targets_handle(&self) -> SharedSessionTargets {
-        Arc::clone(&self.session_targets)
-    }
-
     pub(crate) const fn session_targets_ref(&self) -> &SharedSessionTargets {
         &self.session_targets
-    }
-
-    pub(crate) fn cdp_target_owners_handle(&self) -> SharedCdpTargetOwners {
-        Arc::clone(&self.cdp_target_owners)
     }
 
     pub(crate) const fn cdp_target_owners_ref(&self) -> &SharedCdpTargetOwners {

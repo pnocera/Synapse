@@ -533,7 +533,7 @@ struct ShellJobPaths {
     request_path: PathBuf,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, JsonSchema)]
 pub struct ShellSessionCleanupReadback {
     pub reason: String,
     pub session_id: String,
@@ -4341,7 +4341,7 @@ fn spawn_shell_job_child(
         ));
     };
     let process_job =
-        assign_shell_process_job(pid, "act_run_shell_start", params.job_id.as_deref())?;
+        assign_owned_process_job(pid, "act_run_shell_start", params.job_id.as_deref())?;
     Ok(SpawnedShellChild { child, process_job })
 }
 
@@ -4369,7 +4369,7 @@ fn shell_session_env_keys(_context: &ShellExecutionContext) -> Vec<String> {
 
 async fn monitor_shell_job(
     mut child: tokio::process::Child,
-    _process_job: ShellProcessJob,
+    _process_job: OwnedProcessJob,
     mut status: ActRunShellJobStatus,
     paths: ShellJobPaths,
     started: Instant,
@@ -4701,6 +4701,57 @@ struct ShellJobTerminationReadback {
     remaining_process_ids: Vec<u32>,
 }
 
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct OwnedProcessTerminationReadback {
+    pub pid: u32,
+    pub process_ids: Vec<u32>,
+    pub live_process_ids_before: Vec<u32>,
+    pub attempted: bool,
+    pub status: String,
+    pub remaining_process_ids: Vec<u32>,
+}
+
+pub(crate) fn owned_process_tree_ids(pid: u32) -> Vec<u32> {
+    shell_job_process_tree_ids(pid)
+}
+
+pub(crate) fn owned_live_process_ids(process_ids: &[u32]) -> Vec<u32> {
+    shell_job_live_process_ids(process_ids)
+}
+
+pub(crate) fn wait_for_owned_process_tree_exit(
+    process_ids: &[u32],
+    timeout: Duration,
+) -> (Vec<u32>, u64) {
+    wait_for_shell_job_process_tree_exit(process_ids, timeout)
+}
+
+pub fn terminate_owned_process_tree(pid: u32) -> OwnedProcessTerminationReadback {
+    let process_ids = shell_job_process_tree_ids(pid);
+    let live_process_ids_before = shell_job_live_process_ids(&process_ids);
+    if live_process_ids_before.is_empty() {
+        return OwnedProcessTerminationReadback {
+            pid,
+            process_ids,
+            live_process_ids_before,
+            attempted: false,
+            status: "already_exited".to_owned(),
+            remaining_process_ids: Vec::new(),
+        };
+    }
+
+    let termination = terminate_shell_job_process_tree_platform(pid, &process_ids);
+    OwnedProcessTerminationReadback {
+        pid,
+        process_ids,
+        live_process_ids_before,
+        attempted: termination.attempted,
+        status: termination.status,
+        remaining_process_ids: termination.remaining_process_ids,
+    }
+}
+
 fn terminate_shell_job_process_tree(pid: u32) -> ShellJobTerminationReadback {
     let process_ids = shell_job_process_tree_ids(pid);
     let initial_live_process_ids = shell_job_live_process_ids(&process_ids);
@@ -4870,35 +4921,35 @@ async fn run_allowlisted_shell(
 
 struct SpawnedShellChild {
     child: tokio::process::Child,
-    process_job: ShellProcessJob,
+    process_job: OwnedProcessJob,
 }
 
 #[cfg(windows)]
 #[derive(Debug)]
-struct ShellProcessJob {
+pub(crate) struct OwnedProcessJob {
     handle: windows::Win32::Foundation::HANDLE,
 }
 
 #[cfg(not(windows))]
 #[derive(Debug)]
-struct ShellProcessJob;
+pub(crate) struct OwnedProcessJob;
 
 #[cfg(windows)]
-impl Drop for ShellProcessJob {
+impl Drop for OwnedProcessJob {
     fn drop(&mut self) {
         let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.handle) };
     }
 }
 
 #[cfg(windows)]
-unsafe impl Send for ShellProcessJob {}
+unsafe impl Send for OwnedProcessJob {}
 
 #[cfg(windows)]
-fn assign_shell_process_job(
+pub(crate) fn assign_owned_process_job(
     pid: u32,
     tool_name: &'static str,
-    job_id: Option<&str>,
-) -> Result<ShellProcessJob, ErrorData> {
+    resource_id: Option<&str>,
+) -> Result<OwnedProcessJob, ErrorData> {
     use windows::{
         Win32::{
             Foundation::CloseHandle,
@@ -4921,7 +4972,7 @@ fn assign_shell_process_job(
             json!({
                 "code": error_codes::TOOL_INTERNAL_ERROR,
                 "pid": pid,
-                "job_id": job_id,
+                "resource_id": resource_id,
                 "reason": "job_object_create_failed",
             }),
         )
@@ -4937,7 +4988,7 @@ fn assign_shell_process_job(
                 json!({
                     "code": error_codes::TOOL_INTERNAL_ERROR,
                     "pid": pid,
-                    "job_id": job_id,
+                    "resource_id": resource_id,
                     "reason": "job_object_limit_size_failed",
                 }),
             )
@@ -4958,7 +5009,7 @@ fn assign_shell_process_job(
             json!({
                 "code": error_codes::TOOL_INTERNAL_ERROR,
                 "pid": pid,
-                "job_id": job_id,
+                "resource_id": resource_id,
                 "reason": "job_object_limit_failed",
             }),
         )
@@ -4972,7 +5023,7 @@ fn assign_shell_process_job(
                 json!({
                     "code": error_codes::TOOL_INTERNAL_ERROR,
                     "pid": pid,
-                    "job_id": job_id,
+                    "resource_id": resource_id,
                     "reason": "job_object_process_open_failed",
                 }),
             )
@@ -4987,21 +5038,21 @@ fn assign_shell_process_job(
             json!({
                 "code": error_codes::TOOL_INTERNAL_ERROR,
                 "pid": pid,
-                "job_id": job_id,
+                "resource_id": resource_id,
                 "reason": "job_object_assign_failed",
             }),
         )
     })?;
-    Ok(ShellProcessJob { handle: job })
+    Ok(OwnedProcessJob { handle: job })
 }
 
 #[cfg(not(windows))]
-fn assign_shell_process_job(
+pub(crate) fn assign_owned_process_job(
     _pid: u32,
     _tool_name: &'static str,
-    _job_id: Option<&str>,
-) -> Result<ShellProcessJob, ErrorData> {
-    Ok(ShellProcessJob)
+    _resource_id: Option<&str>,
+) -> Result<OwnedProcessJob, ErrorData> {
+    Ok(OwnedProcessJob)
 }
 
 fn spawn_shell_child(
@@ -5055,7 +5106,7 @@ fn spawn_shell_child(
             }),
         ));
     };
-    let process_job = assign_shell_process_job(pid, "act_run_shell", None)?;
+    let process_job = assign_owned_process_job(pid, "act_run_shell", None)?;
     Ok(SpawnedShellChild { child, process_job })
 }
 

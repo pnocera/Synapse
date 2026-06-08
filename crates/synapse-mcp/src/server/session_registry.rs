@@ -164,6 +164,15 @@ impl SessionRegistry {
     }
 
     pub(crate) fn record_closed(&mut self, session_id: &str, now_unix_ms: u64) {
+        self.record_closed_with_reason(session_id, now_unix_ms, None);
+    }
+
+    pub(crate) fn record_closed_with_reason(
+        &mut self,
+        session_id: &str,
+        now_unix_ms: u64,
+        reason_code: Option<&str>,
+    ) {
         let entry = self
             .entries
             .entry(session_id.to_owned())
@@ -183,6 +192,7 @@ impl SessionRegistry {
             });
         entry.last_seen_unix_ms = now_unix_ms;
         entry.closed_at_unix_ms = Some(now_unix_ms);
+        entry.last_reason_code = reason_code.map(ToOwned::to_owned);
     }
 
     pub(crate) fn record_spawned_agent(

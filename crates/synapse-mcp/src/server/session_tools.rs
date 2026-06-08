@@ -35,6 +35,16 @@ pub struct SessionStatusParams {
     pub session_id: String,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionEndParams {
+    /// Optional explicit session id. When supplied it must match the caller's
+    /// current MCP session id; one session may not tear down another session.
+    #[serde(default)]
+    #[schemars(default)]
+    pub session_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct SessionLeaseReadback {
@@ -86,6 +96,12 @@ pub struct SessionStatusResponse {
     pub session: Option<SessionSummary>,
 }
 
+#[derive(Clone, Debug, Serialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SessionEndResponse {
+    pub report: crate::server::session_lifecycle::SessionTeardownReport,
+}
+
 #[tool_router(router = session_tool_router, vis = "pub(super)")]
 impl SynapseService {
     #[tool(
@@ -118,6 +134,53 @@ impl SynapseService {
         );
         validate_session_id(&params.0.session_id)?;
         self.session_status_impl(&params.0.session_id).map(Json)
+    }
+
+    #[tool(
+        description = "Explicitly end this MCP session and atomically reclaim all resources owned by it: held inputs, input lease, active target, CDP targets, durable shell jobs, launched process resources, event subscriptions, persisted session row, and registry lifecycle. The optional session_id must equal the current caller session."
+    )]
+    pub async fn session_end(
+        &self,
+        params: Parameters<SessionEndParams>,
+        request_context: RequestContext<RoleServer>,
+    ) -> Result<Json<SessionEndResponse>, ErrorData> {
+        tracing::info!(
+            code = "MCP_TOOL_INVOCATION",
+            kind = "session_end",
+            "tool.invocation kind=session_end"
+        );
+        let current_session_id = super::context::mcp_session_id_from_request_context(
+            &request_context,
+        )?
+        .ok_or_else(|| {
+            mcp_error(
+                error_codes::HTTP_SESSION_INVALID,
+                "session_end requires an MCP session id",
+            )
+        })?;
+        let target_session_id = match params.0.session_id {
+            Some(session_id) => {
+                validate_session_id(&session_id)?;
+                if session_id != current_session_id {
+                    return Err(ErrorData::new(
+                        ErrorCode(-32099),
+                        "session_end can only end the current MCP session",
+                        Some(json!({
+                            "code": error_codes::TOOL_PARAMS_INVALID,
+                            "current_session_id": current_session_id,
+                            "requested_session_id": session_id,
+                        })),
+                    ));
+                }
+                session_id
+            }
+            None => current_session_id,
+        };
+        let lifecycle = self.session_lifecycle_state()?;
+        let report = lifecycle
+            .teardown_session(&target_session_id, "explicit_session_end")
+            .await?;
+        Ok(Json(SessionEndResponse { report }))
     }
 }
 

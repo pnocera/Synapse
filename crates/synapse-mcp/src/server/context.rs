@@ -1479,15 +1479,17 @@ mod scope_gate_tests {
             }))?;
         assert_eq!(ocr.0.full_text, "Synapse");
 
-        let subscription = service
-            .subscribe(Parameters(SubscribeParams {
+        let subscription = crate::m3::subscribe::subscribe_to_events(
+            &service.sse_state()?,
+            &SubscribeParams {
                 kinds: Vec::new(),
                 filter: Some(EventFilter::All),
                 snapshot_first: false,
                 buffer_size: 4096,
-            }))
-            .await?;
-        assert!(!subscription.0.subscription_id.is_empty());
+            },
+            Some("scope-gate-test-session".to_owned()),
+        )?;
+        assert!(!subscription.subscription_id.is_empty());
         Ok(())
     }
 

@@ -108,6 +108,7 @@ pub fn requires_a11y_event_bridge(params: &SubscribeParams) -> bool {
 pub fn subscribe_to_events(
     sse_state: &SseState,
     params: &SubscribeParams,
+    owner_session_id: Option<String>,
 ) -> Result<SubscribeResponse, ErrorData> {
     if params.buffer_size != DEFAULT_BUFFER_SIZE {
         return Err(mcp_error(
@@ -120,7 +121,12 @@ pub fn subscribe_to_events(
     }
     let filter = params.filter.clone().unwrap_or(EventFilter::All);
     let subscription_id = sse_state
-        .subscribe(filter, params.kinds.clone(), params.snapshot_first)
+        .subscribe(
+            filter,
+            params.kinds.clone(),
+            params.snapshot_first,
+            owner_session_id,
+        )
         .map_err(|error| mcp_error(error.code(), error.message()))?;
     Ok(SubscribeResponse {
         subscription_id,

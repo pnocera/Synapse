@@ -32,6 +32,7 @@ pub struct SseState {
 struct SseStateInner {
     event_bus: EventBus,
     subscriptions: Mutex<BTreeMap<String, Arc<Subscription>>>,
+    subscription_owners: Mutex<BTreeMap<String, String>>,
     manual_routes_enabled: bool,
 }
 
@@ -91,6 +92,7 @@ impl SseState {
             inner: Arc::new(SseStateInner {
                 event_bus: EventBus::with_max_subscriptions(max_subscriptions),
                 subscriptions: Mutex::new(BTreeMap::new()),
+                subscription_owners: Mutex::new(BTreeMap::new()),
                 manual_routes_enabled: manual_routes_enabled(),
             }),
         }
@@ -114,8 +116,9 @@ impl SseState {
         filter: EventFilter,
         kinds: Vec<String>,
         snapshot_first: bool,
+        owner_session_id: Option<String>,
     ) -> Result<String, SseSubscribeError> {
-        self.create_subscription_with(filter, kinds, snapshot_first)
+        self.create_subscription_with(filter, kinds, snapshot_first, owner_session_id)
             .map(|subscription| subscription.id().to_owned())
     }
 
@@ -139,12 +142,57 @@ impl SseState {
                 .map_err(|_| SseCancelError::StateUnavailable)?;
             subscriptions.remove(id).is_some()
         };
+        {
+            let mut owners = self
+                .inner
+                .subscription_owners
+                .lock()
+                .map_err(|_| SseCancelError::StateUnavailable)?;
+            owners.remove(id);
+        }
         let removed_from_bus = self.inner.event_bus.unsubscribe(id);
         if removed_from_map || removed_from_bus {
             Ok(())
         } else {
             Err(SseCancelError::NotFound)
         }
+    }
+
+    pub(crate) fn subscription_ids_for_session(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<String>, SseCancelError> {
+        let owners = self
+            .inner
+            .subscription_owners
+            .lock()
+            .map_err(|_| SseCancelError::StateUnavailable)?;
+        Ok(owners
+            .iter()
+            .filter_map(|(subscription_id, owner)| {
+                (owner == session_id).then(|| subscription_id.clone())
+            })
+            .collect())
+    }
+
+    pub(crate) fn subscription_owner_session_ids(&self) -> Result<Vec<String>, SseCancelError> {
+        let owners = self
+            .inner
+            .subscription_owners
+            .lock()
+            .map_err(|_| SseCancelError::StateUnavailable)?;
+        Ok(owners.values().cloned().collect())
+    }
+
+    pub(crate) fn cancel_session_subscriptions(
+        &self,
+        session_id: &str,
+    ) -> Result<Vec<String>, SseCancelError> {
+        let ids = self.subscription_ids_for_session(session_id)?;
+        for id in &ids {
+            self.cancel(id)?;
+        }
+        Ok(ids)
     }
 
     pub(super) fn publish(&self, request: PublishRequest) -> Response {
@@ -216,7 +264,7 @@ impl SseState {
     }
 
     fn create_subscription(&self) -> Result<Arc<Subscription>, SseOpenError> {
-        self.create_subscription_with(EventFilter::All, Vec::new(), false)
+        self.create_subscription_with(EventFilter::All, Vec::new(), false, None)
             .map_err(|error| SseOpenError::SubscribeUnavailable(error.code()))
     }
 
@@ -225,6 +273,7 @@ impl SseState {
         filter: EventFilter,
         kinds: Vec<String>,
         snapshot_first: bool,
+        owner_session_id: Option<String>,
     ) -> Result<Arc<Subscription>, SseSubscribeError> {
         let handle = self
             .inner
@@ -240,6 +289,14 @@ impl SseState {
                 .lock()
                 .map_err(|_| SseSubscribeError::StateUnavailable)?;
             subscriptions.insert(id, Arc::clone(&subscription));
+        }
+        if let Some(owner_session_id) = owner_session_id {
+            let mut owners = self
+                .inner
+                .subscription_owners
+                .lock()
+                .map_err(|_| SseSubscribeError::StateUnavailable)?;
+            owners.insert(subscription.id().to_owned(), owner_session_id);
         }
         Ok(subscription)
     }

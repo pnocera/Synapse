@@ -71,6 +71,7 @@ fn last_event_id_zero_reuses_empty_existing_subscription() {
             },
             Vec::new(),
             false,
+            None,
         )
         .expect("subscription should register");
     assert_eq!(state.active_subscription_count(), 1);
@@ -106,6 +107,7 @@ fn sparse_domain_seq_gets_contiguous_stream_seq_without_loss() {
             },
             Vec::new(),
             false,
+            None,
         )
         .expect("subscription should register");
 
@@ -141,7 +143,7 @@ fn sparse_domain_seq_gets_contiguous_stream_seq_without_loss() {
 fn last_event_id_uses_stream_seq_not_domain_event_seq() {
     let state = SseState::from_env();
     let subscription = state
-        .create_subscription_with(EventFilter::All, Vec::new(), false)
+        .create_subscription_with(EventFilter::All, Vec::new(), false, None)
         .expect("subscription should register");
 
     state.publish_events(vec![event(10, "first"), event(1_000, "second")]);
@@ -168,7 +170,7 @@ fn ring_overflow_reports_drop_metric_and_lossy_frame() -> Result<(), Box<dyn Err
     metrics::with_local_recorder(&recorder, || -> Result<(), Box<dyn Error>> {
         let state = SseState::from_env();
         let subscription = state
-            .create_subscription_with(EventFilter::All, Vec::new(), false)
+            .create_subscription_with(EventFilter::All, Vec::new(), false, None)
             .expect("subscription should register");
         let events = (0..OVERFLOW_EVENTS)
             .map(|seq| event(seq, "firehose"))

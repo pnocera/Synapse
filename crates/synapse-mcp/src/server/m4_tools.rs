@@ -4,9 +4,9 @@ use super::{
     ActRunShellStartParams, ActRunShellStartResponse, ActRunShellStatusParams,
     ActRunShellStatusResponse, ActSpawnAgentCli, ActSpawnAgentLogPaths, ActSpawnAgentParams,
     ActSpawnAgentResponse, ActSpawnAgentTarget, ErrorData, Json, LaunchWindowState, Parameters,
-    RunShellAuthorization, ShellExecutionContext, SynapseService, authorize_run_shell,
-    authorize_run_shell_start, cancel_shell_job, execute_combo, launch, launch_process_history_row,
-    launch_process_history_row_key, launch_request_details, mcp_error,
+    RunShellAuthorization, ShellExecutionContext, SynapseService, assign_owned_process_job,
+    authorize_run_shell, authorize_run_shell_start, cancel_shell_job, execute_combo, launch,
+    launch_process_history_row, launch_process_history_row_key, launch_request_details, mcp_error,
     prepare_run_shell_params_for_context, prepare_run_shell_start_params_for_context,
     required_combo_permissions, run_authorized_shell, run_shell_idempotency_completed_row,
     run_shell_idempotency_replay, run_shell_idempotency_reservation_row,
@@ -19,12 +19,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
-    process::Command as StdCommand,
     time::{Duration, Instant},
 };
 
 use rmcp::{RoleServer, model::ErrorCode, service::RequestContext};
-use serde::Serialize;
 use serde_json::json;
 use synapse_core::{error_codes, new_reflex_id};
 
@@ -219,6 +217,7 @@ impl SynapseService {
     pub async fn act_launch(
         &self,
         params: Parameters<ActLaunchParams>,
+        request_context: RequestContext<RoleServer>,
     ) -> Result<Json<ActLaunchResponse>, ErrorData> {
         tracing::info!(
             code = "MCP_TOOL_INVOCATION",
@@ -231,15 +230,84 @@ impl SynapseService {
             return Err(error);
         }
         let params = params.0;
-        self.audit_action_started_with_details("act_launch", &launch_request_details(&params))?;
+        let session_id = super::context::mcp_session_id_from_request_context(&request_context)?;
+        if let Some(session_id) = session_id.as_deref() {
+            self.audit_action_started_with_details_for_session(
+                "act_launch",
+                &launch_request_details(&params),
+                session_id,
+            )?;
+        } else {
+            self.audit_action_started_with_details("act_launch", &launch_request_details(&params))?;
+        }
         let result = match launch(&self.m4_config, params.clone()).await {
             Ok(response) => {
-                record_launch_process_history(self, &params, &response)?;
+                let process_job = if session_id.is_some() {
+                    match assign_owned_process_job(response.pid, "act_launch", None) {
+                        Ok(process_job) => Some(process_job),
+                        Err(error) => {
+                            let cleanup = crate::m4::terminate_owned_process_tree(response.pid);
+                            return Err(launch_lifecycle_tool_error(
+                                "act_launch spawned the process but failed to assign a session process job; exact spawned PID cleanup was attempted",
+                                json!({
+                                    "code": error_codes::TOOL_INTERNAL_ERROR,
+                                    "reason": "process_job_assign_failed",
+                                    "pid": response.pid,
+                                    "source_error": error.message,
+                                    "cleanup": cleanup,
+                                }),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+                if let Err(error) = record_launch_process_history(self, &params, &response) {
+                    let cleanup = crate::m4::terminate_owned_process_tree(response.pid);
+                    return Err(launch_lifecycle_tool_error(
+                        "act_launch spawned the process but failed to record process history; exact spawned PID cleanup was attempted",
+                        json!({
+                            "code": error_codes::TOOL_INTERNAL_ERROR,
+                            "reason": "process_history_record_failed",
+                            "pid": response.pid,
+                            "source_error": error.message,
+                            "cleanup": cleanup,
+                        }),
+                    ));
+                }
+                if let (Some(session_id), Some(process_job)) = (session_id.clone(), process_job) {
+                    if let Err(error) = self.register_session_process_resource(
+                        super::session_lifecycle::SessionProcessResource::new(
+                            session_id,
+                            "act_launch",
+                            response.pid,
+                            None,
+                            params.target.clone(),
+                            process_job,
+                        ),
+                    ) {
+                        let cleanup = crate::m4::terminate_owned_process_tree(response.pid);
+                        return Err(launch_lifecycle_tool_error(
+                            "act_launch spawned the process but failed to register the session process resource; exact spawned PID cleanup was attempted",
+                            json!({
+                                "code": error_codes::TOOL_INTERNAL_ERROR,
+                                "reason": "session_process_register_failed",
+                                "pid": response.pid,
+                                "source_error": error.message,
+                                "cleanup": cleanup,
+                            }),
+                        ));
+                    }
+                }
                 Ok(response)
             }
             Err(error) => Err(error),
         };
-        self.audit_action_result("act_launch", &result)?;
+        if let Some(session_id) = session_id.as_deref() {
+            self.audit_action_result_for_session("act_launch", &result, session_id)?;
+        } else {
+            self.audit_action_result("act_launch", &result)?;
+        }
         result.map(Json)
     }
 
@@ -354,8 +422,32 @@ impl SynapseService {
         };
 
         let launch_response = launch(&self.m4_config, launch_params.clone()).await?;
+        let process_job = match assign_owned_process_job(
+            launch_response.pid,
+            ACT_SPAWN_AGENT,
+            Some(&spawn_id),
+        ) {
+            Ok(process_job) => process_job,
+            Err(error) => {
+                let cleanup = crate::m4::terminate_owned_process_tree(launch_response.pid);
+                return Err(agent_spawn_tool_error(
+                    error_codes::ACTION_AGENT_SPAWN_FAILED,
+                    "act_spawn_agent spawned the wrapper but failed to assign a session process job; exact spawned PID cleanup was attempted",
+                    json!({
+                        "code": error_codes::ACTION_AGENT_SPAWN_FAILED,
+                        "reason": "process_job_assign_failed",
+                        "spawn_id": spawn_id,
+                        "cli": params.cli.as_str(),
+                        "launcher_process_id": launch_response.pid,
+                        "log_dir": files.log_dir.display().to_string(),
+                        "source_error": error.message,
+                        "cleanup": cleanup,
+                    }),
+                ));
+            }
+        };
         if let Err(error) = record_launch_process_history(self, &launch_params, &launch_response) {
-            let cleanup = terminate_owned_process_tree(launch_response.pid);
+            let cleanup = crate::m4::terminate_owned_process_tree(launch_response.pid);
             return Err(agent_spawn_tool_error(
                 error_codes::ACTION_AGENT_SPAWN_FAILED,
                 "act_spawn_agent spawned the wrapper but failed to record process history; exact spawned PID cleanup was attempted",
@@ -384,7 +476,7 @@ impl SynapseService {
         {
             Ok(matched) => matched,
             Err(error) => {
-                let cleanup = terminate_owned_process_tree(launch_response.pid);
+                let cleanup = crate::m4::terminate_owned_process_tree(launch_response.pid);
                 return Err(agent_spawn_tool_error(
                     error_codes::ACTION_AGENT_SPAWN_SESSION_TIMEOUT,
                     "act_spawn_agent did not observe a fully provisioned MCP session before timeout; exact spawned PID cleanup was attempted",
@@ -418,7 +510,53 @@ impl SynapseService {
             launch_target: launch_params.target.clone(),
             log_dir: files.log_dir.display().to_string(),
         };
-        self.record_spawned_agent_metadata(&matched.session_id, metadata)?;
+        if let Err(error) = self.record_spawned_agent_metadata(&matched.session_id, metadata) {
+            let cleanup = crate::m4::terminate_owned_process_tree(launch_response.pid);
+            return Err(agent_spawn_tool_error(
+                error_codes::ACTION_AGENT_SPAWN_FAILED,
+                "act_spawn_agent observed the spawned session but failed to record session metadata; exact spawned PID cleanup was attempted",
+                json!({
+                    "code": error_codes::ACTION_AGENT_SPAWN_FAILED,
+                    "reason": "spawned_agent_metadata_record_failed",
+                    "spawn_id": spawn_id,
+                    "cli": params.cli.as_str(),
+                    "launcher_process_id": launch_response.pid,
+                    "agent_process_id": matched.agent_process_id,
+                    "session_id": matched.session_id,
+                    "log_dir": files.log_dir.display().to_string(),
+                    "source_error": error.message,
+                    "cleanup": cleanup,
+                }),
+            ));
+        }
+        if let Err(error) = self.register_session_process_resource(
+            super::session_lifecycle::SessionProcessResource::new(
+                matched.session_id.clone(),
+                ACT_SPAWN_AGENT,
+                launch_response.pid,
+                Some(spawn_id.clone()),
+                launch_params.target.clone(),
+                process_job,
+            ),
+        ) {
+            let cleanup = crate::m4::terminate_owned_process_tree(launch_response.pid);
+            return Err(agent_spawn_tool_error(
+                error_codes::ACTION_AGENT_SPAWN_FAILED,
+                "act_spawn_agent observed the spawned session but failed to register the session process resource; exact spawned PID cleanup was attempted",
+                json!({
+                    "code": error_codes::ACTION_AGENT_SPAWN_FAILED,
+                    "reason": "session_process_register_failed",
+                    "spawn_id": spawn_id,
+                    "cli": params.cli.as_str(),
+                    "launcher_process_id": launch_response.pid,
+                    "agent_process_id": matched.agent_process_id,
+                    "session_id": matched.session_id,
+                    "log_dir": files.log_dir.display().to_string(),
+                    "source_error": error.message,
+                    "cleanup": cleanup,
+                }),
+            ));
+        }
 
         Ok(ActSpawnAgentResponse {
             spawn_id,
@@ -570,21 +708,6 @@ impl AgentSpawnFiles {
                 .map(|path| path.display().to_string()),
         }
     }
-}
-
-#[derive(Debug, Serialize)]
-#[serde(deny_unknown_fields)]
-struct ProcessCleanupReadback {
-    attempted: bool,
-    status: String,
-    pid: u32,
-    process_ids: Vec<u32>,
-    remaining_process_ids: Vec<u32>,
-    waited_ms: u64,
-    exit_code: Option<i32>,
-    stdout_tail: Option<String>,
-    stderr_tail: Option<String>,
-    still_exists_after: bool,
 }
 
 fn agent_spawn_request_details(
@@ -1029,154 +1152,20 @@ fn descendant_process_ids(system: &sysinfo::System, root_pid: u32) -> Vec<u32> {
     descendants
 }
 
-fn terminate_owned_process_tree(pid: u32) -> ProcessCleanupReadback {
-    let process_ids = process_tree_ids(pid);
-    let initial_live_process_ids = live_process_ids(&process_ids);
-    if initial_live_process_ids.is_empty() {
-        return ProcessCleanupReadback {
-            attempted: false,
-            status: "already_exited".to_owned(),
-            pid,
-            process_ids,
-            remaining_process_ids: Vec::new(),
-            waited_ms: 0,
-            exit_code: None,
-            stdout_tail: None,
-            stderr_tail: None,
-            still_exists_after: false,
-        };
-    }
-
-    let output = StdCommand::new("taskkill.exe")
-        .args(["/PID", &pid.to_string(), "/T", "/F"])
-        .output();
-    match output {
-        Ok(output) => {
-            let mut stdout = String::from_utf8_lossy(&output.stdout).into_owned();
-            let mut stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-            let (mut remaining_process_ids, mut waited_ms) =
-                wait_for_process_tree_exit(&process_ids, Duration::from_secs(5));
-            if !remaining_process_ids.is_empty() {
-                let retry_output = terminate_process_ids_individually(&remaining_process_ids);
-                stdout.push_str(&retry_output.stdout);
-                stderr.push_str(&retry_output.stderr);
-                let (retry_remaining_process_ids, retry_waited_ms) =
-                    wait_for_process_tree_exit(&process_ids, Duration::from_secs(5));
-                remaining_process_ids = retry_remaining_process_ids;
-                waited_ms += retry_waited_ms;
-            }
-            let still_exists_after = !remaining_process_ids.is_empty();
-            ProcessCleanupReadback {
-                attempted: true,
-                status: if output.status.success() && !still_exists_after {
-                    "terminated".to_owned()
-                } else {
-                    "termination_failed".to_owned()
-                },
-                pid,
-                process_ids,
-                remaining_process_ids,
-                waited_ms,
-                exit_code: output.status.code(),
-                stdout_tail: Some(tail_string(stdout, AGENT_SPAWN_LOG_TAIL_BYTES)),
-                stderr_tail: Some(tail_string(stderr, AGENT_SPAWN_LOG_TAIL_BYTES)),
-                still_exists_after,
-            }
-        }
-        Err(error) => ProcessCleanupReadback {
-            attempted: true,
-            status: format!("taskkill_spawn_failed:{error}"),
-            pid,
-            process_ids: process_ids.clone(),
-            remaining_process_ids: live_process_ids(&process_ids),
-            waited_ms: 0,
-            exit_code: None,
-            stdout_tail: None,
-            stderr_tail: None,
-            still_exists_after: !live_process_ids(&process_ids).is_empty(),
-        },
-    }
-}
-
-struct TaskkillOutput {
-    stdout: String,
-    stderr: String,
-}
-
-fn terminate_process_ids_individually(process_ids: &[u32]) -> TaskkillOutput {
-    let mut stdout = String::new();
-    let mut stderr = String::new();
-    for pid in process_ids {
-        match StdCommand::new("taskkill.exe")
-            .args(["/PID", &pid.to_string(), "/F"])
-            .output()
-        {
-            Ok(output) => {
-                stdout.push_str(&String::from_utf8_lossy(&output.stdout));
-                stderr.push_str(&String::from_utf8_lossy(&output.stderr));
-            }
-            Err(error) => {
-                stderr.push_str(&format!(
-                    "failed to spawn taskkill.exe for PID {pid}: {error}\n"
-                ));
-            }
-        }
-    }
-    TaskkillOutput { stdout, stderr }
-}
-
-fn process_tree_ids(root_pid: u32) -> Vec<u32> {
-    use sysinfo::{ProcessesToUpdate, System};
-
-    let mut system = System::new_all();
-    system.refresh_processes(ProcessesToUpdate::All, true);
-    let mut ids = vec![root_pid];
-    ids.extend(descendant_process_ids(&system, root_pid));
-    ids.sort_unstable();
-    ids.dedup();
-    ids
-}
-
-fn live_process_ids(process_ids: &[u32]) -> Vec<u32> {
-    use sysinfo::{Pid, ProcessesToUpdate, System};
-
-    let pids = process_ids
-        .iter()
-        .copied()
-        .map(Pid::from_u32)
-        .collect::<Vec<_>>();
-    let mut system = System::new();
-    system.refresh_processes(ProcessesToUpdate::Some(&pids), false);
-    process_ids
-        .iter()
-        .copied()
-        .filter(|pid| system.process(Pid::from_u32(*pid)).is_some())
-        .collect()
-}
-
-fn wait_for_process_tree_exit(process_ids: &[u32], timeout: Duration) -> (Vec<u32>, u64) {
-    let started = Instant::now();
-    loop {
-        let remaining = live_process_ids(process_ids);
-        if remaining.is_empty() || started.elapsed() >= timeout {
-            return (remaining, started.elapsed().as_millis() as u64);
-        }
-        std::thread::sleep(Duration::from_millis(100));
-    }
-}
-
-fn tail_string(value: String, limit_bytes: usize) -> String {
-    let bytes = value.as_bytes();
-    let start = bytes.len().saturating_sub(limit_bytes);
-    String::from_utf8_lossy(&bytes[start..]).into_owned()
-}
-
 fn agent_spawn_tool_error(
     code: &'static str,
     message: &'static str,
     data: serde_json::Value,
 ) -> ErrorData {
     tracing::warn!(code, "M4 agent spawn tool error: {message}");
+    ErrorData::new(ErrorCode(-32099), message, Some(data))
+}
+
+fn launch_lifecycle_tool_error(message: &'static str, data: serde_json::Value) -> ErrorData {
+    tracing::warn!(
+        code = error_codes::TOOL_INTERNAL_ERROR,
+        "M4 launch lifecycle tool error: {message}"
+    );
     ErrorData::new(ErrorCode(-32099), message, Some(data))
 }
 

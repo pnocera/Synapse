@@ -27,6 +27,7 @@ use super::{
     register_reflex, rollback_registry_profile, run_storage_gc_once, subscribe_to_events,
     tail_audio, tool, tool_router, transcribe_audio,
 };
+use rmcp::{RoleServer, service::RequestContext};
 
 #[tool_router(router = m3_tool_router, vis = "pub(super)")]
 impl SynapseService {
@@ -34,6 +35,7 @@ impl SynapseService {
     pub async fn subscribe(
         &self,
         params: Parameters<SubscribeParams>,
+        request_context: RequestContext<RoleServer>,
     ) -> Result<Json<SubscribeResponse>, ErrorData> {
         tracing::info!(
             code = "MCP_TOOL_INVOCATION",
@@ -50,8 +52,10 @@ impl SynapseService {
         if crate::m3::subscribe::requires_a11y_event_bridge(&params.0) {
             self.ensure_a11y_event_bridge()?;
         }
+        let owner_session_id =
+            super::context::mcp_session_id_from_request_context(&request_context)?;
         let sse_state = self.sse_state()?;
-        subscribe_to_events(&sse_state, &params.0).map(Json)
+        subscribe_to_events(&sse_state, &params.0, owner_session_id).map(Json)
     }
 
     #[tool(description = "Cancel an event subscription")]

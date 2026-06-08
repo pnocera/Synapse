@@ -20,7 +20,9 @@ use rmcp::transport::streamable_http_server::{
     StreamableHttpServerConfig, StreamableHttpService,
     session::{SessionState, SessionStore, SessionStoreError, local::LocalSessionManager},
 };
-use synapse_action::{ActionHandle, ActionStateSnapshot};
+#[cfg(test)]
+use synapse_action::ActionHandle;
+use synapse_action::ActionStateSnapshot;
 use synapse_core::Health;
 use synapse_storage::{Db, cf};
 use tokio::{net::TcpListener, sync::watch, task::JoinHandle, time};
@@ -37,7 +39,6 @@ use crate::{
 };
 
 type McpHttpService = StreamableHttpService<SynapseService, LocalSessionManager>;
-const MCP_SESSION_STORE_PREFIX: &str = "mcp/session/v1/";
 const STALE_SESSION_INPUT_CLEANUP_INTERVAL: Duration = Duration::from_millis(250);
 const M2_EMITTER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(2);
 
@@ -228,27 +229,22 @@ fn router(
         "HTTP bearer token configured"
     );
     let health_service = Arc::new(service.clone());
-    let action_cleanup_handle = service
-        .unscoped_action_handle()
-        .context("read action handle for HTTP session cleanup")?;
-    let session_targets_cleanup = service.session_targets_handle();
-    let cdp_target_owners_cleanup = service.cdp_target_owners_handle();
     let session_registry = service.session_registry_handle();
+    let terminated_sessions = service.terminated_sessions_handle();
+    let session_lifecycle = service
+        .session_lifecycle_state()
+        .map_err(|error| anyhow::anyhow!("initialize session lifecycle state: {error:?}"))?;
     let (mcp_service, session_manager) = streamable_service(shutdown_cancel, service)
         .context("initialize HTTP MCP session state")?;
-    let session_request =
-        session::SessionCleanupState::request_state(Arc::clone(&session_registry));
-    let session_cleanup = session::SessionCleanupState::new(
-        action_cleanup_handle.clone(),
-        Arc::clone(&session_manager),
-        session_targets_cleanup,
-        cdp_target_owners_cleanup.clone(),
+    let session_request = session::SessionCleanupState::request_state(
         Arc::clone(&session_registry),
+        terminated_sessions,
     );
+    let session_cleanup =
+        session::SessionCleanupState::new(Arc::clone(&session_manager), session_lifecycle.clone());
     let _stale_cleanup_task = spawn_stale_session_input_cleanup(
-        action_cleanup_handle,
         Arc::clone(&session_manager),
-        cdp_target_owners_cleanup,
+        session_lifecycle,
         shutdown_cancel.child_token(),
     );
     let state = HttpState {
@@ -310,9 +306,8 @@ fn streamable_service(
 }
 
 fn spawn_stale_session_input_cleanup(
-    action_handle: ActionHandle,
     session_manager: Arc<LocalSessionManager>,
-    cdp_target_owners: crate::server::SharedCdpTargetOwners,
+    session_lifecycle: crate::server::session_lifecycle::SessionLifecycleState,
     shutdown_cancel: CancellationToken,
 ) -> JoinHandle<()> {
     tokio::spawn(async move {
@@ -328,10 +323,9 @@ fn spawn_stale_session_input_cleanup(
                     break;
                 }
                 _ = interval.tick() => {
-                    cleanup_stale_session_inputs_once(
-                        &action_handle,
+                    cleanup_stale_session_resources_once(
+                        &session_lifecycle,
                         &session_manager,
-                        &cdp_target_owners,
                     ).await;
                 }
             }
@@ -339,6 +333,42 @@ fn spawn_stale_session_input_cleanup(
     })
 }
 
+async fn cleanup_stale_session_resources_once(
+    session_lifecycle: &crate::server::session_lifecycle::SessionLifecycleState,
+    session_manager: &LocalSessionManager,
+) {
+    let active_sessions = active_http_session_ids(session_manager).await;
+    session_lifecycle.cleanup_expired_lease_inputs_once().await;
+    let stale_sessions = session_lifecycle.stale_session_candidates(&active_sessions);
+    for session_id in stale_sessions {
+        match session_lifecycle
+            .teardown_session(&session_id, "http_stale")
+            .await
+        {
+            Ok(report) => {
+                tracing::info!(
+                    code = "MCP_HTTP_SESSION_STALE_LIFECYCLE_CLEANUP",
+                    session_id = %session_id,
+                    active_session_count = active_sessions.len(),
+                    report = ?report,
+                    "readback=session_lifecycle edge=http_session_gone after_cleanup"
+                );
+            }
+            Err(error) => {
+                tracing::error!(
+                    code = synapse_core::error_codes::TOOL_INTERNAL_ERROR,
+                    session_id = %session_id,
+                    active_session_count = active_sessions.len(),
+                    detail = %error.message,
+                    data = ?error.data,
+                    "HTTP MCP stale-session lifecycle cleanup failed"
+                );
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 async fn cleanup_stale_session_inputs_once(
     action_handle: &ActionHandle,
     session_manager: &LocalSessionManager,
@@ -369,6 +399,7 @@ async fn cleanup_stale_session_inputs_once(
     cleanup_stale_session_lease_once(action_handle, &active_sessions).await;
 }
 
+#[cfg(test)]
 async fn cleanup_stale_session_cdp_targets_once(
     cdp_target_owners: &crate::server::SharedCdpTargetOwners,
     active_sessions: &BTreeSet<String>,
@@ -389,18 +420,36 @@ async fn cleanup_stale_session_cdp_targets_once(
         }
     };
     for session_id in stale_sessions {
-        let readback =
-            session::cleanup_session_cdp_targets(cdp_target_owners, &session_id, "http_stale")
-                .await;
+        let (owned_before, target_ids) = match cdp_target_owners.lock() {
+            Ok(mut owners) => {
+                let target_ids = owners
+                    .iter()
+                    .filter_map(|(target_id, owner)| {
+                        (owner.session_id == session_id).then(|| target_id.clone())
+                    })
+                    .collect::<Vec<_>>();
+                for target_id in &target_ids {
+                    owners.remove(target_id);
+                }
+                (target_ids.len(), target_ids)
+            }
+            Err(_error) => {
+                tracing::error!(
+                    code = synapse_core::error_codes::TOOL_INTERNAL_ERROR,
+                    "HTTP MCP test stale-session cleanup could not lock CDP target ownership registry"
+                );
+                continue;
+            }
+        };
         tracing::info!(
             code = "MCP_HTTP_SESSION_CDP_TARGET_STALE_CLEANUP",
             session_id = %session_id,
             active_session_count = active_sessions.len(),
-            cdp_cleanup_reason = readback.reason,
-            cdp_owned_before = readback.owned_before,
-            cdp_closed = readback.closed,
-            cdp_failed = readback.failed,
-            cdp_target_ids = ?readback.target_ids,
+            cdp_cleanup_reason = "http_stale",
+            cdp_owned_before = owned_before,
+            cdp_closed = 0,
+            cdp_failed = 0,
+            cdp_target_ids = ?target_ids,
             "readback=cdp_target_ownership edge=http_session_gone after_cleanup"
         );
     }
@@ -416,6 +465,7 @@ async fn active_http_session_ids(session_manager: &LocalSessionManager) -> BTree
         .collect()
 }
 
+#[cfg(test)]
 async fn cleanup_expired_lease_inputs_once(action_handle: &ActionHandle) {
     let _lease_status_readback = synapse_action::lease::status();
     let pending = synapse_action::lease::expired_cleanup_snapshot();
@@ -427,6 +477,7 @@ async fn cleanup_expired_lease_inputs_once(action_handle: &ActionHandle) {
     }
 }
 
+#[cfg(test)]
 async fn cleanup_stale_session_lease_once(
     action_handle: &ActionHandle,
     active_sessions: &BTreeSet<String>,
@@ -478,6 +529,7 @@ async fn cleanup_stale_session_lease_once(
     }
 }
 
+#[cfg(test)]
 async fn release_stale_session_inputs_and_lease(action_handle: &ActionHandle, session_id: &str) {
     let before = action_handle.session_inputs_snapshot();
     let before_lease = synapse_action::lease::status();
@@ -519,6 +571,7 @@ async fn release_stale_session_inputs_and_lease(action_handle: &ActionHandle, se
     }
 }
 
+#[cfg(test)]
 async fn release_expired_session_inputs_and_lease(
     action_handle: &ActionHandle,
     session_id: &str,
@@ -743,7 +796,7 @@ fn record_registry_closed(
 }
 
 fn mcp_session_store_key(session_id: &str) -> Vec<u8> {
-    format!("{MCP_SESSION_STORE_PREFIX}{session_id}").into_bytes()
+    crate::server::session_lifecycle::mcp_session_store_key(session_id)
 }
 
 fn session_store_error(error: synapse_storage::StorageError) -> SessionStoreError {

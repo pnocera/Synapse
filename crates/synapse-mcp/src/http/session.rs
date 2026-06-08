@@ -9,7 +9,6 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use rmcp::transport::streamable_http_server::session::local::{LocalSessionManager, SessionConfig};
-use synapse_action::ActionHandle;
 
 const SESSION_IDLE_TIMEOUT_ENV: &str = "SYNAPSE_HTTP_SESSION_IDLE_TIMEOUT_SECS";
 const DEFAULT_SESSION_IDLE_TIMEOUT_SECS: u64 = 5 * 60;
@@ -23,15 +22,13 @@ tokio::task_local! {
 #[derive(Clone)]
 pub(super) struct SessionRequestState {
     session_registry: crate::server::session_registry::SharedSessionRegistry,
+    terminated_sessions: crate::server::session_lifecycle::SharedTerminatedSessions,
 }
 
 #[derive(Clone)]
 pub(super) struct SessionCleanupState {
-    action_handle: ActionHandle,
     session_manager: Arc<LocalSessionManager>,
-    session_targets: crate::server::SharedSessionTargets,
-    cdp_target_owners: crate::server::SharedCdpTargetOwners,
-    session_registry: crate::server::session_registry::SharedSessionRegistry,
+    lifecycle: crate::server::session_lifecycle::SessionLifecycleState,
 }
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq)]
@@ -43,23 +40,21 @@ enum SessionFailure {
 impl SessionCleanupState {
     pub(super) fn request_state(
         session_registry: crate::server::session_registry::SharedSessionRegistry,
+        terminated_sessions: crate::server::session_lifecycle::SharedTerminatedSessions,
     ) -> SessionRequestState {
-        SessionRequestState { session_registry }
+        SessionRequestState {
+            session_registry,
+            terminated_sessions,
+        }
     }
 
     pub(super) fn new(
-        action_handle: ActionHandle,
         session_manager: Arc<LocalSessionManager>,
-        session_targets: crate::server::SharedSessionTargets,
-        cdp_target_owners: crate::server::SharedCdpTargetOwners,
-        session_registry: crate::server::session_registry::SharedSessionRegistry,
+        lifecycle: crate::server::session_lifecycle::SessionLifecycleState,
     ) -> Self {
         Self {
-            action_handle,
             session_manager,
-            session_targets,
-            cdp_target_owners,
-            session_registry,
+            lifecycle,
         }
     }
 }
@@ -95,6 +90,25 @@ pub(super) async fn require_mcp_session(
     };
     let request = match session_id.as_deref() {
         Some(session_id) => {
+            if session_is_terminated(&state.terminated_sessions, session_id) {
+                if request.method() == Method::DELETE {
+                    tracing::info!(
+                        code = "MCP_HTTP_SESSION_DELETE_ALREADY_TERMINATED",
+                        session_id,
+                        "HTTP MCP session DELETE allowed as an idempotent already-terminated cleanup trigger"
+                    );
+                    let scoped_session_id = Some(session_id.to_owned());
+                    return CURRENT_MCP_SESSION_ID
+                        .scope(scoped_session_id, next.run(request))
+                        .await;
+                }
+                tracing::warn!(
+                    code = synapse_core::error_codes::HTTP_SESSION_INVALID,
+                    session_id,
+                    "HTTP MCP session rejected because session lifecycle already terminated it"
+                );
+                return session_invalid(SessionFailure::UnknownOrExpired);
+            }
             match record_session_request(&state.session_registry, session_id, request).await {
                 Ok(request) => request,
                 Err(response) => return response,
@@ -125,6 +139,14 @@ pub(super) async fn release_held_inputs_on_delete(
     if let Some(session_id) = cleanup_session_id.as_deref()
         && !session_is_active(&state.session_manager, session_id).await
     {
+        if state.lifecycle.is_session_terminated(session_id) {
+            tracing::info!(
+                code = "MCP_HTTP_SESSION_DELETE_ALREADY_CLOSED_NOOP",
+                session_id,
+                "HTTP MCP session DELETE accepted as idempotent no-op for an already-closed terminated session"
+            );
+            return StatusCode::OK.into_response();
+        }
         tracing::warn!(
             code = synapse_core::error_codes::HTTP_SESSION_INVALID,
             session_id,
@@ -141,237 +163,31 @@ pub(super) async fn release_held_inputs_on_delete(
         return response;
     }
 
-    let before = match state.action_handle.session_inputs_snapshot() {
-        Ok(snapshot) => snapshot,
-        Err(error) => {
-            tracing::error!(
-                code = error.code(),
-                session_id,
-                detail = %error.detail(),
-                "HTTP MCP session cleanup could not read held-input ownership before release"
-            );
-            return cleanup_failed(error);
-        }
-    };
-    let result = state
-        .action_handle
-        .release_session_inputs_and_lease(&session_id)
-        .await;
-    let after = state.action_handle.session_inputs_snapshot();
-    // Drop the session's active perception target so the registry does not leak
-    // entries for disconnected agents (epic #720).
-    let target_cleared = state
-        .session_targets
-        .lock()
-        .is_ok_and(|mut targets| targets.remove(&session_id).is_some());
-    let registry_closed = match state.session_registry.lock() {
-        Ok(mut registry) => {
-            registry.record_closed(
-                &session_id,
-                crate::server::session_registry::unix_time_ms_now(),
-            );
-            true
-        }
-        Err(_error) => {
-            tracing::error!(
-                code = synapse_core::error_codes::TOOL_INTERNAL_ERROR,
-                session_id,
-                "HTTP MCP session cleanup could not lock cross-session registry"
-            );
-            false
-        }
-    };
-    let cdp_cleanup =
-        cleanup_session_cdp_targets(&state.cdp_target_owners, &session_id, "http_delete").await;
-    let shell_cleanup = match crate::m4::cleanup_shell_jobs_for_session(&session_id, "http_delete")
+    match state
+        .lifecycle
+        .teardown_session(&session_id, "http_delete")
+        .await
     {
-        Ok(readback) => readback,
-        Err(error) => {
-            tracing::error!(
-                code = ?error.code,
-                session_id,
-                detail = %error.message,
-                "HTTP MCP session cleanup could not reap session-owned shell jobs"
-            );
-            crate::m4::ShellSessionCleanupReadback {
-                reason: "http_delete".to_owned(),
-                session_id: session_id.clone(),
-                job_root: None,
-                status_files_read: 0,
-                live_jobs_before: 0,
-                termination_attempted: 0,
-                termination_succeeded: 0,
-                failed: 1,
-                job_ids: Vec::new(),
-                remaining_process_ids: Vec::new(),
-            }
-        }
-    };
-    match result {
-        Ok(summary) => {
+        Ok(report) => {
             tracing::info!(
-                code = "MCP_HTTP_SESSION_INPUT_CLEANUP",
+                code = "MCP_HTTP_SESSION_LIFECYCLE_CLEANUP",
                 session_id,
-                released_keys = summary.input_summary.released_keys,
-                released_buttons = summary.input_summary.released_buttons,
-                neutralized_pads = summary.input_summary.neutralized_pads,
-                retained_shared_inputs = summary.input_summary.retained_shared_inputs,
-                input_lease_released = summary.lease_released,
-                expired_lease_cleanup_completed = summary.expired_lease_cleanup_completed,
-                session_target_cleared = target_cleared,
-                session_registry_closed = registry_closed,
-                before = ?before,
-                after = ?after,
-                cdp_cleanup_reason = cdp_cleanup.reason,
-                cdp_owned_before = cdp_cleanup.owned_before,
-                cdp_closed = cdp_cleanup.closed,
-                cdp_failed = cdp_cleanup.failed,
-                cdp_target_ids = ?cdp_cleanup.target_ids,
-                shell_job_root = ?shell_cleanup.job_root,
-                shell_status_files_read = shell_cleanup.status_files_read,
-                shell_live_jobs_before = shell_cleanup.live_jobs_before,
-                shell_termination_attempted = shell_cleanup.termination_attempted,
-                shell_termination_succeeded = shell_cleanup.termination_succeeded,
-                shell_failed = shell_cleanup.failed,
-                shell_job_ids = ?shell_cleanup.job_ids,
-                shell_remaining_process_ids = ?shell_cleanup.remaining_process_ids,
-                "readback=session_input_ownership edge=http_delete after_cleanup"
+                report = ?report,
+                "readback=session_lifecycle edge=http_delete after_cleanup"
             );
             response
         }
         Err(error) => {
             tracing::error!(
-                code = error.code(),
-                session_id,
-                detail = %error.detail(),
-                before = ?before,
-                after = ?after,
-                "HTTP MCP session cleanup failed while releasing owned inputs"
-            );
-            cleanup_failed(error)
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-pub(super) struct SessionCdpTargetCleanupReadback {
-    pub reason: &'static str,
-    pub owned_before: usize,
-    pub closed: usize,
-    pub failed: usize,
-    pub target_ids: Vec<String>,
-}
-
-pub(super) async fn cleanup_session_cdp_targets(
-    cdp_target_owners: &crate::server::SharedCdpTargetOwners,
-    session_id: &str,
-    reason: &'static str,
-) -> SessionCdpTargetCleanupReadback {
-    let owned = match remove_session_cdp_target_owners(cdp_target_owners, session_id) {
-        Ok(owned) => owned,
-        Err(detail) => {
-            tracing::error!(
                 code = synapse_core::error_codes::TOOL_INTERNAL_ERROR,
                 session_id,
-                reason,
-                detail = %detail,
-                "HTTP MCP session cleanup could not lock CDP target ownership registry"
+                detail = %error.message,
+                data = ?error.data,
+                "HTTP MCP session lifecycle cleanup failed"
             );
-            return SessionCdpTargetCleanupReadback {
-                reason,
-                owned_before: 0,
-                closed: 0,
-                failed: 1,
-                target_ids: Vec::new(),
-            };
-        }
-    };
-    let target_ids = owned
-        .iter()
-        .map(|(target_id, _owner)| target_id.clone())
-        .collect::<Vec<_>>();
-    let owned_before = owned.len();
-    let mut closed = 0_usize;
-    let mut failed = 0_usize;
-    for (target_id, owner) in owned {
-        match close_cdp_target_for_cleanup(&target_id, &owner).await {
-            Ok(()) => {
-                closed = closed.saturating_add(1);
-                tracing::info!(
-                    code = "MCP_HTTP_SESSION_CDP_TARGET_CLEANUP",
-                    session_id,
-                    reason,
-                    hwnd = owner.window_hwnd,
-                    endpoint = %owner.endpoint,
-                    cdp_target_id = %target_id,
-                    "readback=Target.closeTarget edge=session_cleanup after=closed"
-                );
-            }
-            Err(detail) => {
-                failed = failed.saturating_add(1);
-                tracing::error!(
-                    code = synapse_core::error_codes::A11Y_CDP_AXTREE_FAILED,
-                    session_id,
-                    reason,
-                    hwnd = owner.window_hwnd,
-                    endpoint = %owner.endpoint,
-                    cdp_target_id = %target_id,
-                    detail = %detail,
-                    "HTTP MCP session cleanup removed CDP owner but failed to close target"
-                );
-            }
+            lifecycle_cleanup_failed(error)
         }
     }
-    SessionCdpTargetCleanupReadback {
-        reason,
-        owned_before,
-        closed,
-        failed,
-        target_ids,
-    }
-}
-
-fn remove_session_cdp_target_owners(
-    cdp_target_owners: &crate::server::SharedCdpTargetOwners,
-    session_id: &str,
-) -> Result<Vec<(String, crate::server::CdpTargetOwner)>, String> {
-    let mut guard = cdp_target_owners
-        .lock()
-        .map_err(|_error| "CDP target ownership registry lock poisoned".to_owned())?;
-    let owned_ids = guard
-        .iter()
-        .filter_map(|(target_id, owner)| {
-            (owner.session_id == session_id).then(|| target_id.clone())
-        })
-        .collect::<Vec<_>>();
-    let owned = owned_ids
-        .into_iter()
-        .filter_map(|target_id| guard.remove(&target_id).map(|owner| (target_id, owner)))
-        .collect();
-    drop(guard);
-    Ok(owned)
-}
-
-#[cfg(windows)]
-async fn close_cdp_target_for_cleanup(
-    target_id: &str,
-    owner: &crate::server::CdpTargetOwner,
-) -> Result<(), String> {
-    synapse_a11y::cdp_close_target(&owner.endpoint, target_id)
-        .await
-        .map(|_closed| ())
-        .map_err(|error| error.to_string())
-}
-
-#[cfg(not(windows))]
-async fn close_cdp_target_for_cleanup(
-    target_id: &str,
-    owner: &crate::server::CdpTargetOwner,
-) -> Result<(), String> {
-    Err(format!(
-        "CDP target cleanup is only available on Windows; target_id={target_id:?} endpoint={:?}",
-        owner.endpoint
-    ))
 }
 
 async fn session_is_active(session_manager: &LocalSessionManager, session_id: &str) -> bool {
@@ -380,6 +196,15 @@ async fn session_is_active(session_manager: &LocalSessionManager, session_id: &s
         .read()
         .await
         .contains_key(session_id)
+}
+
+fn session_is_terminated(
+    terminated_sessions: &crate::server::session_lifecycle::SharedTerminatedSessions,
+    session_id: &str,
+) -> bool {
+    terminated_sessions
+        .lock()
+        .is_ok_and(|terminated| terminated.contains(session_id))
 }
 
 fn session_idle_timeout_secs() -> anyhow::Result<u64> {
@@ -533,11 +358,15 @@ fn payload_too_large() -> Response {
     (StatusCode::PAYLOAD_TOO_LARGE, "request body too large").into_response()
 }
 
-fn cleanup_failed(error: synapse_action::ActionError) -> Response {
+fn lifecycle_cleanup_failed(error: rmcp::ErrorData) -> Response {
     (
         StatusCode::INTERNAL_SERVER_ERROR,
         [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
-        format!("{}: {}", error.code(), error.detail()),
+        format!(
+            "{}: {}",
+            synapse_core::error_codes::TOOL_INTERNAL_ERROR,
+            error.message
+        ),
     )
         .into_response()
 }
